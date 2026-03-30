@@ -9,10 +9,13 @@ export class MeilisearchService {
   private client: MeiliSearch;
 
   constructor(private config: ConfigService) {
-    this.client = new MeiliSearch(
-      this.config.get('MEILISEARCH_HOST', 'http://localhost:7700'),
-      { apiKey: this.config.get('MEILISEARCH_API_KEY') },
-    );
+    const host =
+      this.config.get<string>('MEILISEARCH_HOST') ?? 'http://localhost:7700';
+    const apiKey = this.config.get<string>('MEILISEARCH_API_KEY');
+    this.client = new MeiliSearch({
+      host,
+      ...(apiKey ? { apiKey } : {}),
+    });
   }
 
   getClient(): MeiliSearch {

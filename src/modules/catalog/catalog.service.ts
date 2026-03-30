@@ -54,6 +54,11 @@ export class CatalogService {
     if (params.brandId) filters.push(`brandId = "${params.brandId}"`);
     const filter = filters.length ? filters.join(' AND ') : undefined;
     const result = await index.search(params.q ?? '', { filter, limit, offset: (page - 1) * limit });
-    return { hits: result.hits, total: result.estimatedTotal ?? result.hits.length, page, limit };
+    return {
+      hits: result.hits,
+      total: result.estimatedTotalHits ?? result.hits.length,
+      page,
+      limit,
+    };
   }
 }
