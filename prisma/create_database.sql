@@ -1,5 +1,5 @@
--- Пункт 1: создать БД для проекта (выполните при запущенном PostgreSQL).
+-- Продакшен (VPS): создать БД winwin (при запущенном PostgreSQL на сервере).
+-- Локальная разработка — отдельная БД winwin_dev: prisma/create_database_dev.sql и docs/DEPLOY.md §1.3.
 -- Пример: psql -U postgres -h localhost -f prisma/create_database.sql
--- или:  psql -U postgres -h localhost -c "CREATE DATABASE winwin;"
 
 CREATE DATABASE winwin;
