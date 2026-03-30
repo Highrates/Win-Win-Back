@@ -1,0 +1,368 @@
+// Win-Win API — PostgreSQL schema
+// Локализация данных в РФ
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// --- Пользователи ---
+model User {
+  id        String   @id @default(cuid())
+  email     String?  @unique
+  phone     String?  @unique
+  passwordHash String?
+  role      UserRole @default(USER)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  profile        UserProfile?
+  orders         Order[]
+  collections    Collection[]
+  referralsMade Referral[] @relation("referrer") // приглашения от этого пользователя
+  referredAs    Referral?  @relation("referred") // не более одной записи: кто привёл текущего user
+  referralRewards ReferralReward[]
+  blogPosts       BlogPost[]
+  favorites     Favorite[]
+  cart          Cart?
+  designer      Designer?         // публичная страница дизайнера (опционально)
+}
+
+enum UserRole {
+  USER      // дизайнер / клиент
+  MODERATOR // модератор каталога
+  ADMIN     // суперадмин
+}
+
+model UserProfile {
+  id           String    @id @default(cuid())
+  userId       String    @unique
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  firstName    String?
+  lastName     String?
+  avatarUrl    String?
+  legalType    LegalType? @default(INDIVIDUAL)
+  companyName  String?
+  inn          String?
+  kpp          String?
+  legalAddress String?
+  bankName     String?
+  bankAccount  String?
+  // KYC (Этап 7)
+  kycStatus    KycStatus? @default(NOT_STARTED)
+  kycData      Json?     // документы, верификация
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+enum KycStatus {
+  NOT_STARTED
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum LegalType {
+  INDIVIDUAL  // физлицо
+  IE          // ИП
+  LLC         // ООО
+}
+
+// --- Бренды (Этап 2: страницы всех брендов, страница бренда) ---
+model Brand {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  description String?   @db.Text
+  logoUrl     String?
+  siteUrl     String?
+  sortOrder   Int       @default(0)
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  products Product[]
+}
+
+// --- Каталог (категории/подкатегории по parentId) ---
+model Category {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  description String?
+  parentId    String?
+  parent      Category?  @relation("CategoryToCategory", fields: [parentId], references: [id])
+  children    Category[] @relation("CategoryToCategory")
+  sortOrder   Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  products Product[]
+}
+
+model Product {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  categoryId  String
+  category    Category @relation(fields: [categoryId], references: [id])
+  brandId     String?
+  brand       Brand?   @relation(fields: [brandId], references: [id])
+  name        String
+  description String?  @db.Text
+  attributes  Json?    // { "material": "дерево", "width": 120, ... }
+  price       Decimal  @db.Decimal(12, 2) // RUB
+  currency    String   @default("RUB")
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  images           ProductImage[]
+  videos           ProductVideo[]
+  orderItems       OrderItem[]
+  collectionItems  CollectionItem[]
+  favorites        Favorite[]
+  cartItems        CartItem[]
+  publicCollectionItems PublicCollectionItem[]
+}
+
+model ProductImage {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  url       String  // URL в объектном хранилище (S3-совместимое в РФ) или CDN
+  alt       String?
+  sortOrder Int     @default(0)
+}
+
+model ProductVideo {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  url       String  // URL видео в объектном хранилище (S3-совместимое в РФ) или CDN
+  title    String?
+  sortOrder Int     @default(0)
+}
+
+// --- Заказы (статусы вручную, оплаты оффлайн) ---
+model Order {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  status      OrderStatus @default(ORDERED)
+  totalAmount Decimal   @db.Decimal(12, 2)
+  currency    String    @default("RUB")
+  comment     String?   @db.Text
+  // Документы загружаются вручную — ссылки на файлы
+  documentUrls Json?    // { "invoice": "...", "act": "...", "waybill": "..." }
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  items OrderItem[]
+}
+
+enum OrderStatus {
+  ORDERED   // Заказано
+  PAID      // Оплачено
+  RECEIVED  // Получено
+}
+
+model OrderItem {
+  id        String  @id @default(cuid())
+  orderId   String
+  order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  quantity  Int     @default(1)
+  price     Decimal @db.Decimal(12, 2)
+}
+
+// --- Коллекции (личные, шаринг по ссылке) ---
+model Collection {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       String
+  description String?  @db.Text
+  shareToken  String?  @unique // для доступа по ссылке
+  isPublic    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  items CollectionItem[]
+}
+
+model CollectionItem {
+  id           String     @id @default(cuid())
+  collectionId String
+  collection   Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  productId    String
+  product      Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  sortOrder    Int        @default(0)
+  addedAt      DateTime   @default(now())
+}
+
+// --- Дизайнеры (Этап 2: страница всех дизайнеров, страница дизайнера) ---
+model Designer {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  slug        String   @unique
+  displayName String
+  bio         String?  @db.Text
+  photoUrl    String?
+  isPublic    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// --- Избранное (Этап 4: страница избранного) ---
+model Favorite {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, productId])
+}
+
+// --- Корзина (Этап 4: страница корзины/заказа) ---
+model Cart {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  updatedAt DateTime @updatedAt
+
+  items CartItem[]
+}
+
+model CartItem {
+  id        String  @id @default(cuid())
+  cartId    String
+  cart      Cart    @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  quantity  Int     @default(1)
+  addedAt   DateTime @default(now())
+
+  @@unique([cartId, productId])
+}
+
+// --- Публичные коллекции платформы (Этап 11: страница коллекций, страница коллекции) ---
+model PublicCollection {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  title       String
+  description String?  @db.Text
+  imageUrl    String?
+  sortOrder   Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  items PublicCollectionItem[]
+}
+
+model PublicCollectionItem {
+  id                   String           @id @default(cuid())
+  publicCollectionId   String
+  publicCollection     PublicCollection @relation(fields: [publicCollectionId], references: [id], onDelete: Cascade)
+  productId            String
+  product              Product          @relation(fields: [productId], references: [id], onDelete: Cascade)
+  sortOrder            Int              @default(0)
+  addedAt              DateTime         @default(now())
+}
+
+// --- Информационные страницы + О нас (Этап 11–12) ---
+model Page {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  title       String
+  body        String   @db.Text
+  type        PageType @default(CUSTOM) // about, services, delivery, payment, contacts, custom
+  sortOrder   Int      @default(0)
+  isPublished Boolean @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+enum PageType {
+  ABOUT     // О нас
+  SERVICES  // Услуги
+  DELIVERY  // Доставка
+  PAYMENT   // Оплата
+  CONTACTS  // Контакты
+  CUSTOM    // Произвольная информационная
+}
+
+// --- Реферальная программа (2 уровня) ---
+model Referral {
+  id           String   @id @default(cuid())
+  referrerId   String   // кто привёл
+  referrer     User     @relation("referrer", fields: [referrerId], references: [id], onDelete: Cascade)
+  referredId   String   @unique // кого привели
+  referred     User     @relation("referred", fields: [referredId], references: [id], onDelete: Cascade)
+  level        Int      // 1 или 2
+  createdAt    DateTime @default(now())
+}
+
+model ReferralConfig {
+  id          String   @id @default(cuid())
+  key         String   @unique // level1_percent, level2_percent, level1_fixed, ...
+  value       String   // число или JSON
+  description String?
+  updatedAt   DateTime @updatedAt
+}
+
+model ReferralReward {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orderId      String   // заказ реферала
+  level        Int      // 1 или 2
+  amount       Decimal  @db.Decimal(12, 2)
+  status       RewardStatus @default(PENDING)
+  paidAt       DateTime?
+  createdAt    DateTime @default(now())
+}
+
+enum RewardStatus {
+  PENDING
+  INVOICED  // выставлен инвойс платформе
+  PAID
+}
+
+// --- Блог ---
+model BlogCategory {
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  name      String
+  sortOrder Int      @default(0)
+  posts     BlogPost[]
+}
+
+model BlogPost {
+  id         String   @id @default(cuid())
+  slug       String   @unique
+  categoryId String?
+  category   BlogCategory? @relation(fields: [categoryId], references: [id])
+  authorId   String?
+  author     User?    @relation(fields: [authorId], references: [id])
+  title      String
+  excerpt    String?  @db.Text
+  body       String   @db.Text
+  coverUrl   String?
+  isPublished Boolean @default(false)
+  publishedAt DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
