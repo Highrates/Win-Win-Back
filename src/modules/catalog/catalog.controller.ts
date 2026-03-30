@@ -6,6 +6,28 @@ import { Public } from '../../common/decorators/public.decorator';
 export class CatalogController {
   constructor(private catalogService: CatalogService) {}
 
+  /** Компактное дерево (корни + дети), без дублирования узлов в плоском списке. */
+  @Public()
+  @Get('categories/tree')
+  categoryTree() {
+    return this.catalogService.getCategoryTree();
+  }
+
+  /** Только корневые категории для навигации. */
+  @Public()
+  @Get('categories/roots')
+  categoryRootsNav() {
+    return this.catalogService.getCategoryRootsNav();
+  }
+
+  /** Активные подкатегории у корня с данным slug. */
+  @Public()
+  @Get('categories/:parentSlug/children')
+  categoryChildren(@Param('parentSlug') parentSlug: string) {
+    return this.catalogService.getCategoryChildrenByParentSlug(parentSlug);
+  }
+
+  /** @deprecated Предпочтительно `GET categories/tree` или `roots` + `children`. */
   @Public()
   @Get('categories')
   categories() {

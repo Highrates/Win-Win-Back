@@ -95,6 +95,9 @@ model Category {
   slug        String   @unique
   name        String
   description String?
+  seoTitle       String?  // meta title для витрины
+  seoDescription String?  @db.Text // meta description для витрины
+  backgroundImageUrl String? // URL фона категории (S3/CDN)
   parentId    String?
   parent      Category?  @relation("CategoryToCategory", fields: [parentId], references: [id])
   children    Category[] @relation("CategoryToCategory")
