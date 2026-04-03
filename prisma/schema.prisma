@@ -78,9 +78,16 @@ model Brand {
   id          String   @id @default(cuid())
   slug        String   @unique
   name        String
-  description String?   @db.Text
+  /// Короткое описание для витрины (до 280 символов)
+  shortDescription String? @db.VarChar(280)
+  description String?   @db.Text // HTML из RichBlock (админка)
   logoUrl     String?
   siteUrl     String?
+  coverImageUrl       String?
+  backgroundImageUrl  String?
+  galleryImageUrls    Json? // до 3 URL доп. изображений (массив строк)
+  seoTitle            String?
+  seoDescription      String?   @db.Text
   sortOrder   Int       @default(0)
   isActive    Boolean   @default(true)
   createdAt   DateTime  @default(now())
@@ -98,6 +105,8 @@ model Category {
   seoTitle       String?  // meta title для витрины
   seoDescription String?  @db.Text // meta description для витрины
   backgroundImageUrl String? // URL фона категории (S3/CDN)
+  backgroundMediaObjectId String?
+  backgroundMediaObject   MediaObject? @relation(fields: [backgroundMediaObjectId], references: [id], onDelete: SetNull)
   parentId    String?
   parent      Category?  @relation("CategoryToCategory", fields: [parentId], references: [id])
   children    Category[] @relation("CategoryToCategory")
@@ -342,6 +351,49 @@ enum RewardStatus {
   PENDING
   INVOICED  // выставлен инвойс платформе
   PAID
+}
+
+enum MediaLibraryCategory {
+  IMAGE
+  DOCUMENT
+  MODEL
+  VIDEO
+  OTHER
+}
+
+// --- Медиатека S3 (админка: обложки, RichBlock, документы) ---
+model MediaFolder {
+  id          String   @id @default(cuid())
+  name        String
+  slugSegment String
+  parentId    String?
+  parent      MediaFolder?  @relation("MediaFolderTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children    MediaFolder[] @relation("MediaFolderTree")
+  pathKey     String   @unique // напр. "marketing/banners" для префикса objects/… в S3
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  objects     MediaObject[]
+
+  @@unique([parentId, slugSegment])
+}
+
+model MediaObject {
+  id           String               @id @default(cuid())
+  storageKey   String               @unique
+  originalName String
+  mimeType     String
+  category     MediaLibraryCategory @default(OTHER)
+  byteSize     Int
+  width        Int?
+  height       Int?
+  altText      String?
+  folderId     String?
+  folder       MediaFolder?         @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+
+  categoryBackgrounds Category[]
 }
 
 // --- Блог ---

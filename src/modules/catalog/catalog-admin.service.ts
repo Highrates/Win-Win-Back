@@ -4,9 +4,16 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ObjectStorageService } from '../storage/object-storage.service';
-import { CreateCategoryAdminDto, UpdateCategoryAdminDto } from './dto/catalog-admin.dto';
+import { MediaLibraryService } from '../media-library/media-library.service';
+import {
+  CreateBrandAdminDto,
+  CreateCategoryAdminDto,
+  UpdateBrandAdminDto,
+  UpdateCategoryAdminDto,
+} from './dto/catalog-admin.dto';
 
 const CYR_TO_LAT: Record<string, string> = {
   а: 'a',
@@ -61,7 +68,34 @@ export class CatalogAdminService {
   constructor(
     private prisma: PrismaService,
     private readonly objectStorage: ObjectStorageService,
+    private readonly mediaLibrary: MediaLibraryService,
   ) {}
+
+  private normUrl(u: string): string {
+    return u.trim().replace(/\/+$/, '');
+  }
+
+  /** Связать публичный URL фона с MediaObject (если объект в медиатеке). */
+  private async resolveCategoryBackgroundMediaId(
+    url: string,
+    explicitMediaObjectId?: string | null,
+  ): Promise<string | null> {
+    const u = url.trim();
+    if (!u) return null;
+    if (explicitMediaObjectId) {
+      const mo = await this.prisma.mediaObject.findUnique({ where: { id: explicitMediaObjectId } });
+      if (!mo) throw new BadRequestException('Объект медиатеки не найден');
+      const expected = this.objectStorage.getPublicUrlForKey(mo.storageKey);
+      if (this.normUrl(expected) !== this.normUrl(u)) {
+        throw new BadRequestException('URL обложки не совпадает с объектом медиатеки');
+      }
+      return mo.id;
+    }
+    const key = this.objectStorage.tryPublicUrlToKey(u);
+    if (!key?.startsWith('objects/')) return null;
+    const mo = await this.prisma.mediaObject.findUnique({ where: { storageKey: key } });
+    return mo?.id ?? null;
+  }
 
   private async ensureUniqueSlug(base: string): Promise<string> {
     let slug = base.slice(0, 80) || 'category';
@@ -72,6 +106,29 @@ export class CatalogAdminService {
       if (!exists) return candidate;
       n += 1;
     }
+  }
+
+  private async ensureUniqueBrandSlug(base: string): Promise<string> {
+    let slug = base.slice(0, 80) || 'brand';
+    let n = 0;
+    for (;;) {
+      const candidate = n === 0 ? slug : `${slug}-${n}`;
+      const exists = await this.prisma.brand.findUnique({ where: { slug: candidate } });
+      if (!exists) return candidate;
+      n += 1;
+    }
+  }
+
+  private galleryToPrisma(
+    input: string[] | null | undefined,
+  ): Prisma.InputJsonValue | typeof Prisma.JsonNull {
+    const urls = [...new Set((input ?? []).map((s) => s.trim()).filter(Boolean))].slice(0, 3);
+    return urls.length ? urls : Prisma.JsonNull;
+  }
+
+  private normBrandShortDescription(raw: string | null | undefined): string | null {
+    const t = raw?.trim().slice(0, 280) ?? '';
+    return t || null;
   }
 
   /** nodeId лежит в поддереве ancestorId (ancestorId — предок nodeId) */
@@ -205,9 +262,15 @@ export class CatalogAdminService {
     const base = dto.slug?.trim() ? dto.slug.trim() : slugifyBase(dto.name);
     const slug = await this.ensureUniqueSlug(base);
     const sortOrder = await this.nextSortOrder(pid);
-    const bg = dto.backgroundImageUrl.trim();
-    if (!bg) {
-      throw new BadRequestException('Фоновое изображение обязательно');
+    const bgRaw = (dto.backgroundImageUrl ?? '').trim();
+    let bgUrl: string | null = null;
+    let mediaId: string | null = null;
+    if (bgRaw) {
+      mediaId = await this.resolveCategoryBackgroundMediaId(
+        bgRaw,
+        dto.backgroundMediaObjectId ?? null,
+      );
+      bgUrl = bgRaw;
     }
     return this.prisma.category.create({
       data: {
@@ -216,7 +279,8 @@ export class CatalogAdminService {
         parentId: pid,
         sortOrder,
         isActive: dto.isActive ?? true,
-        backgroundImageUrl: bg,
+        backgroundImageUrl: bgUrl,
+        backgroundMediaObjectId: mediaId,
         seoTitle: dto.seoTitle?.trim() || null,
         seoDescription: dto.seoDescription?.trim() || null,
       },
@@ -252,16 +316,26 @@ export class CatalogAdminService {
       slug = dto.slug.trim();
     }
 
-    let backgroundPatch: { backgroundImageUrl: string } | undefined;
+    let backgroundPatch:
+      | { backgroundImageUrl: string | null; backgroundMediaObjectId: string | null }
+      | undefined;
     if (dto.backgroundImageUrl !== undefined) {
-      const bg = dto.backgroundImageUrl.trim();
-      if (!bg) {
-        throw new BadRequestException('Фоновое изображение не может быть пустым');
+      const raw = dto.backgroundImageUrl;
+      if (raw === null || (typeof raw === 'string' && !raw.trim())) {
+        backgroundPatch = { backgroundImageUrl: null, backgroundMediaObjectId: null };
+      } else {
+        const bg = String(raw).trim();
+        const nextMid = await this.resolveCategoryBackgroundMediaId(
+          bg,
+          dto.backgroundMediaObjectId !== undefined ? dto.backgroundMediaObjectId : undefined,
+        );
+        backgroundPatch = { backgroundImageUrl: bg, backgroundMediaObjectId: nextMid };
       }
-      backgroundPatch = { backgroundImageUrl: bg };
     }
 
-    return this.prisma.category.update({
+    const prevBackgroundMediaId = existing.backgroundMediaObjectId;
+
+    const updated = await this.prisma.category.update({
       where: { id },
       data: {
         ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
@@ -295,6 +369,16 @@ export class CatalogAdminService {
         },
       },
     });
+
+    if (
+      backgroundPatch &&
+      prevBackgroundMediaId &&
+      prevBackgroundMediaId !== updated.backgroundMediaObjectId
+    ) {
+      await this.mediaLibrary.deleteMediaObjectIfUnreferenced(prevBackgroundMediaId);
+    }
+
+    return updated;
   }
 
   async reorderCategories(parentId: string | null | undefined, orderedIds: string[]) {
@@ -350,7 +434,11 @@ export class CatalogAdminService {
           continue;
         }
         try {
+          const bgMediaId = row.backgroundMediaObjectId;
           await this.prisma.category.delete({ where: { id } });
+          if (bgMediaId) {
+            await this.mediaLibrary.deleteMediaObjectIfUnreferenced(bgMediaId);
+          }
           deleted.push(id);
           remaining.delete(id);
           progress = true;
@@ -367,10 +455,139 @@ export class CatalogAdminService {
     return { deleted, skipped: [...skippedSet] };
   }
 
-  async uploadCategoryImage(file: Express.Multer.File): Promise<{ url: string }> {
+  async uploadCategoryImage(
+    file: Express.Multer.File,
+  ): Promise<{ url: string; mediaObjectId: string }> {
+    return this.mediaLibrary.ingestCategoryBackgroundImage(file);
+  }
+
+  async listBrandsForAdmin(q?: string) {
+    const trim = q?.trim();
+    return this.prisma.brand.findMany({
+      where: trim ? { name: { contains: trim, mode: 'insensitive' } } : {},
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+      include: { _count: { select: { products: true } } },
+    });
+  }
+
+  /** Удаляет только бренды без привязанных товаров. */
+  async deleteBrands(ids: string[]) {
+    const unique = [...new Set(ids)];
+    const deleted: string[] = [];
+    const skipped: string[] = [];
+    for (const id of unique) {
+      const row = await this.prisma.brand.findUnique({
+        where: { id },
+        include: { _count: { select: { products: true } } },
+      });
+      if (!row) continue;
+      if (row._count.products > 0) {
+        skipped.push(id);
+        continue;
+      }
+      try {
+        await this.prisma.brand.delete({ where: { id } });
+        deleted.push(id);
+      } catch {
+        skipped.push(id);
+      }
+    }
+    return { deleted, skipped };
+  }
+
+  async getBrandForAdmin(id: string) {
+    const row = await this.prisma.brand.findUnique({
+      where: { id },
+      include: { _count: { select: { products: true } } },
+    });
+    if (!row) throw new NotFoundException('Brand not found');
+    return row;
+  }
+
+  async createBrand(dto: CreateBrandAdminDto) {
+    const base = dto.slug?.trim() ? dto.slug.trim() : slugifyBase(dto.name);
+    const slug = await this.ensureUniqueBrandSlug(base);
+    const agg = await this.prisma.brand.aggregate({ _max: { sortOrder: true } });
+    const sortOrder = (agg._max.sortOrder ?? -1) + 1;
+    const cover = dto.coverImageUrl == null ? null : dto.coverImageUrl.trim() || null;
+    const bg = dto.backgroundImageUrl?.trim() || null;
+    return this.prisma.brand.create({
+      data: {
+        name: dto.name.trim(),
+        slug,
+        sortOrder,
+        isActive: dto.isActive ?? true,
+        coverImageUrl: cover,
+        backgroundImageUrl: bg,
+        galleryImageUrls: this.galleryToPrisma(dto.galleryImageUrls),
+        description: dto.description?.trim() || null,
+        shortDescription: this.normBrandShortDescription(dto.shortDescription),
+        seoTitle: dto.seoTitle?.trim() || null,
+        seoDescription: dto.seoDescription?.trim() || null,
+        logoUrl: cover,
+      },
+      include: { _count: { select: { products: true } } },
+    });
+  }
+
+  async updateBrand(id: string, dto: UpdateBrandAdminDto) {
+    const existing = await this.prisma.brand.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Brand not found');
+
+    let nextSlug = existing.slug;
+    if (dto.slug !== undefined && dto.slug.trim() && dto.slug.trim() !== existing.slug) {
+      const taken = await this.prisma.brand.findUnique({ where: { slug: dto.slug.trim() } });
+      if (taken && taken.id !== id) throw new ConflictException('Slug already in use');
+      nextSlug = dto.slug.trim();
+    }
+
+    const data: Prisma.BrandUpdateInput = {};
+    if (dto.name !== undefined) data.name = dto.name.trim();
+    if (dto.slug !== undefined) data.slug = nextSlug;
+    if (dto.coverImageUrl !== undefined) {
+      const c = dto.coverImageUrl === null ? null : dto.coverImageUrl.trim() || null;
+      data.coverImageUrl = c;
+      data.logoUrl = c;
+    }
+    if (dto.backgroundImageUrl !== undefined) {
+      data.backgroundImageUrl = dto.backgroundImageUrl?.trim() || null;
+    }
+    if (dto.galleryImageUrls !== undefined) {
+      data.galleryImageUrls = this.galleryToPrisma(dto.galleryImageUrls);
+    }
+    if (dto.description !== undefined) data.description = dto.description?.trim() || null;
+    if (dto.shortDescription !== undefined) {
+      data.shortDescription = this.normBrandShortDescription(dto.shortDescription);
+    }
+    if (dto.seoTitle !== undefined) data.seoTitle = dto.seoTitle?.trim() || null;
+    if (dto.seoDescription !== undefined) {
+      data.seoDescription = dto.seoDescription?.trim() || null;
+    }
+    if (dto.isActive !== undefined) data.isActive = dto.isActive;
+
+    return this.prisma.brand.update({
+      where: { id },
+      data,
+      include: { _count: { select: { products: true } } },
+    });
+  }
+
+  async uploadBrandImage(
+    file: Express.Multer.File,
+    kind: 'cover' | 'background' | 'gallery',
+  ): Promise<{ url: string }> {
     if (!file?.buffer?.length) throw new BadRequestException('Файл не передан');
     this.objectStorage.assertImage({ size: file.size, mimetype: file.mimetype });
-    const { url } = await this.objectStorage.uploadCategoryBackground(file.buffer, file.mimetype);
+    const { url } = await this.objectStorage.uploadBrandImage(file.buffer, file.mimetype, kind);
+    return { url };
+  }
+
+  async uploadRichMedia(
+    file: Express.Multer.File,
+    type: 'image' | 'video',
+  ): Promise<{ url: string }> {
+    if (!file?.buffer?.length) throw new BadRequestException('Файл не передан');
+    const { url } = await this.objectStorage.uploadRichMedia(file.buffer, file.mimetype, type);
     return { url };
   }
 }

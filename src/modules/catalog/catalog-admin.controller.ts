@@ -19,13 +19,17 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { UserRole } from '@prisma/client';
 import { CatalogAdminService } from './catalog-admin.service';
 import {
+  BulkDeleteBrandsDto,
   BulkDeleteCategoriesDto,
+  CreateBrandAdminDto,
   CreateCategoryAdminDto,
   ReorderCategoriesDto,
+  UpdateBrandAdminDto,
   UpdateCategoryAdminDto,
 } from './dto/catalog-admin.dto';
 
 const uploadStorage = memoryStorage();
+const RICH_MEDIA_MAX_BYTES = 100 * 1024 * 1024;
 
 @Controller('catalog/admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -43,6 +47,69 @@ export class CatalogAdminController {
   uploadImage(@UploadedFile() file: Express.Multer.File) {
     if (!file) throw new BadRequestException('Файл не передан');
     return this.catalogAdmin.uploadCategoryImage(file);
+  }
+
+  @Post('upload-brand-image')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: uploadStorage,
+      limits: { fileSize: 6 * 1024 * 1024 },
+    }),
+  )
+  uploadBrandImage(
+    @UploadedFile() file: Express.Multer.File,
+    @Query('kind') kindRaw?: string,
+  ) {
+    if (!file) throw new BadRequestException('Файл не передан');
+    const kind = kindRaw as 'cover' | 'background' | 'gallery';
+    if (kind !== 'cover' && kind !== 'background' && kind !== 'gallery') {
+      throw new BadRequestException('Query kind must be cover, background, or gallery');
+    }
+    return this.catalogAdmin.uploadBrandImage(file, kind);
+  }
+
+  @Post('upload-rich-media')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: uploadStorage,
+      limits: { fileSize: RICH_MEDIA_MAX_BYTES },
+    }),
+  )
+  uploadRichMedia(
+    @UploadedFile() file: Express.Multer.File,
+    @Query('type') typeRaw?: string,
+  ) {
+    if (!file) throw new BadRequestException('Файл не передан');
+    const t = typeRaw as 'image' | 'video';
+    if (t !== 'image' && t !== 'video') {
+      throw new BadRequestException('Query type must be image or video');
+    }
+    return this.catalogAdmin.uploadRichMedia(file, t);
+  }
+
+  @Get('brands')
+  listBrands(@Query('q') q?: string) {
+    return this.catalogAdmin.listBrandsForAdmin(q);
+  }
+
+  @Post('brands/bulk-delete')
+  bulkDeleteBrands(@Body() dto: BulkDeleteBrandsDto) {
+    return this.catalogAdmin.deleteBrands(dto.ids);
+  }
+
+  @Post('brands')
+  createBrand(@Body() dto: CreateBrandAdminDto) {
+    return this.catalogAdmin.createBrand(dto);
+  }
+
+  @Get('brands/:id')
+  getBrand(@Param('id') id: string) {
+    return this.catalogAdmin.getBrandForAdmin(id);
+  }
+
+  @Patch('brands/:id')
+  updateBrand(@Param('id') id: string, @Body() dto: UpdateBrandAdminDto) {
+    return this.catalogAdmin.updateBrand(id, dto);
   }
 
   @Get('categories')

@@ -17,6 +17,7 @@ import { FavoritesModule } from './modules/favorites/favorites.module';
 import { CartModule } from './modules/cart/cart.module';
 import { PagesModule } from './modules/pages/pages.module';
 import { PublicCollectionsModule } from './modules/public-collections/public-collections.module';
+import { MediaLibraryModule } from './modules/media-library/media-library.module';
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { PublicCollectionsModule } from './modules/public-collections/public-col
     CartModule,
     PagesModule,
     PublicCollectionsModule,
+    MediaLibraryModule,
   ],
 })
 export class AppModule {}

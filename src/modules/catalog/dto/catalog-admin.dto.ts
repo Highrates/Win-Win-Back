@@ -1,4 +1,5 @@
 import {
+  ArrayMaxSize,
   ArrayMinSize,
   IsArray,
   IsBoolean,
@@ -6,6 +7,7 @@ import {
   IsOptional,
   IsString,
   Max,
+  MaxLength,
   Min,
   MinLength,
   ValidateIf,
@@ -25,10 +27,17 @@ export class CreateCategoryAdminDto {
   @IsString()
   parentId?: string | null;
 
-  /** Обязательно для витрины (категория / подкатегория). */
+  /** Обложка (необязательно при создании). */
+  @IsOptional()
+  @ValidateIf((_, v) => v !== undefined && v !== null && String(v).trim() !== '')
   @IsString()
   @MinLength(1)
-  backgroundImageUrl!: string;
+  backgroundImageUrl?: string | null;
+
+  /** Если обложка из медиатеки — id объекта. */
+  @IsOptional()
+  @IsString()
+  backgroundMediaObjectId?: string;
 
   @IsOptional()
   @IsString()
@@ -77,13 +86,21 @@ export class UpdateCategoryAdminDto {
   sortOrder?: number;
 
   /**
-   * Если передано — непустой URL (нельзя сбросить фон).
-   * Если не передано — поле не меняется.
+   * Обложка: непустой URL, или null чтобы убрать.
+   * Не передавайте поле, если не меняете.
    */
   @IsOptional()
+  @ValidateIf((_, v) => v !== undefined && v !== null && String(v).trim() !== '')
   @IsString()
   @MinLength(1)
-  backgroundImageUrl?: string;
+  backgroundImageUrl?: string | null;
+
+  /** Вместе с непустым backgroundImageUrl — связь с MediaObject; null при снятии обложки. */
+  @IsOptional()
+  @ValidateIf((_, v) => v !== undefined && v !== null && String(v).trim() !== '')
+  @IsString()
+  @MinLength(1)
+  backgroundMediaObjectId?: string | null;
 }
 
 export class BulkDeleteCategoriesDto {
@@ -91,6 +108,106 @@ export class BulkDeleteCategoriesDto {
   @ArrayMinSize(1)
   @IsString({ each: true })
   ids!: string[];
+}
+
+export class BulkDeleteBrandsDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsString({ each: true })
+  ids!: string[];
+}
+
+export class CreateBrandAdminDto {
+  @IsString()
+  @MinLength(1)
+  name!: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  slug?: string;
+
+  @IsOptional()
+  @IsString()
+  coverImageUrl?: string | null;
+
+  @IsOptional()
+  @IsString()
+  backgroundImageUrl?: string | null;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(3)
+  @IsString({ each: true })
+  galleryImageUrls?: string[];
+
+  @IsOptional()
+  @IsString()
+  description?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(280)
+  shortDescription?: string | null;
+
+  @IsOptional()
+  @IsString()
+  seoTitle?: string | null;
+
+  @IsOptional()
+  @IsString()
+  seoDescription?: string | null;
+
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+}
+
+export class UpdateBrandAdminDto {
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  name?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  slug?: string;
+
+  @IsOptional()
+  @IsString()
+  coverImageUrl?: string | null;
+
+  @IsOptional()
+  @IsString()
+  backgroundImageUrl?: string | null;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(3)
+  @IsString({ each: true })
+  galleryImageUrls?: string[];
+
+  @IsOptional()
+  @IsString()
+  description?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(280)
+  shortDescription?: string | null;
+
+  @IsOptional()
+  @IsString()
+  seoTitle?: string | null;
+
+  @IsOptional()
+  @IsString()
+  seoDescription?: string | null;
+
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
 }
 
 export class ReorderCategoriesDto {
