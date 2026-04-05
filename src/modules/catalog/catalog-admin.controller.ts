@@ -7,10 +7,14 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UploadedFile,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import type { Request } from 'express';
+import { AuditAction } from '@prisma/client';
+import { AuditService } from '../audit/audit.service';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -18,11 +22,25 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { UserRole } from '@prisma/client';
 import { CatalogAdminService } from './catalog-admin.service';
+import { CuratedCollectionsAdminService } from './curated-collections-admin.service';
+import {
+  BulkDeleteCuratedCollectionsDto,
+  CreateCuratedCollectionAdminDto,
+  UpdateCuratedCollectionAdminDto,
+} from './dto/curated-collections-admin.dto';
+import { ProductSetsAdminService } from './product-sets-admin.service';
+import {
+  BulkDeleteProductSetsDto,
+  CreateProductSetAdminDto,
+  UpdateProductSetAdminDto,
+} from './dto/product-sets-admin.dto';
 import {
   BulkDeleteBrandsDto,
   BulkDeleteCategoriesDto,
+  BulkDeleteProductsDto,
   CreateBrandAdminDto,
   CreateCategoryAdminDto,
+  CreateProductAdminDto,
   ReorderCategoriesDto,
   UpdateBrandAdminDto,
   UpdateCategoryAdminDto,
@@ -35,7 +53,12 @@ const RICH_MEDIA_MAX_BYTES = 100 * 1024 * 1024;
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.ADMIN, UserRole.MODERATOR)
 export class CatalogAdminController {
-  constructor(private readonly catalogAdmin: CatalogAdminService) {}
+  constructor(
+    private readonly catalogAdmin: CatalogAdminService,
+    private readonly curatedCollections: CuratedCollectionsAdminService,
+    private readonly productSets: ProductSetsAdminService,
+    private readonly audit: AuditService,
+  ) {}
 
   @Post('upload-image')
   @UseInterceptors(
@@ -44,9 +67,24 @@ export class CatalogAdminController {
       limits: { fileSize: 6 * 1024 * 1024 },
     }),
   )
-  uploadImage(@UploadedFile() file: Express.Multer.File) {
+  async uploadImage(@UploadedFile() file: Express.Multer.File, @Req() req: Request) {
     if (!file) throw new BadRequestException('Файл не передан');
-    return this.catalogAdmin.uploadCategoryImage(file);
+    const path = (req.originalUrl || req.url || '').split('?')[0];
+    const result = await this.catalogAdmin.uploadCategoryImage(file);
+    await this.audit.log({
+      action: AuditAction.UPLOAD,
+      entityType: 'CatalogImage',
+      path,
+      httpMethod: 'POST',
+      metadata: {
+        kind: 'category',
+        originalName: file.originalname,
+        byteSize: file.size,
+        url: result.url,
+        mediaObjectId: result.mediaObjectId,
+      },
+    });
+    return result;
   }
 
   @Post('upload-brand-image')
@@ -56,16 +94,31 @@ export class CatalogAdminController {
       limits: { fileSize: 6 * 1024 * 1024 },
     }),
   )
-  uploadBrandImage(
+  async uploadBrandImage(
     @UploadedFile() file: Express.Multer.File,
-    @Query('kind') kindRaw?: string,
+    @Query('kind') kindRaw: string | undefined,
+    @Req() req: Request,
   ) {
     if (!file) throw new BadRequestException('Файл не передан');
     const kind = kindRaw as 'cover' | 'background' | 'gallery';
     if (kind !== 'cover' && kind !== 'background' && kind !== 'gallery') {
       throw new BadRequestException('Query kind must be cover, background, or gallery');
     }
-    return this.catalogAdmin.uploadBrandImage(file, kind);
+    const result = await this.catalogAdmin.uploadBrandImage(file, kind);
+    const path = (req.originalUrl || req.url || '').split('?')[0];
+    await this.audit.log({
+      action: AuditAction.UPLOAD,
+      entityType: 'BrandImage',
+      path,
+      httpMethod: 'POST',
+      metadata: {
+        kind,
+        originalName: file.originalname,
+        byteSize: file.size,
+        url: result.url,
+      },
+    });
+    return result;
   }
 
   @Post('upload-rich-media')
@@ -75,16 +128,31 @@ export class CatalogAdminController {
       limits: { fileSize: RICH_MEDIA_MAX_BYTES },
     }),
   )
-  uploadRichMedia(
+  async uploadRichMedia(
     @UploadedFile() file: Express.Multer.File,
-    @Query('type') typeRaw?: string,
+    @Query('type') typeRaw: string | undefined,
+    @Req() req: Request,
   ) {
     if (!file) throw new BadRequestException('Файл не передан');
     const t = typeRaw as 'image' | 'video';
     if (t !== 'image' && t !== 'video') {
       throw new BadRequestException('Query type must be image or video');
     }
-    return this.catalogAdmin.uploadRichMedia(file, t);
+    const { url } = await this.catalogAdmin.uploadRichMedia(file, t);
+    const path = (req.originalUrl || req.url || '').split('?')[0];
+    await this.audit.log({
+      action: AuditAction.UPLOAD,
+      entityType: 'RichMedia',
+      path,
+      httpMethod: 'POST',
+      metadata: {
+        mediaType: t,
+        originalName: file.originalname,
+        byteSize: file.size,
+        url,
+      },
+    });
+    return { url };
   }
 
   @Get('brands')
@@ -141,5 +209,80 @@ export class CatalogAdminController {
   @Patch('categories/:id')
   update(@Param('id') id: string, @Body() dto: UpdateCategoryAdminDto) {
     return this.catalogAdmin.updateCategory(id, dto);
+  }
+
+  @Get('products')
+  listProducts(@Query('q') q?: string) {
+    return this.catalogAdmin.listProductsForAdmin(q);
+  }
+
+  @Post('products')
+  createProduct(@Body() dto: CreateProductAdminDto) {
+    return this.catalogAdmin.createProduct(dto);
+  }
+
+  @Get('products/:id')
+  getProduct(@Param('id') id: string) {
+    return this.catalogAdmin.getProductForAdmin(id);
+  }
+
+  @Patch('products/:id')
+  updateProduct(@Param('id') id: string, @Body() dto: CreateProductAdminDto) {
+    return this.catalogAdmin.updateProduct(id, dto);
+  }
+
+  @Post('products/bulk-delete')
+  bulkDeleteProducts(@Body() dto: BulkDeleteProductsDto) {
+    return this.catalogAdmin.deleteProducts(dto.ids);
+  }
+
+  @Get('curated-collections')
+  listCuratedCollections(@Query('q') q?: string) {
+    return this.curatedCollections.listForAdmin(q);
+  }
+
+  @Post('curated-collections/bulk-delete')
+  bulkDeleteCuratedCollections(@Body() dto: BulkDeleteCuratedCollectionsDto) {
+    return this.curatedCollections.deleteMany(dto.ids);
+  }
+
+  @Post('curated-collections')
+  createCuratedCollection(@Body() dto: CreateCuratedCollectionAdminDto) {
+    return this.curatedCollections.create(dto);
+  }
+
+  @Get('curated-collections/:id')
+  getCuratedCollection(@Param('id') id: string) {
+    return this.curatedCollections.getForAdmin(id);
+  }
+
+  @Patch('curated-collections/:id')
+  updateCuratedCollection(@Param('id') id: string, @Body() dto: UpdateCuratedCollectionAdminDto) {
+    return this.curatedCollections.update(id, dto);
+  }
+
+  @Get('product-sets')
+  listProductSets(@Query('q') q?: string) {
+    return this.productSets.listForAdmin(q);
+  }
+
+  @Post('product-sets/bulk-delete')
+  bulkDeleteProductSets(@Body() dto: BulkDeleteProductSetsDto) {
+    return this.productSets.deleteMany(dto.ids);
+  }
+
+  @Post('product-sets')
+  createProductSet(@Body() dto: CreateProductSetAdminDto) {
+    return this.productSets.create(dto);
+  }
+
+  @Get('product-sets/:id')
+  getProductSet(@Param('id') id: string) {
+    return this.productSets.getForAdmin(id);
+  }
+
+  @Patch('product-sets/:id')
+  updateProductSet(@Param('id') id: string, @Body() dto: UpdateProductSetAdminDto) {
+    return this.productSets.update(id, dto);
   }
 }

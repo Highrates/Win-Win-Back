@@ -8,10 +8,14 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UploadedFile,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import type { Request } from 'express';
+import { AuditAction } from '@prisma/client';
+import { AuditService } from '../audit/audit.service';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -28,7 +32,10 @@ const LIBRARY_UPLOAD_MAX = 100 * 1024 * 1024;
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.ADMIN, UserRole.MODERATOR)
 export class MediaLibraryAdminController {
-  constructor(private readonly media: MediaLibraryService) {}
+  constructor(
+    private readonly media: MediaLibraryService,
+    private readonly audit: AuditService,
+  ) {}
 
   @Get('folders')
   listFolders() {
@@ -89,11 +96,28 @@ export class MediaLibraryAdminController {
       limits: { fileSize: LIBRARY_UPLOAD_MAX },
     }),
   )
-  upload(
+  async upload(
     @UploadedFile() file: Express.Multer.File,
-    @Query('folderId') folderId?: string,
+    @Query('folderId') folderId: string | undefined,
+    @Req() req: Request,
   ) {
     if (!file) throw new BadRequestException('Файл не передан');
-    return this.media.uploadObject(file, folderId || null);
+    const row = await this.media.uploadObject(file, folderId || null);
+    const path = (req.originalUrl || req.url || '').split('?')[0];
+    await this.audit.log({
+      action: AuditAction.UPLOAD,
+      entityType: 'MediaObject',
+      entityId: row.id,
+      path,
+      httpMethod: 'POST',
+      metadata: {
+        storageKey: row.storageKey,
+        originalName: row.originalName,
+        byteSize: row.byteSize,
+        mimeType: row.mimeType,
+        folderId: row.folderId,
+      },
+    });
+    return row;
   }
 }

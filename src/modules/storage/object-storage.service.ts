@@ -361,4 +361,68 @@ export class ObjectStorageService {
     const key = `${folder}/${Date.now()}-${randomBytes(6).toString('base64url')}${ext}`;
     return this.putBuffer(key, buffer, mimetype);
   }
+
+  /**
+   * Галерея / цвета товара: только наш публичный URL (S3 или /uploads) или хост из PRODUCT_IMAGE_URL_HOST_WHITELIST.
+   */
+  assertProductImageUrlAllowed(url: string): void {
+    const u = url.trim();
+    if (!u) {
+      throw new BadRequestException('Пустой URL изображения');
+    }
+    if (this.tryPublicUrlToKey(u)) {
+      return;
+    }
+    let host: string;
+    try {
+      host = new URL(u).hostname.toLowerCase();
+    } catch {
+      throw new BadRequestException('Некорректный URL изображения');
+    }
+    const raw = this.config.get<string>('PRODUCT_IMAGE_URL_HOST_WHITELIST')?.trim();
+    const allowed = (raw ? raw.split(/[,;\s]+/) : [])
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+    if (allowed.length === 0) {
+      throw new BadRequestException(
+        'URL изображения должен указывать на ваше хранилище (S3_PUBLIC_BASE_URL или локальные /uploads). Для сторонних CDN задайте PRODUCT_IMAGE_URL_HOST_WHITELIST.',
+      );
+    }
+    if (allowed.includes(host)) {
+      return;
+    }
+    throw new BadRequestException(
+      `Домен изображения не разрешён (${host}). Добавьте его в PRODUCT_IMAGE_URL_HOST_WHITELIST или выберите файл из медиатеки.`,
+    );
+  }
+
+  private isMediathekStorageDeleteOnProductImageRemovalEnabled(): boolean {
+    const v = this.config.get<string>('PRODUCT_DELETE_MEDIATHEK_STORAGE_KEYS')?.trim().toLowerCase();
+    return v === 'true' || v === '1' || v === 'yes';
+  }
+
+  /**
+   * Удаление файла в хранилище при снятии картинки с товара / удалении товара.
+   * Ключи objects/… по умолчанию не трогаем (медиатека, общие ссылки), см. PRODUCT_DELETE_MEDIATHEK_STORAGE_KEYS.
+   */
+  async deleteProductImageObjectsForRemovedUrls(urls: string[]): Promise<void> {
+    const keys = new Set<string>();
+    for (const url of urls) {
+      const k = this.tryPublicUrlToKey(url.trim());
+      if (k) keys.add(k);
+    }
+    const allowObjects = this.isMediathekStorageDeleteOnProductImageRemovalEnabled();
+    for (const key of keys) {
+      if (key.startsWith('objects/') && !allowObjects) {
+        continue;
+      }
+      try {
+        await this.removeObjectKey(key);
+      } catch (e) {
+        this.logger.warn(
+          `Не удалось удалить объект ${key}: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
+  }
 }

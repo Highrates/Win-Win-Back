@@ -94,6 +94,8 @@ model Brand {
   updatedAt   DateTime  @updatedAt
 
   products Product[]
+  curatedCollectionBrandItems CuratedCollectionBrandItem[]
+  curatedProductSets       CuratedProductSet[]
 }
 
 // --- Каталог (категории/подкатегории по parentId) ---
@@ -115,19 +117,64 @@ model Category {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  products Product[]
+  /// Товары, у которых эта категория основная (Product.categoryId)
+  primaryProducts Product[] @relation("ProductPrimaryCategory")
+  /// Дополнительные привязки товаров к этой категории
+  productCategories ProductCategory[]
+}
+
+/// Дополнительные категории товара (основная — всегда Product.categoryId).
+model ProductCategory {
+  productId  String
+  categoryId String
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@id([productId, categoryId])
+  @@index([categoryId])
 }
 
 model Product {
   id          String   @id @default(cuid())
   slug        String   @unique
   categoryId  String
-  category    Category @relation(fields: [categoryId], references: [id])
+  category    Category @relation("ProductPrimaryCategory", fields: [categoryId], references: [id])
   brandId     String?
   brand       Brand?   @relation(fields: [brandId], references: [id])
   name        String
   description String?  @db.Text
-  attributes  Json?    // { "material": "дерево", "width": 120, ... }
+  /// Карточка / списки (plain)
+  shortDescription String? @db.Text
+  /// HTML из RichBlock (доп. информация на витрине)
+  additionalInfoHtml String? @db.Text
+  /// 3D-модель (GLB и т.п.), URL из медиатеки / хранилища
+  model3dUrl         String?
+  /// Чертёж (PDF и т.п.)
+  drawingUrl         String?
+  attributes  Json?    // legacy / произвольные пары
+  /// colors[], materials[], sizes[], labels[] — см. админ DTO
+  specsJson   Json?
+  sku         String?  @unique
+  deliveryText    String? @db.Text
+  technicalSpecs  String? @db.Text
+  /// Габариты брутто, мм
+  lengthMm   Int?
+  widthMm    Int?
+  heightMm   Int?
+  /// Объём брутто, м³ (колонка исторически volumeLiters)
+  volumeLiters Decimal? @db.Decimal(12, 4)
+  /// Вес брутто, кг
+  weightKg       Decimal? @db.Decimal(12, 4)
+  /// Габариты нетто, мм
+  netLengthMm   Int?
+  netWidthMm    Int?
+  netHeightMm   Int?
+  /// Объём нетто, м³
+  netVolumeLiters Decimal? @db.Decimal(12, 4)
+  /// Вес нетто, кг
+  netWeightKg     Decimal? @db.Decimal(12, 4)
+  seoTitle       String?
+  seoDescription String? @db.Text
   price       Decimal  @db.Decimal(12, 2) // RUB
   currency    String   @default("RUB")
   isActive    Boolean  @default(true)
@@ -142,6 +189,9 @@ model Product {
   favorites        Favorite[]
   cartItems        CartItem[]
   publicCollectionItems PublicCollectionItem[]
+  productCategories ProductCategory[]
+  curatedCollectionProductItems CuratedCollectionProductItem[]
+  curatedProductSetItems      CuratedProductSetItem[]
 }
 
 model ProductImage {
@@ -218,6 +268,91 @@ model CollectionItem {
   product      Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
   sortOrder    Int        @default(0)
   addedAt      DateTime   @default(now())
+}
+
+enum CuratedCollectionKind {
+  PRODUCT
+  BRAND
+}
+
+/// Редакторские коллекции для витрины (админка). Отдельно от личных Collection.
+model CuratedCollection {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  description String?  @db.Text
+  coverImageUrl          String?
+  coverMediaObjectId     String?
+  coverMediaObject       MediaObject? @relation(fields: [coverMediaObjectId], references: [id], onDelete: SetNull)
+  seoTitle       String?
+  seoDescription String?  @db.Text
+  kind        CuratedCollectionKind
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  productItems CuratedCollectionProductItem[]
+  brandItems   CuratedCollectionBrandItem[]
+}
+
+model CuratedCollectionProductItem {
+  id             String            @id @default(cuid())
+  collectionId   String
+  collection     CuratedCollection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  productId      String
+  product        Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+  sortOrder      Int               @default(0)
+
+  @@unique([collectionId, productId])
+  @@index([collectionId])
+}
+
+model CuratedCollectionBrandItem {
+  id             String            @id @default(cuid())
+  collectionId   String
+  collection     CuratedCollection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  brandId        String
+  brand          Brand             @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  sortOrder      Int               @default(0)
+
+  @@unique([collectionId, brandId])
+  @@index([collectionId])
+}
+
+/// Редакторские наборы (только товары), аналог коллекций без типа «бренды».
+model CuratedProductSet {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  description String?  @db.Text
+  brandId     String?
+  brand       Brand?   @relation(fields: [brandId], references: [id], onDelete: SetNull)
+  coverImageUrl          String?
+  coverMediaObjectId     String?
+  coverMediaObject       MediaObject? @relation(fields: [coverMediaObjectId], references: [id], onDelete: SetNull)
+  seoTitle       String?
+  seoDescription String?  @db.Text
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  items CuratedProductSetItem[]
+
+  @@index([brandId])
+}
+
+model CuratedProductSetItem {
+  id        String            @id @default(cuid())
+  setId     String
+  set       CuratedProductSet @relation(fields: [setId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+  sortOrder Int               @default(0)
+
+  @@unique([setId, productId])
+  @@index([setId])
 }
 
 // --- Дизайнеры (Этап 2: страница всех дизайнеров, страница дизайнера) ---
@@ -394,6 +529,8 @@ model MediaObject {
   updatedAt    DateTime             @updatedAt
 
   categoryBackgrounds Category[]
+  curatedCollectionCovers CuratedCollection[]
+  curatedProductSetCovers CuratedProductSet[]
 }
 
 // --- Блог ---
@@ -420,4 +557,34 @@ model BlogPost {
   publishedAt DateTime?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+}
+
+// --- Аудит (админка и критичные действия) ---
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  UPLOAD
+  LOGIN
+  LOGIN_FAILED
+}
+
+model AuditLog {
+  id           String      @id @default(cuid())
+  createdAt    DateTime    @default(now())
+  actorUserId  String?
+  actorEmail   String?
+  actorRole    String?
+  action       AuditAction
+  entityType   String?
+  entityId     String?
+  httpMethod   String?
+  path         String
+  metadata     Json?
+  ip           String?
+  userAgent    String?
+
+  @@index([createdAt(sort: Desc)])
+  @@index([actorUserId])
+  @@index([action])
 }

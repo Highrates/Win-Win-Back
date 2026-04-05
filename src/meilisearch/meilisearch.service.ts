@@ -10,12 +10,21 @@ export class MeilisearchService {
 
   constructor(private config: ConfigService) {
     const host =
-      this.config.get<string>('MEILISEARCH_HOST') ?? 'http://localhost:7700';
+      this.config.get<string>('MEILISEARCH_HOST')?.trim() || 'http://localhost:7700';
     const apiKey = this.config.get<string>('MEILISEARCH_API_KEY');
     this.client = new MeiliSearch({
       host,
       ...(apiKey ? { apiKey } : {}),
     });
+  }
+
+  /**
+   * Поиск и индексация через Meilisearch только при MEILISEARCH_ENABLED=true (или 1).
+   * Иначе каталог ищется через Prisma, синхронизация индекса — no-op.
+   */
+  isEnabled(): boolean {
+    const v = this.config.get<string>('MEILISEARCH_ENABLED')?.trim().toLowerCase();
+    return v === 'true' || v === '1' || v === 'yes';
   }
 
   getClient(): MeiliSearch {

@@ -1,9 +1,11 @@
+import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
   IsBoolean,
   IsInt,
+  IsNumber,
   IsOptional,
   IsString,
   Max,
@@ -11,6 +13,7 @@ import {
   Min,
   MinLength,
   ValidateIf,
+  ValidateNested,
 } from 'class-validator';
 
 export class CreateCategoryAdminDto {
@@ -111,6 +114,13 @@ export class BulkDeleteCategoriesDto {
 }
 
 export class BulkDeleteBrandsDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsString({ each: true })
+  ids!: string[];
+}
+
+export class BulkDeleteProductsDto {
   @IsArray()
   @ArrayMinSize(1)
   @IsString({ each: true })
@@ -221,4 +231,238 @@ export class ReorderCategoriesDto {
   @ArrayMinSize(1)
   @IsString({ each: true })
   orderedIds!: string[];
+}
+
+export class ProductGalleryItemDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(2048)
+  url!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  alt?: string | null;
+}
+
+export class ProductColorSpecDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(160)
+  name!: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(2048)
+  imageUrl!: string;
+}
+
+export class ProductMaterialSpecDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  name!: string;
+}
+
+export class ProductSizeSpecDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  value!: string;
+}
+
+export class CreateProductAdminDto {
+  @IsString()
+  @MinLength(1)
+  categoryId!: string;
+
+  /** Дополнительные категории (основная — categoryId). */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(24)
+  @IsString({ each: true })
+  additionalCategoryIds?: string[];
+
+  /** Коллекции типа «товары», в которых состоит товар. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(80)
+  @IsString({ each: true })
+  curatedCollectionIds?: string[];
+
+  /** Наборы, в которых состоит товар. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(80)
+  @IsString({ each: true })
+  curatedProductSetIds?: string[];
+
+  @IsOptional()
+  @ValidateIf((_, v) => v != null && v !== '')
+  @IsString()
+  @MinLength(1)
+  brandId?: string | null;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(500)
+  name!: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(160)
+  slug?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100000)
+  shortDescription?: string | null;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(40)
+  @ValidateNested({ each: true })
+  @Type(() => ProductGalleryItemDto)
+  gallery?: ProductGalleryItemDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(24)
+  @ValidateNested({ each: true })
+  @Type(() => ProductColorSpecDto)
+  colors?: ProductColorSpecDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(40)
+  @ValidateNested({ each: true })
+  @Type(() => ProductMaterialSpecDto)
+  materials?: ProductMaterialSpecDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(40)
+  @ValidateNested({ each: true })
+  @Type(() => ProductSizeSpecDto)
+  sizes?: ProductSizeSpecDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(40)
+  @IsString({ each: true })
+  @MaxLength(80, { each: true })
+  labels?: string[];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20000)
+  deliveryText?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20000)
+  technicalSpecs?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500000)
+  additionalInfoHtml?: string | null;
+
+  /** URL 3D-модели (медиатека / своё хранилище). */
+  @IsOptional()
+  @ValidateIf((_, v) => v !== undefined && v !== null && String(v).trim() !== '')
+  @IsString()
+  @MinLength(1)
+  @MaxLength(2048)
+  model3dUrl?: string | null;
+
+  /** URL чертежа (PDF и т.п.). */
+  @IsOptional()
+  @ValidateIf((_, v) => v !== undefined && v !== null && String(v).trim() !== '')
+  @IsString()
+  @MinLength(1)
+  @MaxLength(2048)
+  drawingUrl?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v != null && String(v).trim() !== '')
+  @IsString()
+  @MaxLength(120)
+  sku?: string | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  lengthMm?: number | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  widthMm?: number | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  heightMm?: number | null;
+
+  /** Игнорируется при сохранении; в БД пишется объём в м³ из габаритов. */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  volumeLiters?: number | null;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  weightKg?: number | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  netLengthMm?: number | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  netWidthMm?: number | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  netHeightMm?: number | null;
+
+  /** Игнорируется при сохранении; в БД пишется объём нетто в м³ из габаритов нетто. */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  netVolumeLiters?: number | null;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  netWeightKg?: number | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  seoTitle?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  seoDescription?: string | null;
+
+  @IsNumber()
+  @Min(0)
+  price!: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(8)
+  currency?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
 }
