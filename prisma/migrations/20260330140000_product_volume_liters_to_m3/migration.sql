@@ -1,2 +1,3 @@
--- Раньше в volumeLiters хранились литры (мм³ / 10⁶). Теперь — м³ (мм³ / 10⁹): делим на 1000.
-UPDATE "Product" SET "volumeLiters" = "volumeLiters" / 1000 WHERE "volumeLiters" IS NOT NULL;
+-- Раньше здесь был UPDATE по "volumeLiters", но колонка создаётся только в 20260405120000_product_extended_fields.
+-- Конвертация литры → м³ выполняется в конце той миграции (после ADD COLUMN).
+SELECT 1;
