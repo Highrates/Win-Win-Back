@@ -34,6 +34,7 @@
     "class-validator": "^0.14.0",
     "image-size": "^1.2.0",
     "ioredis": "^5.3.0",
+    "isomorphic-dompurify": "^2.36.0",
     "meilisearch": "^0.37.0",
     "multer": "^2.1.1",
     "passport": "^0.7.0",

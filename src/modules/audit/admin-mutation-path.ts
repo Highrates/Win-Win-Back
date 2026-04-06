@@ -131,6 +131,15 @@ function parseGenericModule(module: string, rest: string[]): ParsedAdminMutation
     if (r0 === 'posts' && r1 && isLikelyCuid(r1)) {
       return { module, entityType: 'BlogPost', entityId: r1 };
     }
+    if (r0 === 'posts' && r1 === 'bulk-delete') {
+      return { module, entityType: 'BlogPost', operation: 'bulk-delete' };
+    }
+    if (r0 === 'posts' && r1 === 'bulk-published') {
+      return { module, entityType: 'BlogPost', operation: 'bulk-published' };
+    }
+    if (r0 === 'posts' && r1 === 'reorder') {
+      return { module, entityType: 'BlogPost', operation: 'reorder' };
+    }
     if (r0 === 'posts') return { module, entityType: 'BlogPost', operation: r1 };
     if (r0 === 'categories' && r1 && isLikelyCuid(r1)) {
       return { module, entityType: 'BlogCategory', entityId: r1 };

@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { Controller, Get, NotFoundException, Param, Query } from '@nestjs/common';
 import { BlogService } from './blog.service';
 import { Public } from '../../common/decorators/public.decorator';
 
@@ -9,26 +9,36 @@ export class BlogController {
   @Public()
   @Get('categories')
   categories() {
-    return this.blogService.getCategories();
+    return this.blogService.getPublicCategories();
+  }
+
+  @Public()
+  @Get('posts/:slug')
+  async post(@Param('slug') slug: string) {
+    let s = slug;
+    try {
+      s = decodeURIComponent(slug);
+    } catch {
+      /* как пришло */
+    }
+    const row = await this.blogService.getPostBySlug(s);
+    if (!row) throw new NotFoundException();
+    return row;
   }
 
   @Public()
   @Get('posts')
   posts(
     @Query('categoryId') categoryId?: string,
+    @Query('categorySlug') categorySlug?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
     return this.blogService.getPosts({
       categoryId,
+      categorySlug,
       page: page ? parseInt(page, 10) : undefined,
       limit: limit ? parseInt(limit, 10) : undefined,
     });
-  }
-
-  @Public()
-  @Get('posts/:slug')
-  post(@Param('slug') slug: string) {
-    return this.blogService.getPostBySlug(slug);
   }
 }

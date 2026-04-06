@@ -402,10 +402,10 @@ export class ObjectStorageService {
   }
 
   /**
-   * Удаление файла в хранилище при снятии картинки с товара / удалении товара.
+   * Удаление объектов в bucket по публичным URL (товар, блог и др.).
    * Ключи objects/… по умолчанию не трогаем (медиатека, общие ссылки), см. PRODUCT_DELETE_MEDIATHEK_STORAGE_KEYS.
    */
-  async deleteProductImageObjectsForRemovedUrls(urls: string[]): Promise<void> {
+  async deleteStorageObjectsForRemovedUrls(urls: string[]): Promise<void> {
     const keys = new Set<string>();
     for (const url of urls) {
       const k = this.tryPublicUrlToKey(url.trim());

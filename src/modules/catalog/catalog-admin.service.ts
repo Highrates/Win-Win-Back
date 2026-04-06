@@ -969,7 +969,7 @@ export class CatalogAdminService {
     if (deleted.length) void this.productSearchIndex.removeProducts(deleted);
     if (imageUrlsToRemoveFromStorage.length) {
       void this.objectStorage
-        .deleteProductImageObjectsForRemovedUrls(imageUrlsToRemoveFromStorage)
+        .deleteStorageObjectsForRemovedUrls(imageUrlsToRemoveFromStorage)
         .catch((e) =>
           this.logger.warn(
             `Очистка S3 после удаления товаров: ${e instanceof Error ? e.message : String(e)}`,
@@ -1361,7 +1361,7 @@ export class CatalogAdminService {
       void this.productSearchIndex.syncProduct(id);
       if (removedGalleryUrls.length) {
         void this.objectStorage
-          .deleteProductImageObjectsForRemovedUrls(removedGalleryUrls)
+          .deleteStorageObjectsForRemovedUrls(removedGalleryUrls)
           .catch((e) =>
             this.logger.warn(
               `Очистка S3 после смены галереи: ${e instanceof Error ? e.message : String(e)}`,
