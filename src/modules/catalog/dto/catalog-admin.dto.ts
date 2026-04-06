@@ -143,6 +143,10 @@ export class CreateBrandAdminDto {
 
   @IsOptional()
   @IsString()
+  logoUrl?: string | null;
+
+  @IsOptional()
+  @IsString()
   backgroundImageUrl?: string | null;
 
   @IsOptional()
@@ -187,6 +191,10 @@ export class UpdateBrandAdminDto {
   @IsOptional()
   @IsString()
   coverImageUrl?: string | null;
+
+  @IsOptional()
+  @IsString()
+  logoUrl?: string | null;
 
   @IsOptional()
   @IsString()

@@ -776,6 +776,12 @@ export class CatalogAdminService {
     const agg = await this.prisma.brand.aggregate({ _max: { sortOrder: true } });
     const sortOrder = (agg._max.sortOrder ?? -1) + 1;
     const cover = dto.coverImageUrl == null ? null : dto.coverImageUrl.trim() || null;
+    const logo =
+      dto.logoUrl === undefined
+        ? null
+        : dto.logoUrl === null
+          ? null
+          : dto.logoUrl.trim() || null;
     const bg = dto.backgroundImageUrl?.trim() || null;
     return this.prisma.brand.create({
       data: {
@@ -784,13 +790,13 @@ export class CatalogAdminService {
         sortOrder,
         isActive: dto.isActive ?? true,
         coverImageUrl: cover,
+        logoUrl: logo,
         backgroundImageUrl: bg,
         galleryImageUrls: this.galleryToPrisma(dto.galleryImageUrls),
         description: dto.description?.trim() || null,
         shortDescription: this.normBrandShortDescription(dto.shortDescription),
         seoTitle: dto.seoTitle?.trim() || null,
         seoDescription: dto.seoDescription?.trim() || null,
-        logoUrl: cover,
       },
       include: { _count: { select: { products: true } } },
     });
@@ -813,7 +819,9 @@ export class CatalogAdminService {
     if (dto.coverImageUrl !== undefined) {
       const c = dto.coverImageUrl === null ? null : dto.coverImageUrl.trim() || null;
       data.coverImageUrl = c;
-      data.logoUrl = c;
+    }
+    if (dto.logoUrl !== undefined) {
+      data.logoUrl = dto.logoUrl === null ? null : dto.logoUrl.trim() || null;
     }
     if (dto.backgroundImageUrl !== undefined) {
       data.backgroundImageUrl = dto.backgroundImageUrl?.trim() || null;

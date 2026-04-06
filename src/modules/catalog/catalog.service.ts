@@ -1,5 +1,5 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { CuratedCollectionKind, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MeilisearchService, PRODUCTS_INDEX } from '../../meilisearch/meilisearch.service';
 import {
@@ -276,4 +276,202 @@ export class CatalogService {
     );
     return { hits, total, page, limit };
   }
+
+  /** Парсинг `Brand.galleryImageUrls` (JSON-массив строк, до 3). */
+  private parseBrandGalleryUrls(raw: unknown): string[] {
+    const out: string[] = [];
+    if (Array.isArray(raw)) {
+      for (const x of raw) {
+        if (typeof x === 'string' && x.trim()) out.push(x.trim());
+        if (out.length >= 3) break;
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Три URL для блока галереи на главной: только доп. изображения из `galleryImageUrls`
+   * (без обложки `coverImageUrl`); недостающие — из картинок активных товаров бренда.
+   */
+  private async buildBrandHomeGalleryTriples(
+    brands: Array<{ id: string; galleryImageUrls: unknown; coverImageUrl: string | null }>,
+  ): Promise<Map<string, [string, string, string]>> {
+    const brandIds = brands.map((b) => b.id);
+    if (!brandIds.length) return new Map();
+
+    const products = await this.prisma.product.findMany({
+      where: { brandId: { in: brandIds }, isActive: true },
+      orderBy: [{ sortOrder: 'asc' }, { updatedAt: 'desc' }],
+      select: {
+        brandId: true,
+        images: {
+          orderBy: { sortOrder: 'asc' },
+          take: 12,
+          select: { url: true },
+        },
+      },
+    });
+
+    const poolByBrand = new Map<string, string[]>();
+    for (const p of products) {
+      if (!p.brandId) continue;
+      const arr = poolByBrand.get(p.brandId) ?? [];
+      for (const im of p.images) {
+        const u = im.url?.trim();
+        if (u) arr.push(u);
+      }
+      poolByBrand.set(p.brandId, arr);
+    }
+
+    const out = new Map<string, [string, string, string]>();
+    for (const b of brands) {
+      const cover = b.coverImageUrl?.trim() || null;
+      const rawExtras = this.parseBrandGalleryUrls(b.galleryImageUrls);
+      const extras: string[] = [];
+      const seen = new Set<string>();
+      for (const u of rawExtras) {
+        const t = u.trim();
+        if (!t || t === cover || seen.has(t)) continue;
+        seen.add(t);
+        extras.push(t);
+        if (extras.length >= 3) break;
+      }
+
+      const urls: string[] = [...extras];
+      const pool = poolByBrand.get(b.id) ?? [];
+      for (const u of pool) {
+        if (urls.length >= 3) break;
+        const t = u.trim();
+        if (!t || t === cover || seen.has(t)) continue;
+        seen.add(t);
+        urls.push(t);
+      }
+
+      while (urls.length < 3 && urls.length > 0) {
+        urls.push(urls[urls.length - 1]!);
+      }
+      while (urls.length < 3) {
+        urls.push('');
+      }
+
+      out.set(b.id, [urls[0]!, urls[1]!, urls[2]!]);
+    }
+    return out;
+  }
+
+  /**
+   * Публичная коллекция брендов по slug (только `kind: BRAND`, активная).
+   * Для главной «лучшие бренды» и т.п.
+   */
+  async getCuratedBrandCollectionBySlug(slug: string) {
+    const col = await this.prisma.curatedCollection.findFirst({
+      where: { slug, isActive: true, kind: CuratedCollectionKind.BRAND },
+      include: {
+        brandItems: {
+          orderBy: { sortOrder: 'asc' },
+          include: { brand: true },
+        },
+      },
+    });
+    if (!col) return null;
+
+    const active = col.brandItems.filter((bi) => bi.brand.isActive).map((bi) => bi.brand);
+    const triples = await this.buildBrandHomeGalleryTriples(
+      active.map((b) => ({
+        id: b.id,
+        galleryImageUrls: b.galleryImageUrls,
+        coverImageUrl: b.coverImageUrl,
+      })),
+    );
+
+    const brands = active.map((b) => {
+      const logo = b.logoUrl?.trim() || null;
+      const t = triples.get(b.id) ?? ['', '', ''];
+      return {
+        slug: b.slug,
+        name: b.name,
+        logoUrl: logo,
+        shortDescription: b.shortDescription?.trim() || null,
+        galleryMain: t[0] || null,
+        gallerySide1: t[1] || null,
+        gallerySide2: t[2] || null,
+      };
+    });
+
+    return {
+      slug: col.slug,
+      name: col.name,
+      kind: 'BRAND' as const,
+      brands,
+    };
+  }
+
+  /**
+   * Товары из тех же кураторских наборов, что и данный товар (без самого товара), без дублей.
+   */
+  async getProductSiblingsFromCuratedSets(productSlug: string) {
+    const p = await this.prisma.product.findUnique({
+      where: { slug: productSlug, isActive: true },
+      select: { id: true },
+    });
+    if (!p) return { items: [] as PublicSetSiblingProduct[] };
+
+    const memberships = await this.prisma.curatedProductSetItem.findMany({
+      where: { productId: p.id, set: { isActive: true } },
+      select: { setId: true },
+    });
+    const setIds = [...new Set(memberships.map((m) => m.setId))];
+    if (!setIds.length) return { items: [] as PublicSetSiblingProduct[] };
+
+    const rows = await this.prisma.curatedProductSetItem.findMany({
+      where: {
+        setId: { in: setIds },
+        productId: { not: p.id },
+        product: { isActive: true },
+      },
+      orderBy: [{ sortOrder: 'asc' }],
+      include: {
+        product: {
+          select: {
+            id: true,
+            slug: true,
+            name: true,
+            price: true,
+            images: {
+              take: 6,
+              orderBy: { sortOrder: 'asc' },
+              select: { url: true },
+            },
+          },
+        },
+      },
+    });
+
+    const seen = new Set<string>();
+    const items: PublicSetSiblingProduct[] = [];
+    for (const r of rows) {
+      const pr = r.product;
+      if (seen.has(pr.id)) continue;
+      seen.add(pr.id);
+      const imageUrls = pr.images.map((im) => im.url.trim()).filter(Boolean);
+      items.push({
+        id: pr.id,
+        slug: pr.slug,
+        name: pr.name,
+        price: pr.price,
+        thumbUrl: imageUrls[0] ?? null,
+        imageUrls,
+      });
+    }
+    return { items };
+  }
 }
+
+export type PublicSetSiblingProduct = {
+  id: string;
+  slug: string;
+  name: string;
+  price: unknown;
+  thumbUrl: string | null;
+  imageUrls: string[];
+};

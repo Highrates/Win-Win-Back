@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { Controller, Get, NotFoundException, Param, Query } from '@nestjs/common';
 import { CatalogService } from './catalog.service';
 import { Public } from '../../common/decorators/public.decorator';
 
@@ -40,6 +40,15 @@ export class CatalogController {
     return this.catalogService.getCategoryBySlug(slug);
   }
 
+  /** Кураторская коллекция брендов по slug (`kind: BRAND`, активная). */
+  @Public()
+  @Get('curated-collections/:slug')
+  async curatedBrandCollection(@Param('slug') slug: string) {
+    const data = await this.catalogService.getCuratedBrandCollectionBySlug(slug);
+    if (!data) throw new NotFoundException();
+    return data;
+  }
+
   @Public()
   @Get('products/search')
   search(
@@ -56,6 +65,13 @@ export class CatalogController {
       page: page ? parseInt(page, 10) : undefined,
       limit: limit ? parseInt(limit, 10) : undefined,
     });
+  }
+
+  /** Товары из тех же активных кураторских наборов (без текущего товара). */
+  @Public()
+  @Get('products/:slug/set-siblings')
+  productSetSiblings(@Param('slug') slug: string) {
+    return this.catalogService.getProductSiblingsFromCuratedSets(slug);
   }
 
   @Public()
