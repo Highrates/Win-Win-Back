@@ -21,7 +21,7 @@
     "seed": "ts-node --compiler-options {\"module\":\"CommonJS\"} prisma/seed.ts"
   },
   "dependencies": {
-    "@win-win/catalog-slug": "file:../packages/catalog-slug",
+    "@win-win/catalog-slug": "file:./packages/catalog-slug",
     "@aws-sdk/client-s3": "^3.1019.0",
     "@nestjs/common": "^10.0.0",
     "@nestjs/config": "^3.0.0",
