@@ -14,12 +14,15 @@ export class FavoritesController {
   }
 
   @Post()
-  add(@CurrentUser('sub') userId: string, @Body() body: { productId: string }) {
-    return this.favoritesService.add(userId, body.productId);
+  add(@CurrentUser('sub') userId: string, @Body() body: { productVariantId: string }) {
+    return this.favoritesService.add(userId, body.productVariantId);
   }
 
-  @Delete(':productId')
-  remove(@CurrentUser('sub') userId: string, @Param('productId') productId: string) {
-    return this.favoritesService.remove(userId, productId);
+  @Delete(':productVariantId')
+  remove(
+    @CurrentUser('sub') userId: string,
+    @Param('productVariantId') productVariantId: string,
+  ) {
+    return this.favoritesService.remove(userId, productVariantId);
   }
 }

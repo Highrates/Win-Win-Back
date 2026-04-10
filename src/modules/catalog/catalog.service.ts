@@ -549,17 +549,24 @@ export class CatalogService {
             images: {
               take: 6,
               orderBy: { sortOrder: 'asc' },
-              select: { url: true },
+              select: { url: true, alt: true },
             },
             variants: {
-              where: { isDefault: true },
+              where: { isDefault: true, isActive: true },
               take: 1,
               select: {
+                id: true,
+                variantLabel: true,
                 price: true,
                 images: {
                   take: 6,
                   orderBy: { sortOrder: 'asc' },
-                  select: { url: true },
+                  select: { url: true, alt: true },
+                },
+                variantProductImages: {
+                  take: 6,
+                  orderBy: { sortOrder: 'asc' },
+                  include: { productImage: { select: { url: true, alt: true } } },
                 },
               },
             },
@@ -575,13 +582,20 @@ export class CatalogService {
       if (seen.has(pr.id)) continue;
       seen.add(pr.id);
       const dv = pr.variants[0];
-      const shared = pr.images.map((im) => im.url.trim()).filter(Boolean);
-      const vUrls = dv?.images.map((im) => im.url.trim()).filter(Boolean) ?? [];
-      const imageUrls = vUrls.length ? vUrls : shared;
+      const shared = pr.images.map((im) => ({ url: im.url, alt: im.alt }));
+      const effective = dv
+        ? resolveEffectiveVariantImages({
+            sharedProductImages: shared,
+            variantProductImagesFromJunction: dv.variantProductImages,
+            variantLegacyImages: dv.images.map((im) => ({ url: im.url, alt: im.alt })),
+          })
+        : shared;
+      const imageUrls = effective.map((im) => im.url.trim()).filter(Boolean);
+      const displayName = dv?.variantLabel?.trim() || pr.name;
       items.push({
-        id: pr.id,
+        id: dv?.id ?? pr.id,
         slug: pr.slug,
-        name: pr.name,
+        name: displayName,
         price: dv?.price ?? 0,
         thumbUrl: imageUrls[0] ?? null,
         imageUrls,

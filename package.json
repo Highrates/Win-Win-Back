@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "postinstall": "prisma generate",
+    "test": "vitest run",
     "build": "nest build",
     "start": "nest start",
     "start:dev": "nest start --watch",
@@ -20,6 +21,7 @@
     "seed": "ts-node --compiler-options {\"module\":\"CommonJS\"} prisma/seed.ts"
   },
   "dependencies": {
+    "@win-win/catalog-slug": "file:../packages/catalog-slug",
     "@aws-sdk/client-s3": "^3.1019.0",
     "@nestjs/common": "^10.0.0",
     "@nestjs/config": "^3.0.0",
@@ -43,6 +45,7 @@
     "rxjs": "^7.8.0"
   },
   "devDependencies": {
+    "vitest": "^3.0.5",
     "@nestjs/cli": "^10.0.0",
     "@nestjs/schematics": "^10.0.0",
     "@types/bcrypt": "^5.0.0",

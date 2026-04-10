@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 
 @Injectable()
@@ -8,21 +8,42 @@ export class FavoritesService {
   async findAll(userId: string) {
     return this.prisma.favorite.findMany({
       where: { userId },
-      include: { product: { include: { images: true, brand: true } } },
+      include: {
+        productVariant: {
+          include: {
+            product: { include: { images: { orderBy: { sortOrder: 'asc' } }, brand: true } },
+          },
+        },
+      },
       orderBy: { createdAt: 'desc' },
     });
   }
 
-  async add(userId: string, productId: string) {
+  async add(userId: string, productVariantId: string) {
+    const id = productVariantId?.trim();
+    if (!id) throw new BadRequestException('productVariantId обязателен');
+    const v = await this.prisma.productVariant.findFirst({
+      where: { id, isActive: true, product: { isActive: true } },
+      select: { id: true },
+    });
+    if (!v) throw new NotFoundException('Вариант не найден');
     return this.prisma.favorite.upsert({
-      where: { userId_productId: { userId, productId } },
-      create: { userId, productId },
+      where: { userId_productVariantId: { userId, productVariantId: id } },
+      create: { userId, productVariantId: id },
       update: {},
-      include: { product: true },
+      include: {
+        productVariant: {
+          include: {
+            product: { include: { images: { orderBy: { sortOrder: 'asc' } }, brand: true } },
+          },
+        },
+      },
     });
   }
 
-  async remove(userId: string, productId: string) {
-    return this.prisma.favorite.deleteMany({ where: { userId, productId } });
+  async remove(userId: string, productVariantId: string) {
+    const id = productVariantId?.trim();
+    if (!id) throw new BadRequestException('productVariantId обязателен');
+    return this.prisma.favorite.deleteMany({ where: { userId, productVariantId: id } });
   }
 }

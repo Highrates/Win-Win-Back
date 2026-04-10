@@ -53,6 +53,7 @@ export class ProductSearchIndexService {
             where: { isActive: true },
             select: {
               id: true,
+              variantLabel: true,
               isActive: true,
               updatedAt: true,
               price: true,
@@ -82,11 +83,12 @@ export class ProductSearchIndexService {
           junctionUrls: v.variantProductImages.map((l) => l.productImage.url),
           legacyUrls: v.images.map((i) => i.url),
         });
+        const displayName = (v.variantLabel ?? '').trim() || row.name;
         const r: ProductVariantSearchIndexRow = {
           id: v.id,
           productId: row.id,
           slug: row.slug,
-          name: row.name,
+          name: displayName,
           shortDescription: row.shortDescription,
           categoryId: row.categoryId,
           categoryIds,
@@ -157,6 +159,7 @@ export class ProductSearchIndexService {
           where: { isActive: true },
           select: {
             id: true,
+            variantLabel: true,
             isActive: true,
             updatedAt: true,
             price: true,
@@ -185,12 +188,13 @@ export class ProductSearchIndexService {
           junctionUrls: v.variantProductImages.map((l) => l.productImage.url),
           legacyUrls: v.images.map((i) => i.url),
         });
+        const displayName = (v.variantLabel ?? '').trim() || row.name;
         flat.push(
           buildProductSearchDocument({
             id: v.id,
             productId: row.id,
             slug: row.slug,
-            name: row.name,
+            name: displayName,
             shortDescription: row.shortDescription,
             categoryId: row.categoryId,
             categoryIds,

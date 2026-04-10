@@ -50,6 +50,7 @@ import {
 } from './dto/catalog-admin.dto';
 import { PricingPreviewAdminDto, UpsertPricingProfileAdminDto } from './dto/pricing-admin.dto';
 import { PricingAdminService } from './pricing-admin.service';
+import { slugifyVariantLabel } from './slug-transliteration';
 
 const uploadStorage = memoryStorage();
 const RICH_MEDIA_MAX_BYTES = 100 * 1024 * 1024;
@@ -215,6 +216,12 @@ export class CatalogAdminController {
   @Patch('categories/:id')
   update(@Param('id') id: string, @Body() dto: UpdateCategoryAdminDto) {
     return this.catalogAdmin.updateCategory(id, dto);
+  }
+
+  /** Предпросмотр slug варианта (тот же алгоритм, что при сохранении). */
+  @Get('slugify-variant')
+  slugifyVariant(@Query('q') q?: string) {
+    return { slug: slugifyVariantLabel(q ?? '') };
   }
 
   @Get('products')

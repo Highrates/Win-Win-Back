@@ -1,4 +1,6 @@
-/** Единая транслитерация slug (категории, товары, варианты). Синхронизируйте с логикой slug на фронте вручную при изменении. */
+/** Единая транслитерация slug (категории, товары, варианты). */
+
+export { slugifyVariantLabel } from '@win-win/catalog-slug';
 
 export const CYR_TO_LAT: Record<string, string> = {
   а: 'a',

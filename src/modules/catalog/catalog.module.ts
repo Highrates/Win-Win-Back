@@ -3,6 +3,9 @@ import { CatalogService } from './catalog.service';
 import { CatalogController } from './catalog.controller';
 import { CatalogAdminController } from './catalog-admin.controller';
 import { CatalogAdminService } from './catalog-admin.service';
+import { CatalogProductAdminService } from './catalog-product-admin.service';
+import { CatalogVariantAdminService } from './catalog-variant-admin.service';
+import { CatalogVariantPricingService } from './catalog-variant-pricing.service';
 import { CuratedCollectionsAdminService } from './curated-collections-admin.service';
 import { ProductSetsAdminService } from './product-sets-admin.service';
 import { PricingAdminService } from './pricing-admin.service';
@@ -13,6 +16,9 @@ import { MediaLibraryModule } from '../media-library/media-library.module';
   imports: [StorageModule, MediaLibraryModule],
   providers: [
     CatalogService,
+    CatalogVariantPricingService,
+    CatalogVariantAdminService,
+    CatalogProductAdminService,
     CatalogAdminService,
     CuratedCollectionsAdminService,
     ProductSetsAdminService,
