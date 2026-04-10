@@ -197,7 +197,8 @@ model Product {
   shortDescription String? @db.Text
   /// HTML из RichBlock (доп. информация на витрине)
   additionalInfoHtml String? @db.Text
-  attributes  Json?    // legacy / произвольные пары
+  /// @deprecated Не используется в новых сценариях; опции SKU — в `ProductVariant` / материалах.
+  attributes  Json?
   deliveryText    String? @db.Text
   technicalSpecs  String? @db.Text
   seoTitle       String?
@@ -307,10 +308,9 @@ model ProductVariant {
   orderItems OrderItem[]
 
   @@index([productId])
-  @@index([productId, variantSlug])
 }
 
-/// Галерея варианта; если пусто — на витрине используются изображения Product.
+/// Галерея варианта прямыми URL (legacy). Предпочтительно: подмножество `ProductImage` через `ProductVariantProductImage`.
 model ProductVariantImage {
   id        String   @id @default(cuid())
   variantId String

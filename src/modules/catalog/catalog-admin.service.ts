@@ -23,62 +23,8 @@ import {
 } from './dto/catalog-admin.dto';
 import { PricingAdminService } from './pricing-admin.service';
 import { calcMskAndRetailRub, type PricingProfileCalcInput } from './pricing-calculation';
-
-const CYR_TO_LAT: Record<string, string> = {
-  а: 'a',
-  б: 'b',
-  в: 'v',
-  г: 'g',
-  д: 'd',
-  е: 'e',
-  ё: 'e',
-  ж: 'zh',
-  з: 'z',
-  и: 'i',
-  й: 'y',
-  к: 'k',
-  л: 'l',
-  м: 'm',
-  н: 'n',
-  о: 'o',
-  п: 'p',
-  р: 'r',
-  с: 's',
-  т: 't',
-  у: 'u',
-  ф: 'f',
-  х: 'h',
-  ц: 'ts',
-  ч: 'ch',
-  ш: 'sh',
-  щ: 'sch',
-  ъ: '',
-  ы: 'y',
-  ь: '',
-  э: 'e',
-  ю: 'yu',
-  я: 'ya',
-};
-
-function transliterateRu(input: string): string {
-  return [...input.toLowerCase()].map((ch) => CYR_TO_LAT[ch] ?? ch).join('');
-}
-
-function slugifyBase(name: string): string {
-  const raw = transliterateRu(name)
-    .replace(/[^a-z0-9]+/gi, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 72);
-  return raw || 'category';
-}
-
-function slugifyProductBase(name: string): string {
-  const raw = transliterateRu(name)
-    .replace(/[^a-z0-9]+/gi, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 72);
-  return raw || 'product';
-}
+import { slugifyBase, slugifyProductBase } from './slug-transliteration';
+import { assertMaterialColorPairForProduct } from './variant-material-color';
 
 @Injectable()
 export class CatalogAdminService {
@@ -1836,19 +1782,16 @@ export class CatalogAdminService {
         throw new BadRequestException('Укажите материал и цвет вместе или очистите оба');
       }
       if (nextMatId && nextColId) {
-        const mat = await this.prisma.productMaterialOption.findFirst({
-          where: { id: nextMatId, productId },
-        });
-        const col = await this.prisma.productColorOption.findFirst({
-          where: { id: nextColId, materialOptionId: nextMatId },
-        });
-        if (!mat || !col) {
-          throw new BadRequestException('Материал или цвет не относятся к этому товару');
-        }
+        const { materialName, colorName } = await assertMaterialColorPairForProduct(
+          this.prisma,
+          productId,
+          nextMatId,
+          nextColId,
+        );
         variantUpdate.materialOption = { connect: { id: nextMatId } };
         variantUpdate.colorOption = { connect: { id: nextColId } };
         if (dto.optionAttributes === undefined) {
-          variantUpdate.optionAttributes = { material: mat.name, color: col.name };
+          variantUpdate.optionAttributes = { material: materialName, color: colorName };
         }
       } else {
         variantUpdate.materialOption = { disconnect: true };

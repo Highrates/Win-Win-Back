@@ -76,7 +76,16 @@ export class CatalogController {
 
   @Public()
   @Get('products/:slug')
-  product(@Param('slug') slug: string, @Query('vs') vs?: string) {
-    return this.catalogService.getProductBySlug(slug, vs?.trim() || undefined);
+  product(
+    @Param('slug') slug: string,
+    @Query('vs') vs?: string,
+    @Query('v') v?: string,
+  ) {
+    const variantSlug = vs?.trim();
+    const variantId = v?.trim();
+    return this.catalogService.getProductBySlug(slug, {
+      ...(variantSlug ? { variantSlug } : {}),
+      ...(variantId ? { variantId } : {}),
+    });
   }
 }

@@ -8,16 +8,9 @@ import {
   type ProductVariantSearchIndexRow,
 } from './product-search-doc';
 import { applyProductIndexSearchSettings } from './product-index-settings';
+import { resolveEffectiveVariantImageUrlsForSearch } from '../modules/catalog/variant-effective-gallery';
 
 const BATCH = 400;
-
-function effectiveVariantImages(
-  shared: { url: string }[],
-  variant: { url: string }[],
-): { url: string }[] {
-  if (variant?.length) return variant;
-  return shared;
-}
 
 @Injectable()
 export class ProductSearchIndexService {
@@ -63,6 +56,11 @@ export class ProductSearchIndexService {
               isActive: true,
               updatedAt: true,
               price: true,
+              variantProductImages: {
+                take: 6,
+                orderBy: { sortOrder: 'asc' },
+                select: { productImage: { select: { url: true } } },
+              },
               images: {
                 take: 6,
                 orderBy: { sortOrder: 'asc' },
@@ -79,7 +77,11 @@ export class ProductSearchIndexService {
       const docs: Record<string, unknown>[] = [];
 
       for (const v of row.variants) {
-        const eff = effectiveVariantImages(shared, v.images.map((i) => ({ url: i.url })));
+        const eff = resolveEffectiveVariantImageUrlsForSearch({
+          sharedUrls: shared.map((i) => i.url),
+          junctionUrls: v.variantProductImages.map((l) => l.productImage.url),
+          legacyUrls: v.images.map((i) => i.url),
+        });
         const r: ProductVariantSearchIndexRow = {
           id: v.id,
           productId: row.id,
@@ -158,6 +160,11 @@ export class ProductSearchIndexService {
             isActive: true,
             updatedAt: true,
             price: true,
+            variantProductImages: {
+              take: 6,
+              orderBy: { sortOrder: 'asc' },
+              select: { productImage: { select: { url: true } } },
+            },
             images: {
               take: 6,
               orderBy: { sortOrder: 'asc' },
@@ -173,7 +180,11 @@ export class ProductSearchIndexService {
       const categoryIds = collectProductCategoryIds(row.categoryId, row.productCategories);
       const shared = row.images.map((i) => ({ url: i.url }));
       for (const v of row.variants) {
-        const eff = effectiveVariantImages(shared, v.images.map((i) => ({ url: i.url })));
+        const eff = resolveEffectiveVariantImageUrlsForSearch({
+          sharedUrls: shared.map((i) => i.url),
+          junctionUrls: v.variantProductImages.map((l) => l.productImage.url),
+          legacyUrls: v.images.map((i) => i.url),
+        });
         flat.push(
           buildProductSearchDocument({
             id: v.id,

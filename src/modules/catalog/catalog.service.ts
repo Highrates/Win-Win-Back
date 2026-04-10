@@ -6,6 +6,7 @@ import {
   buildProductSearchDocument,
   collectProductCategoryIds,
 } from '../../meilisearch/product-search-doc';
+import { resolveEffectiveVariantImages } from './variant-effective-gallery';
 
 /**
  * Убирает повторы одного товара в выдаче (например, при склейке «свои + по доп. категории» или сбое индекса).
@@ -154,7 +155,17 @@ export class CatalogService {
     };
   }
 
-  async getProductBySlug(slug: string, variantSlugQuery?: string) {
+  /**
+   * Карточка товара для витрины.
+   * @param variantQuery — `vs` и/или `v` из query: сначала матч по slug варианта, затем по id; иначе дефолтный вариант.
+   * Корневые `price`, `images`, `specsJson` отражают выбранный вариант; полный список — в `variants`.
+   */
+  async getProductBySlug(
+    slug: string,
+    variantQuery?: { variantSlug?: string; variantId?: string },
+  ) {
+    const variantSlugQ = variantQuery?.variantSlug?.trim();
+    const variantIdQ = variantQuery?.variantId?.trim();
     const row = await this.prisma.product.findUnique({
       where: { slug, isActive: true },
       include: {
@@ -178,22 +189,13 @@ export class CatalogService {
     if (!row) return null;
 
     const shared = row.images.map((i) => ({ url: i.url, alt: i.alt }));
-    const resolveVariantImages = (
-      v: (typeof row.variants)[number],
-      fallback: typeof shared,
-    ) => {
-      const fromJunction = v.variantProductImages.map((l) => ({
-        url: l.productImage.url,
-        alt: l.productImage.alt,
-      }));
-      if (fromJunction.length > 0) return fromJunction;
-      const legacy = v.images.map((i) => ({ url: i.url, alt: i.alt }));
-      if (legacy.length > 0) return legacy;
-      return fallback;
-    };
 
     const variants = row.variants.map((v) => {
-      const images = resolveVariantImages(v, shared);
+      const images = resolveEffectiveVariantImages({
+        sharedProductImages: shared,
+        variantProductImagesFromJunction: v.variantProductImages,
+        variantLegacyImages: v.images.map((i) => ({ url: i.url, alt: i.alt })),
+      });
       return {
         id: v.id,
         variantSlug: v.variantSlug,
@@ -210,12 +212,17 @@ export class CatalogService {
     });
 
     const chosenRaw =
-      (variantSlugQuery
-        ? row.variants.find((v) => v.variantSlug === variantSlugQuery)
-        : undefined) ??
+      (variantSlugQ ? row.variants.find((v) => v.variantSlug === variantSlugQ) : undefined) ??
+      (variantIdQ ? row.variants.find((v) => v.id === variantIdQ) : undefined) ??
       row.variants.find((v) => v.isDefault) ??
       row.variants[0];
-    const chosenImages = chosenRaw ? resolveVariantImages(chosenRaw, shared) : shared;
+    const chosenImages = chosenRaw
+      ? resolveEffectiveVariantImages({
+          sharedProductImages: shared,
+          variantProductImagesFromJunction: chosenRaw.variantProductImages,
+          variantLegacyImages: chosenRaw.images.map((i) => ({ url: i.url, alt: i.alt })),
+        })
+      : shared;
 
     return {
       slug: row.slug,
