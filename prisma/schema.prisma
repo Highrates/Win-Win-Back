@@ -121,6 +121,56 @@ model Category {
   primaryProducts Product[] @relation("ProductPrimaryCategory")
   /// Дополнительные привязки товаров к этой категории
   productCategories ProductCategory[]
+  pricingProfileCategories PricingProfileCategory[]
+}
+
+/// Профиль ценообразования (импорт Китай → склад МСК), привязка к категориям.
+model PricingProfile {
+  id     String @id @default(cuid())
+  name   String @default("")
+  /// Порядок в списке админки
+  sortOrder Int @default(0)
+  /// "40" | "20" — тип контейнера для расчёта доли
+  containerType String
+  /// Если заданы оба — W90/V90 = 0,9 × эти лимиты; иначе константы по containerType
+  containerMaxWeightKg  Decimal? @db.Decimal(14, 4)
+  containerMaxVolumeM3  Decimal? @db.Decimal(14, 6)
+
+  cnyRate Decimal @db.Decimal(14, 6)
+  usdRate Decimal @db.Decimal(14, 6)
+  eurRate Decimal @db.Decimal(14, 6)
+
+  transferCommissionPct Decimal @db.Decimal(10, 4)
+  customsAdValoremPct   Decimal @db.Decimal(10, 4)
+  customsWeightPct      Decimal @db.Decimal(10, 4)
+  vatPct                Decimal @db.Decimal(10, 4)
+  markupPct             Decimal @db.Decimal(10, 4)
+  agentRub              Decimal @db.Decimal(14, 2)
+
+  warehousePortUsd  Decimal @db.Decimal(14, 2)
+  fobUsd            Decimal @db.Decimal(14, 2)
+  portMskRub        Decimal @db.Decimal(14, 2)
+  extraLogisticsRub Decimal @db.Decimal(14, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  categories PricingProfileCategory[]
+}
+
+model PricingProfileCategory {
+  profileId  String
+  categoryId String
+  profile    PricingProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  category   Category       @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@id([profileId, categoryId])
+  @@index([categoryId])
+}
+
+enum ProductPriceMode {
+  MANUAL
+  FORMULA
 }
 
 /// Дополнительные категории товара (основная — всегда Product.categoryId).
@@ -147,36 +197,11 @@ model Product {
   shortDescription String? @db.Text
   /// HTML из RichBlock (доп. информация на витрине)
   additionalInfoHtml String? @db.Text
-  /// 3D-модель (GLB и т.п.), URL из медиатеки / хранилища
-  model3dUrl         String?
-  /// Чертёж (PDF и т.п.)
-  drawingUrl         String?
   attributes  Json?    // legacy / произвольные пары
-  /// colors[], materials[], sizes[], labels[] — см. админ DTO
-  specsJson   Json?
-  sku         String?  @unique
   deliveryText    String? @db.Text
   technicalSpecs  String? @db.Text
-  /// Габариты брутто, мм
-  lengthMm   Int?
-  widthMm    Int?
-  heightMm   Int?
-  /// Объём брутто, м³ (колонка исторически volumeLiters)
-  volumeLiters Decimal? @db.Decimal(12, 4)
-  /// Вес брутто, кг
-  weightKg       Decimal? @db.Decimal(12, 4)
-  /// Габариты нетто, мм
-  netLengthMm   Int?
-  netWidthMm    Int?
-  netHeightMm   Int?
-  /// Объём нетто, м³
-  netVolumeLiters Decimal? @db.Decimal(12, 4)
-  /// Вес нетто, кг
-  netWeightKg     Decimal? @db.Decimal(12, 4)
   seoTitle       String?
   seoDescription String? @db.Text
-  price       Decimal  @db.Decimal(12, 2) // RUB
-  currency    String   @default("RUB")
   isActive    Boolean  @default(true)
   sortOrder   Int      @default(0)
   createdAt   DateTime @default(now())
@@ -184,6 +209,7 @@ model Product {
 
   images           ProductImage[]
   videos           ProductVideo[]
+  variants         ProductVariant[]
   orderItems       OrderItem[]
   collectionItems  CollectionItem[]
   favorites        Favorite[]
@@ -192,6 +218,106 @@ model Product {
   productCategories ProductCategory[]
   curatedCollectionProductItems CuratedCollectionProductItem[]
   curatedProductSetItems      CuratedProductSetItem[]
+  materialOptions             ProductMaterialOption[]
+}
+
+/// Материал на карточке товара (группа на витрине); цвета — ProductColorOption.
+model ProductMaterialOption {
+  id        String   @id @default(cuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  name      String
+  sortOrder Int      @default(0)
+  colors    ProductColorOption[]
+  variants  ProductVariant[] @relation("VariantMaterialOption")
+
+  @@index([productId])
+}
+
+/// Цвет внутри материала (карточка на витрине).
+model ProductColorOption {
+  id               String   @id @default(cuid())
+  materialOptionId String
+  materialOption   ProductMaterialOption @relation(fields: [materialOptionId], references: [id], onDelete: Cascade)
+  name             String
+  imageUrl         String
+  sortOrder        Int      @default(0)
+  variants         ProductVariant[] @relation("VariantColorOption")
+
+  @@index([materialOptionId])
+}
+
+/// Кадры варианта — подмножество ProductImage (порядок в sortOrder).
+model ProductVariantProductImage {
+  variantId      String
+  productImageId String
+  sortOrder      Int @default(0)
+  variant        ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  productImage   ProductImage @relation(fields: [productImageId], references: [id], onDelete: Cascade)
+
+  @@id([variantId, productImageId])
+  @@index([variantId])
+}
+
+/// Вариант товара (SKU): цена, габариты, артикул, опции; минимум один на Product.
+model ProductVariant {
+  id          String   @id @default(cuid())
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  sortOrder   Int      @default(0)
+  isDefault   Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  /// Подпись варианта в админке и на PDP (не путать с названием товара).
+  variantLabel String?
+  /// Сегмент URL: /product/{productSlug}?vs={variantSlug}
+  variantSlug  String?
+  materialOptionId String?
+  materialOption   ProductMaterialOption? @relation("VariantMaterialOption", fields: [materialOptionId], references: [id], onDelete: SetNull)
+  colorOptionId    String?
+  colorOption      ProductColorOption? @relation("VariantColorOption", fields: [colorOptionId], references: [id], onDelete: SetNull)
+  /// Для переключателя на PDP: { "color": "Дуб", "material": "МДФ" } — дубль имён при наличии FK.
+  optionAttributes Json?
+  /// colors[], materials[], sizes[], labels[]
+  specsJson   Json?
+  sku         String?  @unique
+  lengthMm   Int?
+  widthMm    Int?
+  heightMm   Int?
+  volumeLiters Decimal? @db.Decimal(12, 4)
+  weightKg       Decimal? @db.Decimal(12, 4)
+  netLengthMm   Int?
+  netWidthMm    Int?
+  netHeightMm   Int?
+  netVolumeLiters Decimal? @db.Decimal(12, 4)
+  netWeightKg     Decimal? @db.Decimal(12, 4)
+  priceMode   ProductPriceMode @default(MANUAL)
+  costPriceCny Decimal? @db.Decimal(14, 4)
+  price       Decimal  @db.Decimal(12, 2)
+  currency    String   @default("RUB")
+  /// 3D-модель (GLB и т.п.), URL из медиатеки / хранилища
+  model3dUrl  String?
+  /// Чертёж (PDF и т.п.)
+  drawingUrl  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  images     ProductVariantImage[]
+  variantProductImages ProductVariantProductImage[]
+  cartItems  CartItem[]
+  orderItems OrderItem[]
+
+  @@index([productId])
+  @@index([productId, variantSlug])
+}
+
+/// Галерея варианта; если пусто — на витрине используются изображения Product.
+model ProductVariantImage {
+  id        String   @id @default(cuid())
+  variantId String
+  variant   ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  url       String
+  alt       String?
+  sortOrder Int      @default(0)
 }
 
 model ProductImage {
@@ -201,6 +327,7 @@ model ProductImage {
   url       String  // URL в объектном хранилище (S3-совместимое в РФ) или CDN
   alt       String?
   sortOrder Int     @default(0)
+  variantLinks ProductVariantProductImage[]
 }
 
 model ProductVideo {
@@ -241,6 +368,8 @@ model OrderItem {
   order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
   productId String
   product   Product @relation(fields: [productId], references: [id])
+  productVariantId String?
+  productVariant   ProductVariant? @relation(fields: [productVariantId], references: [id], onDelete: SetNull)
   quantity  Int     @default(1)
   price     Decimal @db.Decimal(12, 2)
 }
@@ -398,10 +527,12 @@ model CartItem {
   cart      Cart    @relation(fields: [cartId], references: [id], onDelete: Cascade)
   productId String
   product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productVariantId String
+  productVariant   ProductVariant @relation(fields: [productVariantId], references: [id], onDelete: Cascade)
   quantity  Int     @default(1)
   addedAt   DateTime @default(now())
 
-  @@unique([cartId, productId])
+  @@unique([cartId, productVariantId])
 }
 
 // --- Публичные коллекции платформы (Этап 11: страница коллекций, страница коллекции) ---

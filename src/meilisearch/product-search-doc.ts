@@ -1,22 +1,27 @@
-/** Поля товара, достаточные для документа в индексе `products`. */
-export type ProductSearchIndexRow = {
+/** Строка для индекса: один документ = один вариант (карточка витрины). */
+export type ProductVariantSearchIndexRow = {
+  /** id варианта — primary key в Meilisearch */
   id: string;
+  productId: string;
   slug: string;
   name: string;
   shortDescription: string | null;
   categoryId: string;
-  /** Все категории: основная + дополнительные (для фильтра поиска). */
   categoryIds: string[];
   brandId: string | null;
+  /** Товар и вариант опубликованы */
   isActive: boolean;
   updatedAt: Date;
   category: { name: string };
   brand: { name: string } | null;
   /** Prisma.Decimal или число */
   price: unknown;
-  /** Первое изображение для карточек витрины */
+  /** Эффективные изображения (общая галерея или галерея варианта) */
   images?: { url: string }[];
 };
+
+/** @deprecated используйте ProductVariantSearchIndexRow */
+export type ProductSearchIndexRow = ProductVariantSearchIndexRow;
 
 export function collectProductCategoryIds(
   primaryId: string,
@@ -38,7 +43,6 @@ function priceToNumber(price: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-/** URL для превью и мини-галереи в карточке каталога (порядок sortOrder в запросе Prisma). */
 const CARD_GALLERY_IMAGE_MAX = 6;
 
 function collectImageUrls(images: { url: string }[] | undefined): string[] {
@@ -55,11 +59,12 @@ function collectImageUrls(images: { url: string }[] | undefined): string[] {
   return out;
 }
 
-export function buildProductSearchDocument(row: ProductSearchIndexRow): Record<string, unknown> {
+export function buildProductSearchDocument(row: ProductVariantSearchIndexRow): Record<string, unknown> {
   const imageUrls = collectImageUrls(row.images);
   const thumbUrl = imageUrls[0] ?? null;
   return {
     id: row.id,
+    productId: row.productId,
     slug: row.slug,
     name: row.name,
     shortDescription: row.shortDescription ?? '',

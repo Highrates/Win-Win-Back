@@ -5,7 +5,7 @@ export async function applyProductIndexSearchSettings(
 ): Promise<void> {
   await index.updateSettings({
     searchableAttributes: ['name', 'slug', 'shortDescription', 'categoryName', 'brandName'],
-    filterableAttributes: ['categoryId', 'categoryIds', 'brandId', 'isActive'],
+    filterableAttributes: ['categoryId', 'categoryIds', 'brandId', 'isActive', 'productId'],
     sortableAttributes: ['updatedAt'],
   });
 }

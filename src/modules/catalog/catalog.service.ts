@@ -154,16 +154,87 @@ export class CatalogService {
     };
   }
 
-  async getProductBySlug(slug: string) {
-    return this.prisma.product.findUnique({
+  async getProductBySlug(slug: string, variantSlugQuery?: string) {
+    const row = await this.prisma.product.findUnique({
       where: { slug, isActive: true },
       include: {
         category: { include: { parent: { select: { id: true, slug: true, name: true } } } },
         productCategories: { include: { category: true } },
         brand: true,
         images: { orderBy: { sortOrder: 'asc' } },
+        variants: {
+          where: { isActive: true },
+          orderBy: [{ isDefault: 'desc' }, { sortOrder: 'asc' }, { id: 'asc' }],
+          include: {
+            images: { orderBy: { sortOrder: 'asc' } },
+            variantProductImages: {
+              orderBy: { sortOrder: 'asc' },
+              include: { productImage: true },
+            },
+          },
+        },
       },
     });
+    if (!row) return null;
+
+    const shared = row.images.map((i) => ({ url: i.url, alt: i.alt }));
+    const resolveVariantImages = (
+      v: (typeof row.variants)[number],
+      fallback: typeof shared,
+    ) => {
+      const fromJunction = v.variantProductImages.map((l) => ({
+        url: l.productImage.url,
+        alt: l.productImage.alt,
+      }));
+      if (fromJunction.length > 0) return fromJunction;
+      const legacy = v.images.map((i) => ({ url: i.url, alt: i.alt }));
+      if (legacy.length > 0) return legacy;
+      return fallback;
+    };
+
+    const variants = row.variants.map((v) => {
+      const images = resolveVariantImages(v, shared);
+      return {
+        id: v.id,
+        variantSlug: v.variantSlug,
+        variantLabel: v.variantLabel,
+        price: v.price,
+        sku: v.sku,
+        specsJson: v.specsJson,
+        optionAttributes: v.optionAttributes,
+        isDefault: v.isDefault,
+        model3dUrl: v.model3dUrl,
+        drawingUrl: v.drawingUrl,
+        images,
+      };
+    });
+
+    const chosenRaw =
+      (variantSlugQuery
+        ? row.variants.find((v) => v.variantSlug === variantSlugQuery)
+        : undefined) ??
+      row.variants.find((v) => v.isDefault) ??
+      row.variants[0];
+    const chosenImages = chosenRaw ? resolveVariantImages(chosenRaw, shared) : shared;
+
+    return {
+      slug: row.slug,
+      name: row.name,
+      price: chosenRaw?.price ?? row.variants[0]?.price,
+      shortDescription: row.shortDescription,
+      description: row.description,
+      seoTitle: row.seoTitle,
+      seoDescription: row.seoDescription,
+      deliveryText: row.deliveryText,
+      technicalSpecs: row.technicalSpecs,
+      additionalInfoHtml: row.additionalInfoHtml,
+      specsJson: chosenRaw?.specsJson ?? null,
+      category: row.category,
+      brand: row.brand,
+      images: chosenImages.length ? chosenImages : shared,
+      variants,
+      defaultVariantId: chosenRaw?.id ?? null,
+    };
   }
 
   async searchProducts(params: {
@@ -236,43 +307,75 @@ export class CatalogService {
         ],
       });
     }
-    const where: Prisma.ProductWhereInput = { AND: and };
+    const productWhere: Prisma.ProductWhereInput = { AND: and };
+    const variantWhere: Prisma.ProductVariantWhereInput = {
+      isActive: true,
+      product: productWhere,
+    };
     const skip = (page - 1) * limit;
-    const [rows, total] = await Promise.all([
-      this.prisma.product.findMany({
-        where,
+    const [variants, total] = await Promise.all([
+      this.prisma.productVariant.findMany({
+        where: variantWhere,
         skip,
         take: limit,
         orderBy: { updatedAt: 'desc' },
         select: {
           id: true,
-          slug: true,
-          name: true,
-          shortDescription: true,
-          categoryId: true,
-          brandId: true,
-          isActive: true,
           updatedAt: true,
           price: true,
-          category: { select: { name: true } },
-          productCategories: { select: { categoryId: true } },
-          brand: { select: { name: true } },
+          isActive: true,
           images: {
             take: 6,
             orderBy: { sortOrder: 'asc' },
             select: { url: true },
           },
+          product: {
+            select: {
+              id: true,
+              slug: true,
+              name: true,
+              shortDescription: true,
+              categoryId: true,
+              brandId: true,
+              isActive: true,
+              updatedAt: true,
+              category: { select: { name: true } },
+              productCategories: { select: { categoryId: true } },
+              brand: { select: { name: true } },
+              images: {
+                take: 6,
+                orderBy: { sortOrder: 'asc' },
+                select: { url: true },
+              },
+            },
+          },
         },
       }),
-      this.prisma.product.count({ where }),
+      this.prisma.productVariant.count({ where: variantWhere }),
     ]);
     const hits = dedupeProductHitsById(
-      rows.map((r) =>
-        buildProductSearchDocument({
-          ...r,
-          categoryIds: collectProductCategoryIds(r.categoryId, r.productCategories),
-        }) as Record<string, unknown>,
-      ),
+      variants.map((v) => {
+        const p = v.product;
+        const shared = p.images.map((i) => ({ url: i.url }));
+        const vImgs = v.images.map((i) => ({ url: i.url }));
+        const eff = vImgs.length ? vImgs : shared;
+        return buildProductSearchDocument({
+          id: v.id,
+          productId: p.id,
+          slug: p.slug,
+          name: p.name,
+          shortDescription: p.shortDescription,
+          categoryId: p.categoryId,
+          categoryIds: collectProductCategoryIds(p.categoryId, p.productCategories),
+          brandId: p.brandId,
+          isActive: p.isActive && v.isActive,
+          updatedAt: v.updatedAt,
+          category: p.category,
+          brand: p.brand,
+          price: v.price,
+          images: eff,
+        }) as Record<string, unknown>;
+      }),
     );
     return { hits, total, page, limit };
   }
@@ -436,11 +539,22 @@ export class CatalogService {
             id: true,
             slug: true,
             name: true,
-            price: true,
             images: {
               take: 6,
               orderBy: { sortOrder: 'asc' },
               select: { url: true },
+            },
+            variants: {
+              where: { isDefault: true },
+              take: 1,
+              select: {
+                price: true,
+                images: {
+                  take: 6,
+                  orderBy: { sortOrder: 'asc' },
+                  select: { url: true },
+                },
+              },
             },
           },
         },
@@ -453,12 +567,15 @@ export class CatalogService {
       const pr = r.product;
       if (seen.has(pr.id)) continue;
       seen.add(pr.id);
-      const imageUrls = pr.images.map((im) => im.url.trim()).filter(Boolean);
+      const dv = pr.variants[0];
+      const shared = pr.images.map((im) => im.url.trim()).filter(Boolean);
+      const vUrls = dv?.images.map((im) => im.url.trim()).filter(Boolean) ?? [];
+      const imageUrls = vUrls.length ? vUrls : shared;
       items.push({
         id: pr.id,
         slug: pr.slug,
         name: pr.name,
-        price: pr.price,
+        price: dv?.price ?? 0,
         thumbUrl: imageUrls[0] ?? null,
         imageUrls,
       });

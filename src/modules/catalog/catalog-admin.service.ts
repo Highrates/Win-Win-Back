@@ -5,7 +5,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { CuratedCollectionKind, Prisma } from '@prisma/client';
+import { CuratedCollectionKind, Prisma, ProductPriceMode } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ProductSearchIndexService } from '../../meilisearch/product-search-index.service';
 import { ObjectStorageService } from '../storage/object-storage.service';
@@ -14,9 +14,15 @@ import {
   CreateBrandAdminDto,
   CreateCategoryAdminDto,
   CreateProductAdminDto,
+  ProductGalleryItemDto,
+  ProductMaterialOptionShellDto,
   UpdateBrandAdminDto,
   UpdateCategoryAdminDto,
+  UpdateProductShellAdminDto,
+  UpdateProductVariantAdminDto,
 } from './dto/catalog-admin.dto';
+import { PricingAdminService } from './pricing-admin.service';
+import { calcMskAndRetailRub, type PricingProfileCalcInput } from './pricing-calculation';
 
 const CYR_TO_LAT: Record<string, string> = {
   а: 'a',
@@ -83,32 +89,177 @@ export class CatalogAdminService {
     private readonly objectStorage: ObjectStorageService,
     private readonly mediaLibrary: MediaLibraryService,
     private readonly productSearchIndex: ProductSearchIndexService,
+    private readonly pricingAdmin: PricingAdminService,
   ) {}
 
   private normUrl(u: string): string {
     return u.trim().replace(/\/+$/, '');
   }
 
-  /** Объём в м³ из коробки в мм: 10⁹ мм³ = 1 м³. */
-  private volumeCubicMetersFromBoxMm(
-    lengthMm: number | null,
-    widthMm: number | null,
-    heightMm: number | null,
-  ): Prisma.Decimal | null {
-    if (
-      lengthMm == null ||
-      widthMm == null ||
-      heightMm == null ||
-      !Number.isFinite(lengthMm) ||
-      !Number.isFinite(widthMm) ||
-      !Number.isFinite(heightMm) ||
-      lengthMm <= 0 ||
-      widthMm <= 0 ||
-      heightMm <= 0
-    ) {
-      return null;
+  /** Объём в м³ из поля формы (вручную). */
+  private normalizeOptionalVolumeM3(raw: number | null | undefined): Prisma.Decimal | null {
+    if (raw == null || !Number.isFinite(raw) || raw < 0) return null;
+    return new Prisma.Decimal(raw);
+  }
+
+  private prismaPricingProfileToCalc(p: {
+    containerType: string;
+    containerMaxWeightKg: Prisma.Decimal | null;
+    containerMaxVolumeM3: Prisma.Decimal | null;
+    cnyRate: Prisma.Decimal;
+    usdRate: Prisma.Decimal;
+    eurRate: Prisma.Decimal;
+    transferCommissionPct: Prisma.Decimal;
+    customsAdValoremPct: Prisma.Decimal;
+    customsWeightPct: Prisma.Decimal;
+    vatPct: Prisma.Decimal;
+    markupPct: Prisma.Decimal;
+    agentRub: Prisma.Decimal;
+    warehousePortUsd: Prisma.Decimal;
+    fobUsd: Prisma.Decimal;
+    portMskRub: Prisma.Decimal;
+    extraLogisticsRub: Prisma.Decimal;
+  }): PricingProfileCalcInput {
+    return {
+      containerType: p.containerType,
+      containerMaxWeightKg: p.containerMaxWeightKg?.toNumber() ?? null,
+      containerMaxVolumeM3: p.containerMaxVolumeM3?.toNumber() ?? null,
+      cnyRate: p.cnyRate.toNumber(),
+      usdRate: p.usdRate.toNumber(),
+      eurRate: p.eurRate.toNumber(),
+      transferCommissionPct: p.transferCommissionPct.toNumber(),
+      customsAdValoremPct: p.customsAdValoremPct.toNumber(),
+      customsWeightPct: p.customsWeightPct.toNumber(),
+      vatPct: p.vatPct.toNumber(),
+      markupPct: p.markupPct.toNumber(),
+      agentRub: p.agentRub.toNumber(),
+      warehousePortUsd: p.warehousePortUsd.toNumber(),
+      fobUsd: p.fobUsd.toNumber(),
+      portMskRub: p.portMskRub.toNumber(),
+      extraLogisticsRub: p.extraLogisticsRub.toNumber(),
+    };
+  }
+
+  private async resolveVariantPriceForWrite(
+    dto: Pick<
+      CreateProductAdminDto,
+      'price' | 'priceMode' | 'costPriceCny' | 'weightKg' | 'volumeLiters'
+    >,
+    categoryIdsForMatch: string[],
+  ): Promise<{
+    price: Prisma.Decimal;
+    priceMode: ProductPriceMode;
+    costPriceCny: Prisma.Decimal | null;
+  }> {
+    const mode =
+      dto.priceMode === 'formula' ? ProductPriceMode.FORMULA : ProductPriceMode.MANUAL;
+
+    const costRaw = dto.costPriceCny;
+    const costDec =
+      costRaw != null && Number.isFinite(costRaw) && costRaw > 0
+        ? new Prisma.Decimal(costRaw)
+        : null;
+
+    if (mode === ProductPriceMode.MANUAL) {
+      const p = dto.price ?? 0;
+      return {
+        price: new Prisma.Decimal(p),
+        priceMode: mode,
+        costPriceCny: costDec,
+      };
     }
-    return new Prisma.Decimal((lengthMm * widthMm * heightMm) / 1_000_000_000);
+
+    const cny = costRaw;
+    const wkg = dto.weightKg;
+    const vm3 = dto.volumeLiters;
+    if (cny == null || !Number.isFinite(cny) || cny <= 0) {
+      throw new BadRequestException('Укажите закупочную цену в юанях (CNY) для расчёта по формуле');
+    }
+    if (wkg == null || !Number.isFinite(wkg) || wkg <= 0) {
+      throw new BadRequestException('Укажите вес брутто (кг) для расчёта по формуле');
+    }
+    if (vm3 == null || !Number.isFinite(vm3) || vm3 <= 0) {
+      throw new BadRequestException('Укажите объём брутто (м³) для расчёта по формуле');
+    }
+
+    const profile = await this.pricingAdmin.findProfileForCategoryIds(categoryIdsForMatch);
+    if (!profile) {
+      throw new BadRequestException(
+        'Нет профиля ценообразования для категорий этого товара. Создайте профиль в Настройки → Ценообразование.',
+      );
+    }
+
+    const { retailRub } = calcMskAndRetailRub(this.prismaPricingProfileToCalc(profile), {
+      costPriceCny: cny,
+      grossWeightKg: wkg,
+      volumeM3: vm3,
+    });
+
+    return {
+      price: new Prisma.Decimal(retailRub),
+      priceMode: ProductPriceMode.FORMULA,
+      costPriceCny: new Prisma.Decimal(cny),
+    };
+  }
+
+  /**
+   * После изменения профилей ценообразования пересчитывает цену всех товаров в режиме «по формуле».
+   */
+  async recalculateAllFormulaProductPrices(): Promise<void> {
+    const variants = await this.prisma.productVariant.findMany({
+      where: { priceMode: ProductPriceMode.FORMULA },
+      select: {
+        id: true,
+        productId: true,
+        costPriceCny: true,
+        weightKg: true,
+        volumeLiters: true,
+        product: {
+          select: {
+            categoryId: true,
+            productCategories: { select: { categoryId: true } },
+          },
+        },
+      },
+    });
+    const touchedProducts = new Set<string>();
+    for (const v of variants) {
+      const cny = v.costPriceCny?.toNumber();
+      const wkg = v.weightKg?.toNumber();
+      const vm3 = v.volumeLiters?.toNumber();
+      if (
+        cny == null ||
+        !Number.isFinite(cny) ||
+        cny <= 0 ||
+        wkg == null ||
+        !Number.isFinite(wkg) ||
+        wkg <= 0 ||
+        vm3 == null ||
+        !Number.isFinite(vm3) ||
+        vm3 <= 0
+      ) {
+        continue;
+      }
+      const categoryIds = [
+        v.product.categoryId,
+        ...v.product.productCategories.map((c) => c.categoryId),
+      ];
+      const profile = await this.pricingAdmin.findProfileForCategoryIds(categoryIds);
+      if (!profile) continue;
+      const { retailRub } = calcMskAndRetailRub(this.prismaPricingProfileToCalc(profile), {
+        costPriceCny: cny,
+        grossWeightKg: wkg,
+        volumeM3: vm3,
+      });
+      await this.prisma.productVariant.update({
+        where: { id: v.id },
+        data: { price: new Prisma.Decimal(retailRub) },
+      });
+      touchedProducts.add(v.productId);
+    }
+    for (const pid of touchedProducts) {
+      void this.productSearchIndex.syncProduct(pid);
+    }
   }
 
   /** Связать публичный URL фона с MediaObject (если объект в медиатеке). */
@@ -446,12 +597,26 @@ export class CatalogAdminService {
         id: true,
         name: true,
         slug: true,
-        price: true,
-        currency: true,
         isActive: true,
+        variants: {
+          where: { isDefault: true },
+          take: 1,
+          select: { price: true, currency: true },
+        },
       },
     });
-    return { ...row, products, depthFromRoot };
+    const productsMapped = products.map((p) => {
+      const dv = p.variants[0];
+      return {
+        id: p.id,
+        name: p.name,
+        slug: p.slug,
+        price: dv?.price ?? null,
+        currency: dv?.currency ?? 'RUB',
+        isActive: p.isActive,
+      };
+    });
+    return { ...row, products: productsMapped, depthFromRoot };
   }
 
   /** Индекс глубины от корня: 0 = корень, 1 = подкатегория, 2 = третий уровень. */
@@ -626,10 +791,25 @@ export class CatalogAdminService {
         id: true,
         name: true,
         slug: true,
-        price: true,
-        currency: true,
         isActive: true,
+        variants: {
+          where: { isDefault: true },
+          take: 1,
+          select: { price: true, currency: true },
+        },
       },
+    });
+
+    const productsMapped = products.map((p) => {
+      const dv = p.variants[0];
+      return {
+        id: p.id,
+        name: p.name,
+        slug: p.slug,
+        price: dv?.price ?? null,
+        currency: dv?.currency ?? 'RUB',
+        isActive: p.isActive,
+      };
     });
 
     if (
@@ -640,7 +820,7 @@ export class CatalogAdminService {
       await this.mediaLibrary.deleteMediaObjectIfUnreferenced(prevBackgroundMediaId);
     }
 
-    return { ...updated, products };
+    return { ...updated, products: productsMapped };
   }
 
   async reorderCategories(parentId: string | null | undefined, orderedIds: string[]) {
@@ -900,8 +1080,6 @@ export class CatalogAdminService {
           id: true,
           name: true,
           slug: true,
-          price: true,
-          currency: true,
           isActive: true,
           category: { select: { id: true, name: true } },
           productCategories: { select: { categoryId: true } },
@@ -909,6 +1087,19 @@ export class CatalogAdminService {
             take: 1,
             orderBy: { sortOrder: 'asc' },
             select: { url: true },
+          },
+          variants: {
+            where: { isDefault: true },
+            take: 1,
+            select: {
+              price: true,
+              currency: true,
+              images: {
+                take: 1,
+                orderBy: { sortOrder: 'asc' },
+                select: { url: true },
+              },
+            },
           },
         },
         orderBy: [{ updatedAt: 'desc' }],
@@ -918,18 +1109,22 @@ export class CatalogAdminService {
       }),
     ]);
     const byId = new Map(cats.map((c) => [c.id, { name: c.name, parentId: c.parentId }]));
-    return rows.map((r) => ({
-      id: r.id,
-      name: r.name,
-      slug: r.slug,
-      price: r.price.toString(),
-      currency: r.currency,
-      isActive: r.isActive,
-      category: r.category,
-      categoryPath: this.categoryPathLabel(r.category.id, byId),
-      additionalCategoryCount: r.productCategories.length,
-      thumbUrl: r.images[0]?.url ?? null,
-    }));
+    return rows.map((r) => {
+      const dv = r.variants[0];
+      const thumbUrl = r.images[0]?.url ?? dv?.images[0]?.url ?? null;
+      return {
+        id: r.id,
+        name: r.name,
+        slug: r.slug,
+        price: dv?.price.toString() ?? '0',
+        currency: dv?.currency ?? 'RUB',
+        isActive: r.isActive,
+        category: r.category,
+        categoryPath: this.categoryPathLabel(r.category.id, byId),
+        additionalCategoryCount: r.productCategories.length,
+        thumbUrl,
+      };
+    });
   }
 
   /**
@@ -996,7 +1191,7 @@ export class CatalogAdminService {
     const skuRaw = dto.sku?.trim();
     const sku = skuRaw || null;
     if (sku) {
-      const taken = await this.prisma.product.findUnique({ where: { sku } });
+      const taken = await this.prisma.productVariant.findUnique({ where: { sku } });
       if (taken) throw new ConflictException('SKU уже занят');
     }
 
@@ -1009,17 +1204,21 @@ export class CatalogAdminService {
     await this.assertAdditionalCategoriesExist(additionalCatIds);
 
     const gallery = dto.gallery ?? [];
+    const useMaterialColorShell = dto.materialColorOptions !== undefined;
+
     const colors = (dto.colors ?? []).filter((c) => c.name?.trim() && c.imageUrl?.trim());
     const materials = (dto.materials ?? []).filter((m) => m.name?.trim());
     const sizes = (dto.sizes ?? []).filter((s) => s.value?.trim());
     const labels = [...new Set((dto.labels ?? []).map((l) => l.trim()).filter(Boolean))].slice(0, 40);
 
-    const specsJson: Prisma.InputJsonValue = {
-      colors: colors.map((c) => ({ name: c.name.trim(), imageUrl: c.imageUrl.trim() })),
-      materials: materials.map((m) => ({ name: m.name.trim() })),
-      sizes: sizes.map((s) => ({ value: s.value.trim() })),
-      labels,
-    };
+    const specsJson: Prisma.InputJsonValue = useMaterialColorShell
+      ? { colors: [], materials: [], sizes: [], labels: [] }
+      : {
+          colors: colors.map((c) => ({ name: c.name.trim(), imageUrl: c.imageUrl.trim() })),
+          materials: materials.map((m) => ({ name: m.name.trim() })),
+          sizes: sizes.map((s) => ({ value: s.value.trim() })),
+          labels,
+        };
 
     const agg = await this.prisma.product.aggregate({
       where: { categoryId: dto.categoryId },
@@ -1028,6 +1227,18 @@ export class CatalogAdminService {
     const sortOrder = (agg._max.sortOrder ?? -1) + 1;
 
     const currency = (dto.currency?.trim().toUpperCase() || 'RUB').slice(0, 8);
+
+    const priceNum = dto.price ?? 0;
+    const priceBlock = await this.resolveVariantPriceForWrite(
+      {
+        price: priceNum,
+        priceMode: dto.priceMode === 'formula' ? 'formula' : 'manual',
+        costPriceCny: dto.costPriceCny ?? null,
+        weightKg: dto.weightKg ?? null,
+        volumeLiters: dto.volumeLiters ?? null,
+      },
+      [dto.categoryId, ...additionalCatIds],
+    );
 
     try {
       const full = await this.prisma.$transaction(async (tx) => {
@@ -1040,20 +1251,30 @@ export class CatalogAdminService {
             shortDescription: this.normProductShortDescription(dto.shortDescription),
             description: null,
             additionalInfoHtml: dto.additionalInfoHtml?.trim() || null,
-            model3dUrl: dto.model3dUrl?.trim() || null,
-            drawingUrl: dto.drawingUrl?.trim() || null,
-            specsJson,
-            sku,
             deliveryText: dto.deliveryText?.trim() || null,
             technicalSpecs: dto.technicalSpecs?.trim() || null,
+            seoTitle: dto.seoTitle?.trim() || null,
+            seoDescription: dto.seoDescription?.trim() || null,
+            isActive: dto.isActive ?? true,
+            sortOrder,
+          },
+        });
+
+        const variantSlug = await this.ensureUniqueVariantSlug(product.id, 'v-0');
+
+        await tx.productVariant.create({
+          data: {
+            productId: product.id,
+            variantSlug,
+            sortOrder: 0,
+            isDefault: true,
+            isActive: true,
+            specsJson,
+            sku,
             lengthMm: dto.lengthMm ?? null,
             widthMm: dto.widthMm ?? null,
             heightMm: dto.heightMm ?? null,
-            volumeLiters: this.volumeCubicMetersFromBoxMm(
-              dto.lengthMm ?? null,
-              dto.widthMm ?? null,
-              dto.heightMm ?? null,
-            ),
+            volumeLiters: this.normalizeOptionalVolumeM3(dto.volumeLiters),
             weightKg:
               dto.weightKg != null && Number.isFinite(dto.weightKg)
                 ? new Prisma.Decimal(dto.weightKg)
@@ -1061,21 +1282,17 @@ export class CatalogAdminService {
             netLengthMm: dto.netLengthMm ?? null,
             netWidthMm: dto.netWidthMm ?? null,
             netHeightMm: dto.netHeightMm ?? null,
-            netVolumeLiters: this.volumeCubicMetersFromBoxMm(
-              dto.netLengthMm ?? null,
-              dto.netWidthMm ?? null,
-              dto.netHeightMm ?? null,
-            ),
+            netVolumeLiters: this.normalizeOptionalVolumeM3(dto.netVolumeLiters),
             netWeightKg:
               dto.netWeightKg != null && Number.isFinite(dto.netWeightKg)
                 ? new Prisma.Decimal(dto.netWeightKg)
                 : null,
-            seoTitle: dto.seoTitle?.trim() || null,
-            seoDescription: dto.seoDescription?.trim() || null,
-            price: new Prisma.Decimal(dto.price),
+            priceMode: priceBlock.priceMode,
+            costPriceCny: priceBlock.costPriceCny,
+            price: priceBlock.price,
             currency,
-            isActive: dto.isActive ?? true,
-            sortOrder,
+            model3dUrl: dto.model3dUrl?.trim() || null,
+            drawingUrl: dto.drawingUrl?.trim() || null,
           },
         });
 
@@ -1097,6 +1314,10 @@ export class CatalogAdminService {
               sortOrder: i,
             })),
           });
+        }
+
+        if (useMaterialColorShell) {
+          await this.syncMaterialColorOptions(tx, product.id, dto.materialColorOptions ?? []);
         }
 
         await this.syncProductCuratedCollections(tx, product.id, dto.curatedCollectionIds ?? []);
@@ -1138,9 +1359,14 @@ export class CatalogAdminService {
       where: { id },
       include: {
         images: { orderBy: { sortOrder: 'asc' } },
+        materialOptions: {
+          orderBy: { sortOrder: 'asc' },
+          include: { colors: { orderBy: { sortOrder: 'asc' } } },
+        },
         category: { select: { id: true, name: true } },
         brand: { select: { id: true, name: true } },
         productCategories: { select: { categoryId: true } },
+        variants: { orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }] },
       },
     });
     if (!row) throw new NotFoundException('Товар не найден');
@@ -1164,20 +1390,111 @@ export class CatalogAdminService {
       curatedProductSetIds: setLinks.map((r) => r.setId),
       brandId: row.brandId,
       shortDescription: row.shortDescription,
+      isActive: row.isActive,
+      images: row.images.map((i) => ({
+        id: i.id,
+        url: i.url,
+        alt: i.alt,
+        sortOrder: i.sortOrder,
+      })),
+      materialColorOptions: row.materialOptions.map((m) => ({
+        id: m.id,
+        name: m.name,
+        sortOrder: m.sortOrder,
+        colors: m.colors.map((c) => ({
+          id: c.id,
+          name: c.name,
+          imageUrl: c.imageUrl,
+          sortOrder: c.sortOrder,
+        })),
+      })),
+      additionalInfoHtml: row.additionalInfoHtml,
+      deliveryText: row.deliveryText,
+      technicalSpecs: row.technicalSpecs,
+      seoTitle: row.seoTitle,
+      seoDescription: row.seoDescription,
+      category: row.category,
+      brand: row.brand,
+      variants: row.variants.map((v) => ({
+        id: v.id,
+        displayName: v.variantLabel?.trim() || row.name,
+        price: v.price.toString(),
+        currency: v.currency,
+        isActive: v.isActive,
+        isDefault: v.isDefault,
+      })),
+    };
+  }
+
+  async getVariantForAdmin(productId: string, variantId: string) {
+    const row = await this.prisma.productVariant.findFirst({
+      where: { id: variantId, productId },
+      include: {
+        images: { orderBy: { sortOrder: 'asc' } },
+        variantProductImages: {
+          orderBy: { sortOrder: 'asc' },
+          include: { productImage: true },
+        },
+        product: {
+          select: {
+            id: true,
+            name: true,
+            categoryId: true,
+            images: { orderBy: { sortOrder: 'asc' } },
+            materialOptions: {
+              orderBy: { sortOrder: 'asc' },
+              include: { colors: { orderBy: { sortOrder: 'asc' } } },
+            },
+          },
+        },
+      },
+    });
+    if (!row) throw new NotFoundException('Вариант не найден');
+    const addCats = await this.prisma.productCategory.findMany({
+      where: { productId },
+      select: { categoryId: true },
+    });
+    const displayName = row.variantLabel?.trim() || row.product.name;
+    return {
+      id: row.id,
+      productId: row.productId,
+      productName: row.product.name,
+      variantLabel: row.variantLabel,
+      variantSlug: row.variantSlug,
+      materialOptionId: row.materialOptionId,
+      colorOptionId: row.colorOptionId,
+      materialColorOptions: row.product.materialOptions.map((m) => ({
+        id: m.id,
+        name: m.name,
+        sortOrder: m.sortOrder,
+        colors: m.colors.map((c) => ({
+          id: c.id,
+          name: c.name,
+          imageUrl: c.imageUrl,
+          sortOrder: c.sortOrder,
+        })),
+      })),
+      productGalleryImages: row.product.images.map((i) => ({
+        id: i.id,
+        url: i.url,
+        alt: i.alt,
+        sortOrder: i.sortOrder,
+      })),
+      galleryProductImageIds: row.variantProductImages.map((l) => l.productImageId),
+      displayName,
+      optionAttributes: (row.optionAttributes as Record<string, string> | null) ?? null,
+      priceMode: row.priceMode === ProductPriceMode.FORMULA ? 'formula' : 'manual',
+      costPriceCny: row.costPriceCny?.toString() ?? null,
       price: row.price.toString(),
       currency: row.currency,
       isActive: row.isActive,
+      isDefault: row.isDefault,
       images: row.images.map((i) => ({
         url: i.url,
         alt: i.alt,
         sortOrder: i.sortOrder,
       })),
       specsJson: row.specsJson,
-      additionalInfoHtml: row.additionalInfoHtml,
-      model3dUrl: row.model3dUrl,
-      drawingUrl: row.drawingUrl,
-      deliveryText: row.deliveryText,
-      technicalSpecs: row.technicalSpecs,
       sku: row.sku,
       lengthMm: row.lengthMm,
       widthMm: row.widthMm,
@@ -1189,14 +1506,14 @@ export class CatalogAdminService {
       netHeightMm: row.netHeightMm,
       netVolumeLiters: row.netVolumeLiters?.toString() ?? null,
       netWeightKg: row.netWeightKg?.toString() ?? null,
-      seoTitle: row.seoTitle,
-      seoDescription: row.seoDescription,
-      category: row.category,
-      brand: row.brand,
+      model3dUrl: row.model3dUrl,
+      drawingUrl: row.drawingUrl,
+      categoryIdForPricing: row.product.categoryId,
+      additionalCategoryIds: addCats.map((c) => c.categoryId),
     };
   }
 
-  async updateProduct(id: string, dto: CreateProductAdminDto) {
+  async updateProduct(id: string, dto: UpdateProductShellAdminDto) {
     const existing = await this.prisma.product.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Товар не найден');
 
@@ -1216,7 +1533,7 @@ export class CatalogAdminService {
       nextSlug = await this.ensureUniqueProductSlugExcept(slugTrim, id);
     }
 
-    this.validateProductMediaAndActiveRules(dto);
+    this.validateProductMediaAndActiveRules(dto as unknown as CreateProductAdminDto);
 
     const additionalCatIds = this.normalizeAdditionalCategoryIds(
       dto.categoryId,
@@ -1233,33 +1550,10 @@ export class CatalogAdminService {
     const newGalleryUrlSet = new Set(
       (dto.gallery ?? []).map((g) => g.url.trim()).filter(Boolean),
     );
-    const removedGalleryUrls = prevGalleryUrls.filter((u) => !newGalleryUrlSet.has(u));
-
-    const skuRaw = dto.sku?.trim();
-    const sku = skuRaw || null;
-    if (sku !== existing.sku) {
-      if (sku) {
-        const taken = await this.prisma.product.findFirst({
-          where: { sku, NOT: { id } },
-        });
-        if (taken) throw new ConflictException('SKU уже занят');
-      }
-    }
-
-    const gallery = dto.gallery ?? [];
-    const colors = (dto.colors ?? []).filter((c) => c.name?.trim() && c.imageUrl?.trim());
-    const materials = (dto.materials ?? []).filter((m) => m.name?.trim());
-    const sizes = (dto.sizes ?? []).filter((s) => s.value?.trim());
-    const labels = [...new Set((dto.labels ?? []).map((l) => l.trim()).filter(Boolean))].slice(0, 40);
-
-    const specsJson: Prisma.InputJsonValue = {
-      colors: colors.map((c) => ({ name: c.name.trim(), imageUrl: c.imageUrl.trim() })),
-      materials: materials.map((m) => ({ name: m.name.trim() })),
-      sizes: sizes.map((s) => ({ value: s.value.trim() })),
-      labels,
-    };
-
-    const currency = (dto.currency?.trim().toUpperCase() || 'RUB').slice(0, 8);
+    const removedGalleryUrls =
+      dto.gallery !== undefined
+        ? prevGalleryUrls.filter((u) => !newGalleryUrlSet.has(u))
+        : [];
 
     const data: Prisma.ProductUpdateInput = {
       slug: nextSlug,
@@ -1268,40 +1562,10 @@ export class CatalogAdminService {
       brand: brandIdNorm ? { connect: { id: brandIdNorm } } : { disconnect: true },
       shortDescription: this.normProductShortDescription(dto.shortDescription),
       additionalInfoHtml: dto.additionalInfoHtml?.trim() || null,
-      model3dUrl: dto.model3dUrl?.trim() || null,
-      drawingUrl: dto.drawingUrl?.trim() || null,
-      specsJson,
-      sku,
       deliveryText: dto.deliveryText?.trim() || null,
       technicalSpecs: dto.technicalSpecs?.trim() || null,
-      lengthMm: dto.lengthMm ?? null,
-      widthMm: dto.widthMm ?? null,
-      heightMm: dto.heightMm ?? null,
-      volumeLiters: this.volumeCubicMetersFromBoxMm(
-        dto.lengthMm ?? null,
-        dto.widthMm ?? null,
-        dto.heightMm ?? null,
-      ),
-      weightKg:
-        dto.weightKg != null && Number.isFinite(dto.weightKg)
-          ? new Prisma.Decimal(dto.weightKg)
-          : null,
-      netLengthMm: dto.netLengthMm ?? null,
-      netWidthMm: dto.netWidthMm ?? null,
-      netHeightMm: dto.netHeightMm ?? null,
-      netVolumeLiters: this.volumeCubicMetersFromBoxMm(
-        dto.netLengthMm ?? null,
-        dto.netWidthMm ?? null,
-        dto.netHeightMm ?? null,
-      ),
-      netWeightKg:
-        dto.netWeightKg != null && Number.isFinite(dto.netWeightKg)
-          ? new Prisma.Decimal(dto.netWeightKg)
-          : null,
       seoTitle: dto.seoTitle?.trim() || null,
       seoDescription: dto.seoDescription?.trim() || null,
-      price: new Prisma.Decimal(dto.price),
-      currency,
       isActive: dto.isActive ?? true,
     };
 
@@ -1334,25 +1598,25 @@ export class CatalogAdminService {
           await this.syncProductCuratedSets(tx, id, dto.curatedProductSetIds);
         }
 
-        await tx.productImage.deleteMany({ where: { productId: id } });
-        if (gallery.length > 0) {
-          await tx.productImage.createMany({
-            data: gallery.map((g, i) => ({
-              productId: id,
-              url: g.url.trim(),
-              alt: g.alt?.trim() || null,
-              sortOrder: i,
-            })),
-          });
+        if (dto.gallery !== undefined) {
+          await this.syncProductGallery(tx, id, dto.gallery);
+        }
+        if (dto.materialColorOptions !== undefined) {
+          await this.syncMaterialColorOptions(tx, id, dto.materialColorOptions);
         }
 
         const row = await tx.product.findUnique({
           where: { id },
           include: {
             images: { orderBy: { sortOrder: 'asc' } },
+            materialOptions: {
+              orderBy: { sortOrder: 'asc' },
+              include: { colors: { orderBy: { sortOrder: 'asc' } } },
+            },
             category: true,
             brand: true,
             productCategories: { select: { categoryId: true } },
+            variants: { orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }] },
           },
         });
         if (!row) throw new BadRequestException('Не удалось прочитать товар после сохранения');
@@ -1368,11 +1632,64 @@ export class CatalogAdminService {
             ),
           );
       }
-      return full;
+      const [colLinks, setLinks] = await Promise.all([
+        this.prisma.curatedCollectionProductItem.findMany({
+          where: { productId: id },
+          select: { collectionId: true },
+        }),
+        this.prisma.curatedProductSetItem.findMany({
+          where: { productId: id },
+          select: { setId: true },
+        }),
+      ]);
+      return {
+        id: full.id,
+        slug: full.slug,
+        name: full.name,
+        categoryId: full.categoryId,
+        additionalCategoryIds: full.productCategories.map((p) => p.categoryId),
+        curatedCollectionIds: colLinks.map((r) => r.collectionId),
+        curatedProductSetIds: setLinks.map((r) => r.setId),
+        brandId: full.brandId,
+        shortDescription: full.shortDescription,
+        isActive: full.isActive,
+        images: full.images.map((i) => ({
+          id: i.id,
+          url: i.url,
+          alt: i.alt,
+          sortOrder: i.sortOrder,
+        })),
+        materialColorOptions: full.materialOptions.map((m) => ({
+          id: m.id,
+          name: m.name,
+          sortOrder: m.sortOrder,
+          colors: m.colors.map((c) => ({
+            id: c.id,
+            name: c.name,
+            imageUrl: c.imageUrl,
+            sortOrder: c.sortOrder,
+          })),
+        })),
+        additionalInfoHtml: full.additionalInfoHtml,
+        deliveryText: full.deliveryText,
+        technicalSpecs: full.technicalSpecs,
+        seoTitle: full.seoTitle,
+        seoDescription: full.seoDescription,
+        category: full.category,
+        brand: full.brand,
+        variants: full.variants.map((v) => ({
+          id: v.id,
+          displayName: full.name,
+          price: v.price.toString(),
+          currency: v.currency,
+          isActive: v.isActive,
+          isDefault: v.isDefault,
+        })),
+      };
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError) {
         if (e.code === 'P2002') {
-          throw new ConflictException('Такой slug или SKU уже существует');
+          throw new ConflictException('Такой slug уже существует');
         }
         if (e.code === 'P2003') {
           throw new BadRequestException('Неверная категория или бренд');
@@ -1384,6 +1701,485 @@ export class CatalogAdminService {
         }
       }
       throw e;
+    }
+  }
+
+  async updateProductVariant(productId: string, variantId: string, dto: UpdateProductVariantAdminDto) {
+    const existing = await this.prisma.productVariant.findFirst({
+      where: { id: variantId, productId },
+      include: {
+        product: {
+          select: {
+            categoryId: true,
+            productCategories: { select: { categoryId: true } },
+          },
+        },
+      },
+    });
+    if (!existing) throw new NotFoundException('Вариант не найден');
+
+    const additionalCatIds = [
+      ...new Set([
+        existing.product.categoryId,
+        ...existing.product.productCategories.map((c) => c.categoryId),
+      ]),
+    ];
+
+    const skuRaw = dto.sku?.trim();
+    const sku = skuRaw === undefined ? existing.sku : skuRaw || null;
+    if (sku !== existing.sku && sku) {
+      const taken = await this.prisma.productVariant.findFirst({
+        where: { sku, NOT: { id: variantId } },
+      });
+      if (taken) throw new ConflictException('SKU уже занят');
+    }
+
+    if (dto.variantSlug !== undefined) {
+      const raw = dto.variantSlug?.trim();
+      if (raw) {
+        const dup = await this.prisma.productVariant.findFirst({
+          where: { productId, variantSlug: raw, NOT: { id: variantId } },
+        });
+        if (dup) throw new ConflictException('Slug варианта уже занят');
+      }
+    }
+
+    const colors = (dto.colors ?? []).filter((c) => c.name?.trim() && c.imageUrl?.trim());
+    const materials = (dto.materials ?? []).filter((m) => m.name?.trim());
+    const sizes = (dto.sizes ?? []).filter((s) => s.value?.trim());
+    const labels = [...new Set((dto.labels ?? []).map((l) => l.trim()).filter(Boolean))].slice(0, 40);
+
+    const specsJson: Prisma.InputJsonValue | undefined =
+      dto.colors !== undefined ||
+      dto.materials !== undefined ||
+      dto.sizes !== undefined ||
+      dto.labels !== undefined
+        ? {
+            colors: colors.map((c) => ({ name: c.name.trim(), imageUrl: c.imageUrl.trim() })),
+            materials: materials.map((m) => ({ name: m.name.trim() })),
+            sizes: sizes.map((s) => ({ value: s.value.trim() })),
+            labels,
+          }
+        : undefined;
+
+    const mergedForPrice = {
+      price: dto.price ?? existing.price.toNumber(),
+      priceMode: dto.priceMode ?? (existing.priceMode === ProductPriceMode.FORMULA ? 'formula' : 'manual'),
+      costPriceCny:
+        dto.costPriceCny !== undefined
+          ? dto.costPriceCny
+          : existing.costPriceCny?.toNumber() ?? null,
+      weightKg:
+        dto.weightKg !== undefined ? dto.weightKg : existing.weightKg?.toNumber() ?? null,
+      volumeLiters:
+        dto.volumeLiters !== undefined
+          ? dto.volumeLiters
+          : existing.volumeLiters?.toNumber() ?? null,
+    };
+
+    const priceBlock = await this.resolveVariantPriceForWrite(mergedForPrice, additionalCatIds);
+
+    const currency = (dto.currency?.trim().toUpperCase() || existing.currency || 'RUB').slice(0, 8);
+
+    const gallery = dto.gallery ?? [];
+
+    for (const g of gallery) {
+      const u = g.url?.trim();
+      if (u) this.objectStorage.assertProductImageUrlAllowed(u);
+    }
+    for (const c of dto.colors ?? []) {
+      const u = c.imageUrl?.trim();
+      if (u) this.objectStorage.assertProductImageUrlAllowed(u);
+    }
+    if (dto.model3dUrl !== undefined) {
+      const u = dto.model3dUrl?.trim();
+      if (u) this.objectStorage.assertProductImageUrlAllowed(u);
+    }
+    if (dto.drawingUrl !== undefined) {
+      const u = dto.drawingUrl?.trim();
+      if (u) this.objectStorage.assertProductImageUrlAllowed(u);
+    }
+
+    const prevVImgs = (
+      await this.prisma.productVariantImage.findMany({
+        where: { variantId },
+        select: { url: true },
+      })
+    ).map((r) => r.url.trim());
+    const newVSet = new Set(gallery.map((g) => g.url.trim()).filter(Boolean));
+    const removedV =
+      dto.galleryProductImageIds !== undefined
+        ? prevVImgs
+        : dto.gallery !== undefined
+          ? prevVImgs.filter((u) => !newVSet.has(u))
+          : [];
+
+    const variantUpdate: Prisma.ProductVariantUpdateInput = {
+      priceMode: priceBlock.priceMode,
+      costPriceCny: priceBlock.costPriceCny,
+      price: priceBlock.price,
+      currency,
+      sku,
+    };
+
+    const nextMatId =
+      dto.materialOptionId !== undefined
+        ? (dto.materialOptionId?.trim() || null)
+        : existing.materialOptionId;
+    const nextColId =
+      dto.colorOptionId !== undefined
+        ? (dto.colorOptionId?.trim() || null)
+        : existing.colorOptionId;
+
+    if (dto.materialOptionId !== undefined || dto.colorOptionId !== undefined) {
+      if ((nextMatId && !nextColId) || (!nextMatId && nextColId)) {
+        throw new BadRequestException('Укажите материал и цвет вместе или очистите оба');
+      }
+      if (nextMatId && nextColId) {
+        const mat = await this.prisma.productMaterialOption.findFirst({
+          where: { id: nextMatId, productId },
+        });
+        const col = await this.prisma.productColorOption.findFirst({
+          where: { id: nextColId, materialOptionId: nextMatId },
+        });
+        if (!mat || !col) {
+          throw new BadRequestException('Материал или цвет не относятся к этому товару');
+        }
+        variantUpdate.materialOption = { connect: { id: nextMatId } };
+        variantUpdate.colorOption = { connect: { id: nextColId } };
+        if (dto.optionAttributes === undefined) {
+          variantUpdate.optionAttributes = { material: mat.name, color: col.name };
+        }
+      } else {
+        variantUpdate.materialOption = { disconnect: true };
+        variantUpdate.colorOption = { disconnect: true };
+      }
+    }
+
+    if (dto.optionAttributes !== undefined) {
+      variantUpdate.optionAttributes = dto.optionAttributes as Prisma.InputJsonValue;
+    }
+    if (dto.variantLabel !== undefined) {
+      variantUpdate.variantLabel = dto.variantLabel?.trim() || null;
+    }
+    if (dto.variantSlug !== undefined) {
+      variantUpdate.variantSlug = dto.variantSlug?.trim() || null;
+    }
+    if (specsJson !== undefined) {
+      variantUpdate.specsJson = specsJson;
+    }
+    if (dto.lengthMm !== undefined) variantUpdate.lengthMm = dto.lengthMm;
+    if (dto.widthMm !== undefined) variantUpdate.widthMm = dto.widthMm;
+    if (dto.heightMm !== undefined) variantUpdate.heightMm = dto.heightMm;
+    if (dto.volumeLiters !== undefined) {
+      variantUpdate.volumeLiters = this.normalizeOptionalVolumeM3(dto.volumeLiters);
+    }
+    if (dto.weightKg !== undefined) {
+      variantUpdate.weightKg =
+        dto.weightKg != null && Number.isFinite(dto.weightKg)
+          ? new Prisma.Decimal(dto.weightKg)
+          : null;
+    }
+    if (dto.netLengthMm !== undefined) variantUpdate.netLengthMm = dto.netLengthMm;
+    if (dto.netWidthMm !== undefined) variantUpdate.netWidthMm = dto.netWidthMm;
+    if (dto.netHeightMm !== undefined) variantUpdate.netHeightMm = dto.netHeightMm;
+    if (dto.netVolumeLiters !== undefined) {
+      variantUpdate.netVolumeLiters = this.normalizeOptionalVolumeM3(dto.netVolumeLiters);
+    }
+    if (dto.netWeightKg !== undefined) {
+      variantUpdate.netWeightKg =
+        dto.netWeightKg != null && Number.isFinite(dto.netWeightKg)
+          ? new Prisma.Decimal(dto.netWeightKg)
+          : null;
+    }
+    if (dto.isActive !== undefined) variantUpdate.isActive = dto.isActive;
+    if (dto.model3dUrl !== undefined) {
+      const u = dto.model3dUrl?.trim();
+      variantUpdate.model3dUrl = u || null;
+    }
+    if (dto.drawingUrl !== undefined) {
+      const u = dto.drawingUrl?.trim();
+      variantUpdate.drawingUrl = u || null;
+    }
+
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.productVariant.update({
+          where: { id: variantId },
+          data: variantUpdate,
+        });
+
+        if (dto.galleryProductImageIds !== undefined) {
+          await this.syncVariantProductImages(tx, productId, variantId, dto.galleryProductImageIds);
+          await tx.productVariantImage.deleteMany({ where: { variantId } });
+        } else if (dto.gallery !== undefined) {
+          await tx.productVariantImage.deleteMany({ where: { variantId } });
+          if (gallery.length > 0) {
+            await tx.productVariantImage.createMany({
+              data: gallery.map((g, i) => ({
+                variantId,
+                url: g.url.trim(),
+                alt: g.alt?.trim() || null,
+                sortOrder: i,
+              })),
+            });
+          }
+        }
+      });
+      void this.productSearchIndex.syncProduct(productId);
+      if (removedV.length) {
+        void this.objectStorage
+          .deleteStorageObjectsForRemovedUrls(removedV)
+          .catch((e) =>
+            this.logger.warn(
+              `Очистка S3 после смены галереи варианта: ${e instanceof Error ? e.message : String(e)}`,
+            ),
+          );
+      }
+      return this.getVariantForAdmin(productId, variantId);
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        throw new ConflictException('SKU уже занят');
+      }
+      throw e;
+    }
+  }
+
+  async createProductVariant(productId: string) {
+    const product = await this.prisma.product.findUnique({
+      where: { id: productId },
+      include: {
+        variants: { orderBy: { sortOrder: 'desc' }, take: 1 },
+      },
+    });
+    if (!product) throw new NotFoundException('Товар не найден');
+    const base = await this.prisma.productVariant.findFirst({
+      where: { productId, isDefault: true },
+    });
+    if (!base) throw new BadRequestException('Нет базового варианта');
+    const nextSort = (product.variants[0]?.sortOrder ?? 0) + 1;
+    const variantSlug = await this.ensureUniqueVariantSlug(productId, `v-${nextSort}`);
+    const v = await this.prisma.productVariant.create({
+      data: {
+        productId,
+        variantSlug,
+        sortOrder: nextSort,
+        isDefault: false,
+        isActive: true,
+        specsJson: base.specsJson === null ? Prisma.JsonNull : base.specsJson,
+        sku: null,
+        lengthMm: base.lengthMm,
+        widthMm: base.widthMm,
+        heightMm: base.heightMm,
+        volumeLiters: base.volumeLiters,
+        weightKg: base.weightKg,
+        netLengthMm: base.netLengthMm,
+        netWidthMm: base.netWidthMm,
+        netHeightMm: base.netHeightMm,
+        netVolumeLiters: base.netVolumeLiters,
+        netWeightKg: base.netWeightKg,
+        priceMode: base.priceMode,
+        costPriceCny: base.costPriceCny,
+        price: base.price,
+        currency: base.currency,
+        model3dUrl: base.model3dUrl,
+        drawingUrl: base.drawingUrl,
+        optionAttributes: Prisma.JsonNull,
+      },
+    });
+    void this.productSearchIndex.syncProduct(productId);
+    return { id: v.id };
+  }
+
+  async deleteProductVariant(productId: string, variantId: string) {
+    const count = await this.prisma.productVariant.count({ where: { productId } });
+    if (count <= 1) {
+      throw new BadRequestException('Нельзя удалить единственный вариант');
+    }
+    const row = await this.prisma.productVariant.findFirst({
+      where: { id: variantId, productId },
+    });
+    if (!row) throw new NotFoundException('Вариант не найден');
+    await this.prisma.productVariant.delete({ where: { id: variantId } });
+    if (row.isDefault) {
+      const first = await this.prisma.productVariant.findFirst({
+        where: { productId },
+        orderBy: { sortOrder: 'asc' },
+      });
+      if (first) {
+        await this.prisma.productVariant.update({
+          where: { id: first.id },
+          data: { isDefault: true },
+        });
+      }
+    }
+    void this.productSearchIndex.syncProduct(productId);
+    return { ok: true as const };
+  }
+
+  private async syncProductGallery(tx: any, productId: string, gallery: ProductGalleryItemDto[]) {
+    const existing = await tx.productImage.findMany({ where: { productId } });
+    const existingById = new Map<string, { id: string }>(
+      existing.map((r: { id: string }) => [r.id, r]),
+    );
+    const idsToKeep = new Set<string>();
+
+    let sortIdx = 0;
+    for (const g of gallery) {
+      const url = g.url.trim();
+      if (!url) continue;
+      const alt = g.alt?.trim() || null;
+      if (g.id && existingById.has(g.id)) {
+        await tx.productImage.update({
+          where: { id: g.id },
+          data: { url, alt, sortOrder: sortIdx },
+        });
+        idsToKeep.add(g.id);
+      } else {
+        const created = await tx.productImage.create({
+          data: { productId, url, alt, sortOrder: sortIdx },
+        });
+        idsToKeep.add(created.id);
+      }
+      sortIdx++;
+    }
+    const toDelete = existing.filter((r: { id: string }) => !idsToKeep.has(r.id));
+    if (toDelete.length) {
+      const delIds = toDelete.map((r: { id: string }) => r.id);
+      await tx.productVariantProductImage.deleteMany({
+        where: { productImageId: { in: delIds } },
+      });
+      await tx.productImage.deleteMany({ where: { id: { in: delIds } } });
+    }
+  }
+
+  private async syncMaterialColorOptions(
+    tx: any,
+    productId: string,
+    rows: ProductMaterialOptionShellDto[],
+  ) {
+    const keptMatIds: string[] = [];
+
+    for (const m of rows) {
+      const name = m.name.trim();
+      if (!name) throw new BadRequestException('У материала должно быть название');
+
+      let matId: string;
+      if (m.id) {
+        const existingMat = await tx.productMaterialOption.findFirst({
+          where: { id: m.id, productId },
+        });
+        if (existingMat) {
+          await tx.productMaterialOption.update({
+            where: { id: m.id },
+            data: { name, sortOrder: m.sortOrder },
+          });
+          matId = m.id;
+        } else {
+          const created = await tx.productMaterialOption.create({
+            data: { productId, name, sortOrder: m.sortOrder },
+          });
+          matId = created.id;
+        }
+      } else {
+        const created = await tx.productMaterialOption.create({
+          data: { productId, name, sortOrder: m.sortOrder },
+        });
+        matId = created.id;
+      }
+      keptMatIds.push(matId);
+
+      const keptColorIds: string[] = [];
+      for (const c of m.colors ?? []) {
+        const cn = c.name?.trim();
+        const imageUrl = c.imageUrl?.trim();
+        if (!cn || !imageUrl) continue;
+        this.objectStorage.assertProductImageUrlAllowed(imageUrl);
+
+        if (c.id) {
+          const col = await tx.productColorOption.findFirst({
+            where: { id: c.id, materialOptionId: matId },
+          });
+          if (col) {
+            await tx.productColorOption.update({
+              where: { id: c.id },
+              data: { name: cn, imageUrl, sortOrder: c.sortOrder },
+            });
+            keptColorIds.push(c.id);
+          } else {
+            const created = await tx.productColorOption.create({
+              data: { materialOptionId: matId, name: cn, imageUrl, sortOrder: c.sortOrder },
+            });
+            keptColorIds.push(created.id);
+          }
+        } else {
+          const created = await tx.productColorOption.create({
+            data: { materialOptionId: matId, name: cn, imageUrl, sortOrder: c.sortOrder },
+          });
+          keptColorIds.push(created.id);
+        }
+      }
+
+      await tx.productColorOption.deleteMany({
+        where: {
+          materialOptionId: matId,
+          ...(keptColorIds.length ? { id: { notIn: keptColorIds } } : {}),
+        },
+      });
+    }
+
+    if (keptMatIds.length) {
+      await tx.productMaterialOption.deleteMany({
+        where: { productId, id: { notIn: keptMatIds } },
+      });
+    } else {
+      await tx.productMaterialOption.deleteMany({ where: { productId } });
+    }
+  }
+
+  private async syncVariantProductImages(
+    tx: any,
+    productId: string,
+    variantId: string,
+    productImageIds: string[],
+  ) {
+    const seen = new Set<string>();
+    const unique: string[] = [];
+    for (const id of productImageIds) {
+      if (seen.has(id)) {
+        throw new BadRequestException('Повторы кадров в списке галереи варианта');
+      }
+      seen.add(id);
+      unique.push(id);
+    }
+    const rows = await tx.productImage.findMany({
+      where: { productId, id: { in: unique } },
+    });
+    if (rows.length !== unique.length) {
+      throw new BadRequestException('Один из кадров не принадлежит товару');
+    }
+    await tx.productVariantProductImage.deleteMany({ where: { variantId } });
+    if (unique.length) {
+      await tx.productVariantProductImage.createMany({
+        data: unique.map((productImageId, i) => ({
+          variantId,
+          productImageId,
+          sortOrder: i,
+        })),
+      });
+    }
+  }
+
+  private async ensureUniqueVariantSlug(productId: string, base: string): Promise<string> {
+    let s = slugifyProductBase(base).slice(0, 40) || 'v';
+    let n = 0;
+    for (;;) {
+      const candidate = n === 0 ? s : `${s}-${n}`;
+      const taken = await this.prisma.productVariant.findFirst({
+        where: { productId, variantSlug: candidate },
+      });
+      if (!taken) return candidate;
+      n++;
     }
   }
 }

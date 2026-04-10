@@ -12,20 +12,7 @@ export class BlogController {
     return this.blogService.getPublicCategories();
   }
 
-  @Public()
-  @Get('posts/:slug')
-  async post(@Param('slug') slug: string) {
-    let s = slug;
-    try {
-      s = decodeURIComponent(slug);
-    } catch {
-      /* как пришло */
-    }
-    const row = await this.blogService.getPostBySlug(s);
-    if (!row) throw new NotFoundException();
-    return row;
-  }
-
+  /** Статичный путь до параметризованного `posts/:slug`, иначе в некоторых версиях Nest список может конфликтовать с деталкой. */
   @Public()
   @Get('posts')
   posts(
@@ -40,5 +27,19 @@ export class BlogController {
       page: page ? parseInt(page, 10) : undefined,
       limit: limit ? parseInt(limit, 10) : undefined,
     });
+  }
+
+  @Public()
+  @Get('posts/:slug')
+  async post(@Param('slug') slug: string) {
+    let s = slug;
+    try {
+      s = decodeURIComponent(slug);
+    } catch {
+      /* как пришло */
+    }
+    const row = await this.blogService.getPostBySlug(s);
+    if (!row) throw new NotFoundException();
+    return row;
   }
 }

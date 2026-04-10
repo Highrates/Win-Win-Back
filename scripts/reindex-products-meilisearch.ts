@@ -1,8 +1,7 @@
 /**
- * Полная переиндексация товаров в Meilisearch (индекс `products`).
+ * Полная переиндексация карточек (вариантов) в Meilisearch (индекс `products`).
  * Запуск из каталога backend:
  *   npx ts-node --compiler-options '{"module":"CommonJS"}' scripts/reindex-products-meilisearch.ts
- * Нужны DATABASE_URL, MEILISEARCH_ENABLED=true, MEILISEARCH_HOST (и при необходимости API key).
  */
 import { readFileSync, existsSync } from 'fs';
 import { resolve } from 'path';
@@ -73,7 +72,6 @@ async function main() {
         brandId: true,
         isActive: true,
         updatedAt: true,
-        price: true,
         category: { select: { name: true } },
         productCategories: { select: { categoryId: true } },
         brand: { select: { name: true } },
@@ -82,23 +80,58 @@ async function main() {
           orderBy: { sortOrder: 'asc' },
           select: { url: true },
         },
+        variants: {
+          where: { isActive: true },
+          select: {
+            id: true,
+            isActive: true,
+            updatedAt: true,
+            price: true,
+            images: {
+              take: 6,
+              orderBy: { sortOrder: 'asc' },
+              select: { url: true },
+            },
+          },
+        },
       },
     });
 
-    let indexed = 0;
-    for (let i = 0; i < rows.length; i += BATCH) {
-      const chunk = rows
-        .slice(i, i + BATCH)
-        .map((r) =>
+    const flat: Record<string, unknown>[] = [];
+    for (const row of rows) {
+      const categoryIds = collectProductCategoryIds(row.categoryId, row.productCategories);
+      const shared = row.images.map((i) => ({ url: i.url }));
+      for (const v of row.variants) {
+        const vImgs = v.images.map((i) => ({ url: i.url }));
+        const eff = vImgs.length ? vImgs : shared;
+        flat.push(
           buildProductSearchDocument({
-            ...r,
-            categoryIds: collectProductCategoryIds(r.categoryId, r.productCategories),
+            id: v.id,
+            productId: row.id,
+            slug: row.slug,
+            name: row.name,
+            shortDescription: row.shortDescription,
+            categoryId: row.categoryId,
+            categoryIds,
+            brandId: row.brandId,
+            isActive: row.isActive && v.isActive,
+            updatedAt: v.updatedAt,
+            category: row.category,
+            brand: row.brand,
+            price: v.price,
+            images: eff,
           }),
         );
+      }
+    }
+
+    let indexed = 0;
+    for (let i = 0; i < flat.length; i += BATCH) {
+      const chunk = flat.slice(i, i + BATCH);
       await index.addDocuments(chunk, { primaryKey: 'id' });
       indexed += chunk.length;
     }
-    console.log(`Готово: в индекс загружено ${indexed} товаров.`);
+    console.log(`Готово: в индекс загружено ${indexed} документов (вариантов).`);
   } finally {
     await prisma.$disconnect();
   }

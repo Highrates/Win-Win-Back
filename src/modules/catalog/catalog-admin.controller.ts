@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -44,7 +45,11 @@ import {
   ReorderCategoriesDto,
   UpdateBrandAdminDto,
   UpdateCategoryAdminDto,
+  UpdateProductShellAdminDto,
+  UpdateProductVariantAdminDto,
 } from './dto/catalog-admin.dto';
+import { PricingPreviewAdminDto, UpsertPricingProfileAdminDto } from './dto/pricing-admin.dto';
+import { PricingAdminService } from './pricing-admin.service';
 
 const uploadStorage = memoryStorage();
 const RICH_MEDIA_MAX_BYTES = 100 * 1024 * 1024;
@@ -57,6 +62,7 @@ export class CatalogAdminController {
     private readonly catalogAdmin: CatalogAdminService,
     private readonly curatedCollections: CuratedCollectionsAdminService,
     private readonly productSets: ProductSetsAdminService,
+    private readonly pricingAdmin: PricingAdminService,
     private readonly audit: AuditService,
   ) {}
 
@@ -227,13 +233,79 @@ export class CatalogAdminController {
   }
 
   @Patch('products/:id')
-  updateProduct(@Param('id') id: string, @Body() dto: CreateProductAdminDto) {
+  updateProduct(@Param('id') id: string, @Body() dto: UpdateProductShellAdminDto) {
     return this.catalogAdmin.updateProduct(id, dto);
+  }
+
+  @Get('products/:productId/variants/:variantId')
+  getProductVariant(
+    @Param('productId') productId: string,
+    @Param('variantId') variantId: string,
+  ) {
+    return this.catalogAdmin.getVariantForAdmin(productId, variantId);
+  }
+
+  @Patch('products/:productId/variants/:variantId')
+  updateProductVariant(
+    @Param('productId') productId: string,
+    @Param('variantId') variantId: string,
+    @Body() dto: UpdateProductVariantAdminDto,
+  ) {
+    return this.catalogAdmin.updateProductVariant(productId, variantId, dto);
+  }
+
+  @Post('products/:productId/variants')
+  createProductVariant(@Param('productId') productId: string) {
+    return this.catalogAdmin.createProductVariant(productId);
+  }
+
+  @Delete('products/:productId/variants/:variantId')
+  deleteProductVariant(
+    @Param('productId') productId: string,
+    @Param('variantId') variantId: string,
+  ) {
+    return this.catalogAdmin.deleteProductVariant(productId, variantId);
   }
 
   @Post('products/bulk-delete')
   bulkDeleteProducts(@Body() dto: BulkDeleteProductsDto) {
     return this.catalogAdmin.deleteProducts(dto.ids);
+  }
+
+  @Get('pricing-profiles')
+  listPricingProfiles() {
+    return this.pricingAdmin.listProfiles();
+  }
+
+  @Post('pricing-profiles')
+  async createPricingProfile(@Body() dto: UpsertPricingProfileAdminDto) {
+    const row = await this.pricingAdmin.createProfile(dto);
+    await this.catalogAdmin.recalculateAllFormulaProductPrices();
+    return row;
+  }
+
+  @Patch('pricing-profiles/:id')
+  async updatePricingProfile(@Param('id') id: string, @Body() dto: UpsertPricingProfileAdminDto) {
+    const row = await this.pricingAdmin.updateProfile(id, dto);
+    await this.catalogAdmin.recalculateAllFormulaProductPrices();
+    return row;
+  }
+
+  @Delete('pricing-profiles/:id')
+  async deletePricingProfile(@Param('id') id: string) {
+    await this.pricingAdmin.deleteProfile(id);
+    await this.catalogAdmin.recalculateAllFormulaProductPrices();
+    return { ok: true };
+  }
+
+  @Post('pricing-preview')
+  previewPricing(@Body() dto: PricingPreviewAdminDto) {
+    return this.pricingAdmin.previewRetailPrice({
+      categoryIds: dto.categoryIds,
+      costPriceCny: dto.costPriceCny,
+      weightKg: dto.weightKg,
+      volumeM3: dto.volumeM3,
+    });
   }
 
   @Get('curated-collections')

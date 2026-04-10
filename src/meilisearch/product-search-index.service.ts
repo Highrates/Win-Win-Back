@@ -2,10 +2,22 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { Index } from 'meilisearch';
 import { PrismaService } from '../prisma/prisma.service';
 import { MeilisearchService, PRODUCTS_INDEX } from './meilisearch.service';
-import { buildProductSearchDocument, collectProductCategoryIds } from './product-search-doc';
+import {
+  buildProductSearchDocument,
+  collectProductCategoryIds,
+  type ProductVariantSearchIndexRow,
+} from './product-search-doc';
 import { applyProductIndexSearchSettings } from './product-index-settings';
 
 const BATCH = 400;
+
+function effectiveVariantImages(
+  shared: { url: string }[],
+  variant: { url: string }[],
+): { url: string }[] {
+  if (variant?.length) return variant;
+  return shared;
+}
 
 @Injectable()
 export class ProductSearchIndexService {
@@ -17,10 +29,14 @@ export class ProductSearchIndexService {
     private readonly meili: MeilisearchService,
   ) {}
 
-  /** Синхронизация одного товара (создание/обновление). Ошибки Meilisearch не пробрасываются. */
+  /** После изменения товара переиндексируются все его варианты. */
   async syncProduct(productId: string): Promise<void> {
     if (!this.meili.isEnabled()) return;
     try {
+      const index = this.meili.getIndex(PRODUCTS_INDEX);
+      await this.ensureSettingsOnce(index);
+      await index.deleteDocuments({ filter: `productId = "${productId}"` });
+
       const row = await this.prisma.product.findUnique({
         where: { id: productId },
         select: {
@@ -32,7 +48,6 @@ export class ProductSearchIndexService {
           brandId: true,
           isActive: true,
           updatedAt: true,
-          price: true,
           category: { select: { name: true } },
           productCategories: { select: { categoryId: true } },
           brand: { select: { name: true } },
@@ -41,23 +56,52 @@ export class ProductSearchIndexService {
             orderBy: { sortOrder: 'asc' },
             select: { url: true },
           },
+          variants: {
+            where: { isActive: true },
+            select: {
+              id: true,
+              isActive: true,
+              updatedAt: true,
+              price: true,
+              images: {
+                take: 6,
+                orderBy: { sortOrder: 'asc' },
+                select: { url: true },
+              },
+            },
+          },
         },
       });
-      const index = this.meili.getIndex(PRODUCTS_INDEX);
-      if (!row) {
-        await index.deleteDocuments([productId]);
-        return;
+      if (!row) return;
+
+      const categoryIds = collectProductCategoryIds(row.categoryId, row.productCategories);
+      const shared = row.images.map((i) => ({ url: i.url }));
+      const docs: Record<string, unknown>[] = [];
+
+      for (const v of row.variants) {
+        const eff = effectiveVariantImages(shared, v.images.map((i) => ({ url: i.url })));
+        const r: ProductVariantSearchIndexRow = {
+          id: v.id,
+          productId: row.id,
+          slug: row.slug,
+          name: row.name,
+          shortDescription: row.shortDescription,
+          categoryId: row.categoryId,
+          categoryIds,
+          brandId: row.brandId,
+          isActive: row.isActive && v.isActive,
+          updatedAt: v.updatedAt,
+          category: row.category,
+          brand: row.brand,
+          price: v.price,
+          images: eff,
+        };
+        docs.push(buildProductSearchDocument(r));
       }
-      await this.ensureSettingsOnce(index);
-      await index.addDocuments(
-        [
-          buildProductSearchDocument({
-            ...row,
-            categoryIds: collectProductCategoryIds(row.categoryId, row.productCategories),
-          }),
-        ],
-        { primaryKey: 'id' },
-      );
+
+      if (docs.length) {
+        await index.addDocuments(docs, { primaryKey: 'id' });
+      }
     } catch (e) {
       this.log.warn(
         `Meilisearch: не удалось проиндексировать товар ${productId}: ${e instanceof Error ? e.message : String(e)}`,
@@ -65,12 +109,13 @@ export class ProductSearchIndexService {
     }
   }
 
-  /** Удаление из индекса после удаления из БД. */
-  async removeProducts(ids: string[]): Promise<void> {
-    if (!this.meili.isEnabled() || ids.length === 0) return;
+  async removeProducts(productIds: string[]): Promise<void> {
+    if (!this.meili.isEnabled() || productIds.length === 0) return;
     try {
       const index = this.meili.getIndex(PRODUCTS_INDEX);
-      await index.deleteDocuments(ids);
+      for (const pid of productIds) {
+        await index.deleteDocuments({ filter: `productId = "${pid}"` });
+      }
     } catch (e) {
       this.log.warn(
         `Meilisearch: не удалить документы: ${e instanceof Error ? e.message : String(e)}`,
@@ -78,7 +123,6 @@ export class ProductSearchIndexService {
     }
   }
 
-  /** Полная переиндексация каталога из Prisma. */
   async reindexAllProducts(): Promise<{ indexed: number }> {
     if (!this.meili.isEnabled()) {
       this.log.log('Meilisearch выключен (MEILISEARCH_ENABLED), переиндексация пропущена');
@@ -99,7 +143,6 @@ export class ProductSearchIndexService {
         brandId: true,
         isActive: true,
         updatedAt: true,
-        price: true,
         category: { select: { name: true } },
         productCategories: { select: { categoryId: true } },
         brand: { select: { name: true } },
@@ -108,22 +151,57 @@ export class ProductSearchIndexService {
           orderBy: { sortOrder: 'asc' },
           select: { url: true },
         },
+        variants: {
+          where: { isActive: true },
+          select: {
+            id: true,
+            isActive: true,
+            updatedAt: true,
+            price: true,
+            images: {
+              take: 6,
+              orderBy: { sortOrder: 'asc' },
+              select: { url: true },
+            },
+          },
+        },
       },
     });
-    let indexed = 0;
-    for (let i = 0; i < rows.length; i += BATCH) {
-      const chunk = rows
-        .slice(i, i + BATCH)
-        .map((r) =>
+
+    const flat: Record<string, unknown>[] = [];
+    for (const row of rows) {
+      const categoryIds = collectProductCategoryIds(row.categoryId, row.productCategories);
+      const shared = row.images.map((i) => ({ url: i.url }));
+      for (const v of row.variants) {
+        const eff = effectiveVariantImages(shared, v.images.map((i) => ({ url: i.url })));
+        flat.push(
           buildProductSearchDocument({
-            ...r,
-            categoryIds: collectProductCategoryIds(r.categoryId, r.productCategories),
+            id: v.id,
+            productId: row.id,
+            slug: row.slug,
+            name: row.name,
+            shortDescription: row.shortDescription,
+            categoryId: row.categoryId,
+            categoryIds,
+            brandId: row.brandId,
+            isActive: row.isActive && v.isActive,
+            updatedAt: v.updatedAt,
+            category: row.category,
+            brand: row.brand,
+            price: v.price,
+            images: eff,
           }),
         );
+      }
+    }
+
+    let indexed = 0;
+    for (let i = 0; i < flat.length; i += BATCH) {
+      const chunk = flat.slice(i, i + BATCH);
       await index.addDocuments(chunk, { primaryKey: 'id' });
       indexed += chunk.length;
     }
-    this.log.log(`Meilisearch: проиндексировано товаров: ${indexed}`);
+    this.log.log(`Meilisearch: проиндексировано карточек (вариантов): ${indexed}`);
     return { indexed };
   }
 

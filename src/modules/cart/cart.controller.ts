@@ -16,23 +16,23 @@ export class CartController {
   @Post('items')
   addItem(
     @CurrentUser('sub') userId: string,
-    @Body() body: { productId: string; quantity?: number },
+    @Body() body: { productVariantId: string; quantity?: number },
   ) {
-    return this.cartService.addItem(userId, body.productId, body.quantity ?? 1);
+    return this.cartService.addItem(userId, body.productVariantId, body.quantity ?? 1);
   }
 
-  @Post('items/:productId')
+  @Post('items/:productVariantId')
   updateItem(
     @CurrentUser('sub') userId: string,
-    @Param('productId') productId: string,
+    @Param('productVariantId') productVariantId: string,
     @Body() body: { quantity: number },
   ) {
-    return this.cartService.updateItem(userId, productId, body.quantity);
+    return this.cartService.updateItem(userId, productVariantId, body.quantity);
   }
 
-  @Delete('items/:productId')
-  removeItem(@CurrentUser('sub') userId: string, @Param('productId') productId: string) {
-    return this.cartService.removeItem(userId, productId);
+  @Delete('items/:productVariantId')
+  removeItem(@CurrentUser('sub') userId: string, @Param('productVariantId') productVariantId: string) {
+    return this.cartService.removeItem(userId, productVariantId);
   }
 
   @Delete()
