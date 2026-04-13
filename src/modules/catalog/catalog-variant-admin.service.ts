@@ -60,9 +60,15 @@ export class CatalogVariantAdminService {
             name: true,
             categoryId: true,
             images: { orderBy: { sortOrder: 'asc' } },
-            materialOptions: {
+            sizeOptions: {
               orderBy: { sortOrder: 'asc' },
-              include: { colors: { orderBy: { sortOrder: 'asc' } } },
+              include: {
+                materialOptions: { orderBy: { sortOrder: 'asc' } },
+                colorOptions: {
+                  orderBy: { sortOrder: 'asc' },
+                  include: { materialLinks: true },
+                },
+              },
             },
           },
         },
@@ -80,17 +86,38 @@ export class CatalogVariantAdminService {
       productName: row.product.name,
       variantLabel: row.variantLabel,
       variantSlug: row.variantSlug,
+      sizeOptionId: row.sizeOptionId,
       materialOptionId: row.materialOptionId,
       colorOptionId: row.colorOptionId,
-      materialColorOptions: row.product.materialOptions.map((m) => ({
-        id: m.id,
-        name: m.name,
-        sortOrder: m.sortOrder,
-        colors: m.colors.map((c) => ({
+      sizeOptions: row.product.sizeOptions.map((sz) => ({
+        id: sz.id,
+        name: sz.name,
+        sizeSlug: sz.sizeSlug,
+        sortOrder: sz.sortOrder,
+        materials: sz.materialOptions.map((m) => ({
+          id: m.id,
+          name: m.name,
+          sortOrder: m.sortOrder,
+        })),
+        colorOptions: sz.colorOptions.map((c) => ({
           id: c.id,
           name: c.name,
           imageUrl: c.imageUrl,
           sortOrder: c.sortOrder,
+          materialIds: c.materialLinks.map((l) => l.materialOptionId),
+        })),
+        materialColorOptions: sz.materialOptions.map((m) => ({
+          id: m.id,
+          name: m.name,
+          sortOrder: m.sortOrder,
+          colors: sz.colorOptions
+            .filter((c) => c.materialLinks.some((l) => l.materialOptionId === m.id))
+            .map((c) => ({
+              id: c.id,
+              name: c.name,
+              imageUrl: c.imageUrl,
+              sortOrder: c.sortOrder,
+            })),
         })),
       })),
       productGalleryImages: row.product.images.map((i) => ({
@@ -253,6 +280,24 @@ export class CatalogVariantAdminService {
       sku,
     };
 
+    const nextSizeId =
+      dto.sizeOptionId !== undefined
+        ? dto.sizeOptionId?.trim() || null
+        : existing.sizeOptionId;
+
+    if (dto.sizeOptionId !== undefined) {
+      if (!nextSizeId) {
+        throw new BadRequestException('Размер обязателен');
+      }
+      const sz = await this.prisma.productSizeOption.findFirst({
+        where: { id: nextSizeId, productId },
+      });
+      if (!sz) {
+        throw new BadRequestException('Размер не относится к этому товару');
+      }
+      variantUpdate.sizeOption = { connect: { id: nextSizeId } };
+    }
+
     const nextMatId =
       dto.materialOptionId !== undefined
         ? (dto.materialOptionId?.trim() || null)
@@ -262,14 +307,21 @@ export class CatalogVariantAdminService {
         ? (dto.colorOptionId?.trim() || null)
         : existing.colorOptionId;
 
+    const sizeForMaterialAssert =
+      dto.sizeOptionId !== undefined ? nextSizeId : existing.sizeOptionId;
+
     if (dto.materialOptionId !== undefined || dto.colorOptionId !== undefined) {
       if ((nextMatId && !nextColId) || (!nextMatId && nextColId)) {
         throw new BadRequestException('Укажите материал и цвет вместе или очистите оба');
       }
       if (nextMatId && nextColId) {
+        if (!sizeForMaterialAssert) {
+          throw new BadRequestException('Сначала укажите размер варианта');
+        }
         const { materialName, colorName } = await assertMaterialColorPairForProduct(
           this.prisma,
           productId,
+          sizeForMaterialAssert,
           nextMatId,
           nextColId,
         );
@@ -390,6 +442,7 @@ export class CatalogVariantAdminService {
     const v = await this.prisma.productVariant.create({
       data: {
         productId,
+        sizeOptionId: base.sizeOptionId,
         variantSlug,
         sortOrder: nextSort,
         isDefault: false,

@@ -1,5 +1,5 @@
 /**
- * Полная переиндексация карточек (вариантов) в Meilisearch (индекс `products`).
+ * Полная переиндексация карточек товаров в Meilisearch (индекс `products`).
  * Запуск из каталога backend:
  *   npx ts-node --compiler-options '{"module":"CommonJS"}' scripts/reindex-products-meilisearch.ts
  */
@@ -10,6 +10,8 @@ import { MeiliSearch } from 'meilisearch';
 import {
   buildProductSearchDocument,
   collectProductCategoryIds,
+  priceToNumber,
+  type ProductVariantSearchIndexRow,
 } from '../src/meilisearch/product-search-doc';
 import { applyProductIndexSearchSettings } from '../src/meilisearch/product-index-settings';
 
@@ -82,17 +84,7 @@ async function main() {
         },
         variants: {
           where: { isActive: true },
-          select: {
-            id: true,
-            isActive: true,
-            updatedAt: true,
-            price: true,
-            images: {
-              take: 6,
-              orderBy: { sortOrder: 'asc' },
-              select: { url: true },
-            },
-          },
+          select: { price: true },
         },
       },
     });
@@ -101,28 +93,28 @@ async function main() {
     for (const row of rows) {
       const categoryIds = collectProductCategoryIds(row.categoryId, row.productCategories);
       const shared = row.images.map((i) => ({ url: i.url }));
-      for (const v of row.variants) {
-        const vImgs = v.images.map((i) => ({ url: i.url }));
-        const eff = vImgs.length ? vImgs : shared;
-        flat.push(
-          buildProductSearchDocument({
-            id: v.id,
-            productId: row.id,
-            slug: row.slug,
-            name: row.name,
-            shortDescription: row.shortDescription,
-            categoryId: row.categoryId,
-            categoryIds,
-            brandId: row.brandId,
-            isActive: row.isActive && v.isActive,
-            updatedAt: v.updatedAt,
-            category: row.category,
-            brand: row.brand,
-            price: v.price,
-            images: eff,
-          }),
-        );
-      }
+      const prices = row.variants.map((v) => priceToNumber(v.price)).filter((n) => n > 0);
+      const priceMin = prices.length ? Math.min(...prices) : 0;
+      const priceMax = prices.length ? Math.max(...prices) : 0;
+      const r: ProductVariantSearchIndexRow = {
+        id: row.id,
+        productId: row.id,
+        slug: row.slug,
+        name: row.name,
+        shortDescription: row.shortDescription,
+        categoryId: row.categoryId,
+        categoryIds,
+        brandId: row.brandId,
+        isActive: row.isActive,
+        updatedAt: row.updatedAt,
+        category: row.category,
+        brand: row.brand,
+        sortPrice: priceMin,
+        priceMin,
+        priceMax,
+        images: shared,
+      };
+      flat.push(buildProductSearchDocument(r));
     }
 
     let indexed = 0;
@@ -131,7 +123,7 @@ async function main() {
       await index.addDocuments(chunk, { primaryKey: 'id' });
       indexed += chunk.length;
     }
-    console.log(`Готово: в индекс загружено ${indexed} документов (вариантов).`);
+    console.log(`Готово: в индекс загружено ${indexed} документов (товаров).`);
   } finally {
     await prisma.$disconnect();
   }

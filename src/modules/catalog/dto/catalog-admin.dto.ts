@@ -260,7 +260,7 @@ export class ProductGalleryItemDto {
   alt?: string | null;
 }
 
-/** Цвет внутри материала на карточке товара. */
+/** Цвет внутри материала (legacy nested в materialColorOptions при создании товара). */
 export class ProductColorOptionShellDto {
   @IsOptional()
   @IsString()
@@ -281,8 +281,63 @@ export class ProductColorOptionShellDto {
   sortOrder!: number;
 }
 
-/** Материал и вложенные цвета (заводятся на товаре, в варианте — выбор). */
+/** Цвет в размере; materialIds — id материала на сервере или ref из той же заявки. */
+export class ProductColorOptionWithMaterialsShellDto {
+  @IsOptional()
+  @IsString()
+  id?: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  name!: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(2048)
+  imageUrl!: string;
+
+  @IsInt()
+  @Min(0)
+  sortOrder!: number;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(40)
+  materialIds?: string[];
+
+  /** Только для разбора legacy nested materialColorOptions без id у материалов. */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  materialIndex?: number;
+}
+
+/** Материал внутри размера. */
 export class ProductMaterialOptionShellDto {
+  @IsOptional()
+  @IsString()
+  id?: string;
+
+  /** Ключ строки в форме (совпадает с color.materialIds при первом сохранении). */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  ref?: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  name!: string;
+
+  @IsInt()
+  @Min(0)
+  sortOrder!: number;
+}
+
+/** Legacy: материал с вложенными цветами (только deprecated materialColorOptions в CreateProduct). */
+export class ProductMaterialOptionShellLegacyDto {
   @IsOptional()
   @IsString()
   id?: string;
@@ -301,6 +356,39 @@ export class ProductMaterialOptionShellDto {
   @ValidateNested({ each: true })
   @Type(() => ProductColorOptionShellDto)
   colors!: ProductColorOptionShellDto[];
+}
+
+/** Размер товара: материалы и цвета отдельно (цвет может ссылаться на несколько материалов). */
+export class ProductSizeOptionShellDto {
+  @IsOptional()
+  @IsString()
+  id?: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  name!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  sizeSlug?: string | null;
+
+  @IsInt()
+  @Min(0)
+  sortOrder!: number;
+
+  @IsArray()
+  @ArrayMaxSize(40)
+  @ValidateNested({ each: true })
+  @Type(() => ProductMaterialOptionShellDto)
+  materials!: ProductMaterialOptionShellDto[];
+
+  @IsArray()
+  @ArrayMaxSize(120)
+  @ValidateNested({ each: true })
+  @Type(() => ProductColorOptionWithMaterialsShellDto)
+  colorOptions!: ProductColorOptionWithMaterialsShellDto[];
 }
 
 export class ProductColorSpecDto {
@@ -405,13 +493,21 @@ export class CreateProductAdminDto {
   @Type(() => ProductSizeSpecDto)
   sizes?: ProductSizeSpecDto[];
 
-  /** Материалы и цвета на карточке товара; сочетание материал+цвет для SKU задаётся в варианте. */
+  /** @deprecated Предпочтительно `sizeOptions` (один уровень — размеры). */
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(40)
   @ValidateNested({ each: true })
-  @Type(() => ProductMaterialOptionShellDto)
-  materialColorOptions?: ProductMaterialOptionShellDto[];
+  @Type(() => ProductMaterialOptionShellLegacyDto)
+  materialColorOptions?: ProductMaterialOptionShellLegacyDto[];
+
+  /** Размеры; внутри — материалы и цвета. Если не задано, но есть `materialColorOptions` — один размер «Стандарт». */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(24)
+  @ValidateNested({ each: true })
+  @Type(() => ProductSizeOptionShellDto)
+  sizeOptions?: ProductSizeOptionShellDto[];
 
   @IsOptional()
   @IsArray()
@@ -627,13 +723,21 @@ export class UpdateProductShellAdminDto {
   @IsBoolean()
   isActive?: boolean;
 
-  /** Материалы и цвета для витрины; при отсутствии поля — не менять. */
+  /** @deprecated Предпочтительно `sizeOptions`. */
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(40)
   @ValidateNested({ each: true })
-  @Type(() => ProductMaterialOptionShellDto)
-  materialColorOptions?: ProductMaterialOptionShellDto[];
+  @Type(() => ProductMaterialOptionShellLegacyDto)
+  materialColorOptions?: ProductMaterialOptionShellLegacyDto[];
+
+  /** Размеры и вложенные материалы/цвета; при отсутствии поля — не менять. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(24)
+  @ValidateNested({ each: true })
+  @Type(() => ProductSizeOptionShellDto)
+  sizeOptions?: ProductSizeOptionShellDto[];
 }
 
 /** PATCH варианта товара. */
@@ -647,6 +751,11 @@ export class UpdateProductVariantAdminDto {
   @IsString()
   @MaxLength(120)
   variantSlug?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v != null && v !== '')
+  @IsString()
+  sizeOptionId?: string | null;
 
   @IsOptional()
   @ValidateIf((_, v) => v != null && v !== '')

@@ -5,10 +5,10 @@ import { MeilisearchService, PRODUCTS_INDEX } from './meilisearch.service';
 import {
   buildProductSearchDocument,
   collectProductCategoryIds,
+  priceToNumber,
   type ProductVariantSearchIndexRow,
 } from './product-search-doc';
 import { applyProductIndexSearchSettings } from './product-index-settings';
-import { resolveEffectiveVariantImageUrlsForSearch } from '../modules/catalog/variant-effective-gallery';
 
 const BATCH = 400;
 
@@ -51,23 +51,7 @@ export class ProductSearchIndexService {
           },
           variants: {
             where: { isActive: true },
-            select: {
-              id: true,
-              variantLabel: true,
-              isActive: true,
-              updatedAt: true,
-              price: true,
-              variantProductImages: {
-                take: 6,
-                orderBy: { sortOrder: 'asc' },
-                select: { productImage: { select: { url: true } } },
-              },
-              images: {
-                take: 6,
-                orderBy: { sortOrder: 'asc' },
-                select: { url: true },
-              },
-            },
+            select: { price: true },
           },
         },
       });
@@ -75,37 +59,28 @@ export class ProductSearchIndexService {
 
       const categoryIds = collectProductCategoryIds(row.categoryId, row.productCategories);
       const shared = row.images.map((i) => ({ url: i.url }));
-      const docs: Record<string, unknown>[] = [];
-
-      for (const v of row.variants) {
-        const eff = resolveEffectiveVariantImageUrlsForSearch({
-          sharedUrls: shared.map((i) => i.url),
-          junctionUrls: v.variantProductImages.map((l) => l.productImage.url),
-          legacyUrls: v.images.map((i) => i.url),
-        });
-        const displayName = (v.variantLabel ?? '').trim() || row.name;
-        const r: ProductVariantSearchIndexRow = {
-          id: v.id,
-          productId: row.id,
-          slug: row.slug,
-          name: displayName,
-          shortDescription: row.shortDescription,
-          categoryId: row.categoryId,
-          categoryIds,
-          brandId: row.brandId,
-          isActive: row.isActive && v.isActive,
-          updatedAt: v.updatedAt,
-          category: row.category,
-          brand: row.brand,
-          price: v.price,
-          images: eff,
-        };
-        docs.push(buildProductSearchDocument(r));
-      }
-
-      if (docs.length) {
-        await index.addDocuments(docs, { primaryKey: 'id' });
-      }
+      const prices = row.variants.map((v) => priceToNumber(v.price)).filter((n) => n > 0);
+      const priceMin = prices.length ? Math.min(...prices) : 0;
+      const priceMax = prices.length ? Math.max(...prices) : 0;
+      const r: ProductVariantSearchIndexRow = {
+        id: row.id,
+        productId: row.id,
+        slug: row.slug,
+        name: row.name,
+        shortDescription: row.shortDescription,
+        categoryId: row.categoryId,
+        categoryIds,
+        brandId: row.brandId,
+        isActive: row.isActive,
+        updatedAt: row.updatedAt,
+        category: row.category,
+        brand: row.brand,
+        sortPrice: priceMin,
+        priceMin,
+        priceMax,
+        images: shared,
+      };
+      await index.addDocuments([buildProductSearchDocument(r)], { primaryKey: 'id' });
     } catch (e) {
       this.log.warn(
         `Meilisearch: не удалось проиндексировать товар ${productId}: ${e instanceof Error ? e.message : String(e)}`,
@@ -157,23 +132,7 @@ export class ProductSearchIndexService {
         },
         variants: {
           where: { isActive: true },
-          select: {
-            id: true,
-            variantLabel: true,
-            isActive: true,
-            updatedAt: true,
-            price: true,
-            variantProductImages: {
-              take: 6,
-              orderBy: { sortOrder: 'asc' },
-              select: { productImage: { select: { url: true } } },
-            },
-            images: {
-              take: 6,
-              orderBy: { sortOrder: 'asc' },
-              select: { url: true },
-            },
-          },
+          select: { price: true },
         },
       },
     });
@@ -182,32 +141,28 @@ export class ProductSearchIndexService {
     for (const row of rows) {
       const categoryIds = collectProductCategoryIds(row.categoryId, row.productCategories);
       const shared = row.images.map((i) => ({ url: i.url }));
-      for (const v of row.variants) {
-        const eff = resolveEffectiveVariantImageUrlsForSearch({
-          sharedUrls: shared.map((i) => i.url),
-          junctionUrls: v.variantProductImages.map((l) => l.productImage.url),
-          legacyUrls: v.images.map((i) => i.url),
-        });
-        const displayName = (v.variantLabel ?? '').trim() || row.name;
-        flat.push(
-          buildProductSearchDocument({
-            id: v.id,
-            productId: row.id,
-            slug: row.slug,
-            name: displayName,
-            shortDescription: row.shortDescription,
-            categoryId: row.categoryId,
-            categoryIds,
-            brandId: row.brandId,
-            isActive: row.isActive && v.isActive,
-            updatedAt: v.updatedAt,
-            category: row.category,
-            brand: row.brand,
-            price: v.price,
-            images: eff,
-          }),
-        );
-      }
+      const prices = row.variants.map((v) => priceToNumber(v.price)).filter((n) => n > 0);
+      const priceMin = prices.length ? Math.min(...prices) : 0;
+      const priceMax = prices.length ? Math.max(...prices) : 0;
+      const r: ProductVariantSearchIndexRow = {
+        id: row.id,
+        productId: row.id,
+        slug: row.slug,
+        name: row.name,
+        shortDescription: row.shortDescription,
+        categoryId: row.categoryId,
+        categoryIds,
+        brandId: row.brandId,
+        isActive: row.isActive,
+        updatedAt: row.updatedAt,
+        category: row.category,
+        brand: row.brand,
+        sortPrice: priceMin,
+        priceMin,
+        priceMax,
+        images: shared,
+      };
+      flat.push(buildProductSearchDocument(r));
     }
 
     let indexed = 0;
@@ -216,7 +171,7 @@ export class ProductSearchIndexService {
       await index.addDocuments(chunk, { primaryKey: 'id' });
       indexed += chunk.length;
     }
-    this.log.log(`Meilisearch: проиндексировано карточек (вариантов): ${indexed}`);
+    this.log.log(`Meilisearch: проиндексировано карточек (товаров): ${indexed}`);
     return { indexed };
   }
 

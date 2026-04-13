@@ -218,33 +218,61 @@ model Product {
   productCategories ProductCategory[]
   curatedCollectionProductItems CuratedCollectionProductItem[]
   curatedProductSetItems      CuratedProductSetItem[]
-  materialOptions             ProductMaterialOption[]
+  sizeOptions                 ProductSizeOption[]
 }
 
-/// Материал на карточке товара (группа на витрине); цвета — ProductColorOption.
-model ProductMaterialOption {
+/// Размер / конфигурация товара; материалы и цвета задаются внутри размера.
+model ProductSizeOption {
   id        String   @id @default(cuid())
   productId String
   product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
   name      String
+  /// Сегмент URL: /product/{slug}?sz={sizeSlug}
+  sizeSlug  String?
   sortOrder Int      @default(0)
-  colors    ProductColorOption[]
-  variants  ProductVariant[] @relation("VariantMaterialOption")
+  materialOptions ProductMaterialOption[]
+  colorOptions    ProductColorOption[]
+  variants        ProductVariant[] @relation("VariantSizeOption")
 
   @@index([productId])
 }
 
-/// Цвет внутри материала (карточка на витрине).
-model ProductColorOption {
-  id               String   @id @default(cuid())
-  materialOptionId String
-  materialOption   ProductMaterialOption @relation(fields: [materialOptionId], references: [id], onDelete: Cascade)
-  name             String
-  imageUrl         String
-  sortOrder        Int      @default(0)
-  variants         ProductVariant[] @relation("VariantColorOption")
+/// Материал на карточке товара (группа на витрине).
+model ProductMaterialOption {
+  id        String   @id @default(cuid())
+  sizeOptionId String
+  sizeOption   ProductSizeOption @relation(fields: [sizeOptionId], references: [id], onDelete: Cascade)
+  name      String
+  sortOrder Int      @default(0)
+  colorLinks ProductColorMaterial[]
+  variants  ProductVariant[] @relation("VariantMaterialOption")
 
+  @@index([sizeOptionId])
+}
+
+/// Связь «цвет ↔ материал» внутри размера (один цвет может быть доступен для нескольких материалов).
+model ProductColorMaterial {
+  colorOptionId    String
+  materialOptionId String
+  colorOption      ProductColorOption @relation(fields: [colorOptionId], references: [id], onDelete: Cascade)
+  materialOption   ProductMaterialOption @relation(fields: [materialOptionId], references: [id], onDelete: Cascade)
+
+  @@id([colorOptionId, materialOptionId])
   @@index([materialOptionId])
+}
+
+/// Цвет на карточке товара (в размере); привязка к материалам — через ProductColorMaterial.
+model ProductColorOption {
+  id           String   @id @default(cuid())
+  sizeOptionId String
+  sizeOption   ProductSizeOption @relation(fields: [sizeOptionId], references: [id], onDelete: Cascade)
+  name         String
+  imageUrl     String
+  sortOrder    Int      @default(0)
+  materialLinks ProductColorMaterial[]
+  variants      ProductVariant[] @relation("VariantColorOption")
+
+  @@index([sizeOptionId])
 }
 
 /// Кадры варианта — подмножество ProductImage (порядок в sortOrder).
@@ -271,6 +299,8 @@ model ProductVariant {
   variantLabel String?
   /// Сегмент URL: /product/{productSlug}?vs={variantSlug}
   variantSlug  String?
+  sizeOptionId String?
+  sizeOption   ProductSizeOption? @relation("VariantSizeOption", fields: [sizeOptionId], references: [id], onDelete: Restrict)
   materialOptionId String?
   materialOption   ProductMaterialOption? @relation("VariantMaterialOption", fields: [materialOptionId], references: [id], onDelete: SetNull)
   colorOptionId    String?

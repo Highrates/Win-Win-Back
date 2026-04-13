@@ -13,6 +13,7 @@ import {
   CreateProductAdminDto,
   ProductGalleryItemDto,
   ProductMaterialOptionShellDto,
+  ProductSizeOptionShellDto,
   UpdateProductShellAdminDto,
 } from './dto/catalog-admin.dto';
 import { CatalogVariantAdminService } from './catalog-variant-admin.service';
@@ -229,88 +230,305 @@ export class CatalogProductAdminService {
     }
   }
 
-  private async syncMaterialColorOptions(
+  /** Если заданы только legacy `materialColorOptions` — один размер «Стандарт». */
+  private normalizeSizeRowsForCreate(dto: CreateProductAdminDto): ProductSizeOptionShellDto[] {
+    if (dto.sizeOptions?.length) return dto.sizeOptions;
+    const legacy = dto.materialColorOptions;
+    if (legacy?.length) {
+      return [
+        {
+          name: 'Стандарт',
+          sortOrder: 0,
+          sizeSlug: null,
+          materials: legacy.map((m, mi) => ({
+            ...(m.id ? { id: m.id } : {}),
+            name: m.name,
+            sortOrder: m.sortOrder ?? mi,
+          })),
+          colorOptions: legacy.flatMap((m, mi) =>
+            (m.colors ?? []).map((c, ci) => ({
+              ...(c.id ? { id: c.id } : {}),
+              name: c.name,
+              imageUrl: c.imageUrl,
+              sortOrder: c.sortOrder ?? ci,
+              materialIds: m.id ? [m.id] : [],
+              materialIndex: m.id ? undefined : mi,
+            })),
+          ),
+        },
+      ];
+    }
+    return [{ name: 'Стандарт', sortOrder: 0, sizeSlug: null, materials: [], colorOptions: [] }];
+  }
+
+  /**
+   * Синхронизирует размеры, материалы, цвета и связи цвет↔материал (M2M).
+   * @returns id первого размера по sortOrder (для привязки дефолтного варианта при создании).
+   */
+  private async syncSizeMaterialColorOptions(
     tx: Prisma.TransactionClient,
     productId: string,
-    rows: ProductMaterialOptionShellDto[],
-  ) {
-    const keptMatIds: string[] = [];
+    rows: ProductSizeOptionShellDto[],
+  ): Promise<string> {
+    if (!rows.length) {
+      throw new BadRequestException('Нужен хотя бы один размер');
+    }
+    const sorted = [...rows].sort((a, b) => a.sortOrder - b.sortOrder);
+    const keptSizeIds: string[] = [];
+    let firstSizeId: string | null = null;
 
-    for (const m of rows) {
-      const name = m.name.trim();
-      if (!name) throw new BadRequestException('У материала должно быть название');
+    for (const sz of sorted) {
+      const name = sz.name.trim();
+      if (!name) throw new BadRequestException('У размера должно быть название');
 
-      let matId: string;
-      if (m.id) {
-        const existingMat = await tx.productMaterialOption.findFirst({
-          where: { id: m.id, productId },
+      let sizeId: string;
+      if (sz.id) {
+        const existingSz = await tx.productSizeOption.findFirst({
+          where: { id: sz.id, productId },
         });
-        if (existingMat) {
-          await tx.productMaterialOption.update({
-            where: { id: m.id },
-            data: { name, sortOrder: m.sortOrder },
+        if (existingSz) {
+          await tx.productSizeOption.update({
+            where: { id: sz.id },
+            data: {
+              name,
+              sortOrder: sz.sortOrder,
+              sizeSlug: sz.sizeSlug?.trim() || null,
+            },
           });
-          matId = m.id;
+          sizeId = sz.id;
+        } else {
+          const created = await tx.productSizeOption.create({
+            data: {
+              productId,
+              name,
+              sortOrder: sz.sortOrder,
+              sizeSlug: sz.sizeSlug?.trim() || null,
+            },
+          });
+          sizeId = created.id;
+        }
+      } else {
+        const created = await tx.productSizeOption.create({
+          data: {
+            productId,
+            name,
+            sortOrder: sz.sortOrder,
+            sizeSlug: sz.sizeSlug?.trim() || null,
+          },
+        });
+        sizeId = created.id;
+      }
+      keptSizeIds.push(sizeId);
+      if (!firstSizeId) firstSizeId = sizeId;
+
+      const materials = sz.materials ?? [];
+      const keyToMatId = new Map<string, string>();
+      const keptMatIds: string[] = [];
+
+      for (const m of materials) {
+        const matName = m.name.trim();
+        if (!matName) throw new BadRequestException('У материала должно быть название');
+
+        let matId: string;
+        if (m.id) {
+          const existingMat = await tx.productMaterialOption.findFirst({
+            where: { id: m.id, sizeOptionId: sizeId },
+          });
+          if (existingMat) {
+            await tx.productMaterialOption.update({
+              where: { id: m.id },
+              data: { name: matName, sortOrder: m.sortOrder },
+            });
+            matId = m.id;
+          } else {
+            const created = await tx.productMaterialOption.create({
+              data: { sizeOptionId: sizeId, name: matName, sortOrder: m.sortOrder },
+            });
+            matId = created.id;
+          }
         } else {
           const created = await tx.productMaterialOption.create({
-            data: { productId, name, sortOrder: m.sortOrder },
+            data: { sizeOptionId: sizeId, name: matName, sortOrder: m.sortOrder },
           });
           matId = created.id;
         }
-      } else {
-        const created = await tx.productMaterialOption.create({
-          data: { productId, name, sortOrder: m.sortOrder },
-        });
-        matId = created.id;
+        keptMatIds.push(matId);
+        if (m.id) keyToMatId.set(m.id, matId);
+        if (m.ref?.trim()) keyToMatId.set(m.ref.trim(), matId);
       }
-      keptMatIds.push(matId);
 
+      const colorRows = sz.colorOptions ?? [];
       const keptColorIds: string[] = [];
-      for (const c of m.colors ?? []) {
+
+      for (const c of colorRows) {
         const cn = c.name?.trim();
         const imageUrl = c.imageUrl?.trim();
         if (!cn || !imageUrl) continue;
         this.objectStorage.assertProductImageUrlAllowed(imageUrl);
 
+        let targetMatIds: string[] = [];
+        if (c.materialIds?.length) {
+          targetMatIds = [
+            ...new Set(
+              c.materialIds.map((k) => keyToMatId.get(k) ?? k).filter((id): id is string => Boolean(id)),
+            ),
+          ];
+        } else if (c.materialIndex != null && keptMatIds[c.materialIndex]) {
+          targetMatIds = [keptMatIds[c.materialIndex]!];
+        }
+        if (!targetMatIds.length) {
+          throw new BadRequestException(
+            `У цвета «${cn}» укажите хотя бы один материал (materialIds или materialIndex)`,
+          );
+        }
+        for (const mid of targetMatIds) {
+          const ok = await tx.productMaterialOption.findFirst({
+            where: { id: mid, sizeOptionId: sizeId },
+          });
+          if (!ok) {
+            throw new BadRequestException('Цвет ссылается на материал не из этого размера');
+          }
+        }
+
+        let colorId: string;
         if (c.id) {
           const col = await tx.productColorOption.findFirst({
-            where: { id: c.id, materialOptionId: matId },
+            where: { id: c.id, sizeOptionId: sizeId },
           });
           if (col) {
             await tx.productColorOption.update({
               where: { id: c.id },
               data: { name: cn, imageUrl, sortOrder: c.sortOrder },
             });
-            keptColorIds.push(c.id);
+            colorId = c.id;
           } else {
             const created = await tx.productColorOption.create({
-              data: { materialOptionId: matId, name: cn, imageUrl, sortOrder: c.sortOrder },
+              data: {
+                sizeOptionId: sizeId,
+                name: cn,
+                imageUrl,
+                sortOrder: c.sortOrder,
+              },
             });
-            keptColorIds.push(created.id);
+            colorId = created.id;
           }
         } else {
           const created = await tx.productColorOption.create({
-            data: { materialOptionId: matId, name: cn, imageUrl, sortOrder: c.sortOrder },
+            data: {
+              sizeOptionId: sizeId,
+              name: cn,
+              imageUrl,
+              sortOrder: c.sortOrder,
+            },
           });
-          keptColorIds.push(created.id);
+          colorId = created.id;
+        }
+        keptColorIds.push(colorId);
+
+        await tx.productColorMaterial.deleteMany({ where: { colorOptionId: colorId } });
+        for (const mid of targetMatIds) {
+          await tx.productColorMaterial.create({
+            data: { colorOptionId: colorId, materialOptionId: mid },
+          });
         }
       }
 
       await tx.productColorOption.deleteMany({
         where: {
-          materialOptionId: matId,
+          sizeOptionId: sizeId,
           ...(keptColorIds.length ? { id: { notIn: keptColorIds } } : {}),
+        },
+      });
+
+      await tx.productMaterialOption.deleteMany({
+        where: {
+          sizeOptionId: sizeId,
+          ...(keptMatIds.length ? { id: { notIn: keptMatIds } } : {}),
         },
       });
     }
 
-    if (keptMatIds.length) {
-      await tx.productMaterialOption.deleteMany({
-        where: { productId, id: { notIn: keptMatIds } },
+    const sizesToRemove = await tx.productSizeOption.findMany({
+      where: {
+        productId,
+        ...(keptSizeIds.length ? { id: { notIn: keptSizeIds } } : {}),
+      },
+    });
+    for (const s of sizesToRemove) {
+      const vc = await tx.productVariant.count({ where: { sizeOptionId: s.id } });
+      if (vc > 0) {
+        throw new BadRequestException(
+          `Размер «${s.name}» используется вариантами SKU — сначала переназначьте варианты`,
+        );
+      }
+    }
+    if (keptSizeIds.length) {
+      await tx.productSizeOption.deleteMany({
+        where: { productId, id: { notIn: keptSizeIds } },
       });
     } else {
-      await tx.productMaterialOption.deleteMany({ where: { productId } });
+      await tx.productSizeOption.deleteMany({ where: { productId } });
     }
+
+    if (!firstSizeId) {
+      const fb = await tx.productSizeOption.findFirst({
+        where: { productId },
+        orderBy: { sortOrder: 'asc' },
+      });
+      firstSizeId = fb?.id ?? null;
+    }
+    if (!firstSizeId) throw new BadRequestException('Не удалось сохранить размеры');
+    return firstSizeId;
+  }
+
+  private mapSizeOptionForAdmin(sz: {
+    id: string;
+    name: string;
+    sizeSlug: string | null;
+    sortOrder: number;
+    materialOptions: { id: string; name: string; sortOrder: number }[];
+    colorOptions: {
+      id: string;
+      name: string;
+      imageUrl: string;
+      sortOrder: number;
+      materialLinks: { materialOptionId: string }[];
+    }[];
+  }) {
+    const materials = sz.materialOptions.map((m) => ({
+      id: m.id,
+      name: m.name,
+      sortOrder: m.sortOrder,
+    }));
+    const colorOptions = sz.colorOptions.map((c) => ({
+      id: c.id,
+      name: c.name,
+      imageUrl: c.imageUrl,
+      sortOrder: c.sortOrder,
+      materialIds: c.materialLinks.map((l) => l.materialOptionId),
+    }));
+    const materialColorOptions = sz.materialOptions.map((m) => ({
+      id: m.id,
+      name: m.name,
+      sortOrder: m.sortOrder,
+      colors: sz.colorOptions
+        .filter((c) => c.materialLinks.some((l) => l.materialOptionId === m.id))
+        .map((c) => ({
+          id: c.id,
+          name: c.name,
+          imageUrl: c.imageUrl,
+          sortOrder: c.sortOrder,
+        })),
+    }));
+    return {
+      id: sz.id,
+      name: sz.name,
+      sizeSlug: sz.sizeSlug,
+      sortOrder: sz.sortOrder,
+      materials,
+      colorOptions,
+      materialColorOptions,
+    };
   }
 
   async listProductsForAdmin(q?: string) {
@@ -451,7 +669,8 @@ export class CatalogProductAdminService {
     await this.assertAdditionalCategoriesExist(additionalCatIds);
 
     const gallery = dto.gallery ?? [];
-    const useMaterialColorShell = dto.materialColorOptions !== undefined;
+    const useMaterialColorShell =
+      dto.materialColorOptions !== undefined || dto.sizeOptions !== undefined;
 
     const colors = (dto.colors ?? []).filter((c) => c.name?.trim() && c.imageUrl?.trim());
     const materials = (dto.materials ?? []).filter((m) => m.name?.trim());
@@ -507,11 +726,24 @@ export class CatalogProductAdminService {
           },
         });
 
+        const firstSizeId = useMaterialColorShell
+          ? await this.syncSizeMaterialColorOptions(
+              tx,
+              product.id,
+              this.normalizeSizeRowsForCreate(dto),
+            )
+          : (
+              await tx.productSizeOption.create({
+                data: { productId: product.id, name: 'Стандарт', sortOrder: 0 },
+              })
+            ).id;
+
         const variantSlug = await this.variantAdmin.ensureUniqueVariantSlug(tx, product.id, 'v-0');
 
         await tx.productVariant.create({
           data: {
             productId: product.id,
+            sizeOptionId: firstSizeId,
             variantSlug,
             sortOrder: 0,
             isDefault: true,
@@ -563,10 +795,6 @@ export class CatalogProductAdminService {
           });
         }
 
-        if (useMaterialColorShell) {
-          await this.syncMaterialColorOptions(tx, product.id, dto.materialColorOptions ?? []);
-        }
-
         await this.syncProductCuratedCollections(tx, product.id, dto.curatedCollectionIds ?? []);
         await this.syncProductCuratedSets(tx, product.id, dto.curatedProductSetIds ?? []);
 
@@ -606,9 +834,15 @@ export class CatalogProductAdminService {
       where: { id },
       include: {
         images: { orderBy: { sortOrder: 'asc' } },
-        materialOptions: {
+        sizeOptions: {
           orderBy: { sortOrder: 'asc' },
-          include: { colors: { orderBy: { sortOrder: 'asc' } } },
+          include: {
+            materialOptions: { orderBy: { sortOrder: 'asc' } },
+            colorOptions: {
+              orderBy: { sortOrder: 'asc' },
+              include: { materialLinks: true },
+            },
+          },
         },
         category: { select: { id: true, name: true } },
         brand: { select: { id: true, name: true } },
@@ -644,17 +878,7 @@ export class CatalogProductAdminService {
         alt: i.alt,
         sortOrder: i.sortOrder,
       })),
-      materialColorOptions: row.materialOptions.map((m) => ({
-        id: m.id,
-        name: m.name,
-        sortOrder: m.sortOrder,
-        colors: m.colors.map((c) => ({
-          id: c.id,
-          name: c.name,
-          imageUrl: c.imageUrl,
-          sortOrder: c.sortOrder,
-        })),
-      })),
+      sizeOptions: row.sizeOptions.map((sz) => this.mapSizeOptionForAdmin(sz)),
       additionalInfoHtml: row.additionalInfoHtml,
       deliveryText: row.deliveryText,
       technicalSpecs: row.technicalSpecs,
@@ -761,17 +985,103 @@ export class CatalogProductAdminService {
         if (dto.gallery !== undefined) {
           await this.syncProductGallery(tx, id, dto.gallery);
         }
-        if (dto.materialColorOptions !== undefined) {
-          await this.syncMaterialColorOptions(tx, id, dto.materialColorOptions);
+        if (dto.sizeOptions !== undefined) {
+          await this.syncSizeMaterialColorOptions(tx, id, dto.sizeOptions);
+        } else if (dto.materialColorOptions !== undefined) {
+          const existing = await tx.productSizeOption.findMany({
+            where: { productId: id },
+            orderBy: { sortOrder: 'asc' },
+            include: {
+              materialOptions: { orderBy: { sortOrder: 'asc' } },
+              colorOptions: {
+                orderBy: { sortOrder: 'asc' },
+                include: { materialLinks: true },
+              },
+            },
+          });
+          const mat = dto.materialColorOptions ?? [];
+          const rows: ProductSizeOptionShellDto[] =
+            existing.length === 0
+              ? [
+                  {
+                    name: 'Стандарт',
+                    sortOrder: 0,
+                    sizeSlug: null,
+                    materials: mat.map((m, mi) => ({
+                      ...(m.id ? { id: m.id } : {}),
+                      name: m.name,
+                      sortOrder: m.sortOrder ?? mi,
+                    })),
+                    colorOptions: mat.flatMap((m, mi) =>
+                      (m.colors ?? []).map((c, ci) => ({
+                        ...(c.id ? { id: c.id } : {}),
+                        name: c.name,
+                        imageUrl: c.imageUrl,
+                        sortOrder: c.sortOrder ?? ci,
+                        materialIds: m.id ? [m.id] : [],
+                        materialIndex: m.id ? undefined : mi,
+                      })),
+                    ),
+                  },
+                ]
+              : existing.map((s, i) =>
+                  i === 0
+                    ? {
+                        id: s.id,
+                        name: s.name,
+                        sortOrder: s.sortOrder,
+                        sizeSlug: s.sizeSlug,
+                        materials: mat.map((m, mi) => ({
+                          ...(m.id ? { id: m.id } : {}),
+                          name: m.name,
+                          sortOrder: m.sortOrder ?? mi,
+                        })),
+                        colorOptions: mat.flatMap((m, mi) =>
+                          (m.colors ?? []).map((c, ci) => ({
+                            ...(c.id ? { id: c.id } : {}),
+                            name: c.name,
+                            imageUrl: c.imageUrl,
+                            sortOrder: c.sortOrder ?? ci,
+                            materialIds: m.id ? [m.id] : [],
+                            materialIndex: m.id ? undefined : mi,
+                          })),
+                        ),
+                      }
+                    : {
+                        id: s.id,
+                        name: s.name,
+                        sortOrder: s.sortOrder,
+                        sizeSlug: s.sizeSlug,
+                        materials: s.materialOptions.map((m) => ({
+                          id: m.id,
+                          name: m.name,
+                          sortOrder: m.sortOrder,
+                        })),
+                        colorOptions: s.colorOptions.map((c) => ({
+                          id: c.id,
+                          name: c.name,
+                          imageUrl: c.imageUrl,
+                          sortOrder: c.sortOrder,
+                          materialIds: c.materialLinks.map((l) => l.materialOptionId),
+                        })),
+                      },
+                );
+          await this.syncSizeMaterialColorOptions(tx, id, rows);
         }
 
         const row = await tx.product.findUnique({
           where: { id },
           include: {
             images: { orderBy: { sortOrder: 'asc' } },
-            materialOptions: {
+            sizeOptions: {
               orderBy: { sortOrder: 'asc' },
-              include: { colors: { orderBy: { sortOrder: 'asc' } } },
+              include: {
+                materialOptions: { orderBy: { sortOrder: 'asc' } },
+                colorOptions: {
+                  orderBy: { sortOrder: 'asc' },
+                  include: { materialLinks: true },
+                },
+              },
             },
             category: true,
             brand: true,
@@ -819,17 +1129,7 @@ export class CatalogProductAdminService {
           alt: i.alt,
           sortOrder: i.sortOrder,
         })),
-        materialColorOptions: full.materialOptions.map((m) => ({
-          id: m.id,
-          name: m.name,
-          sortOrder: m.sortOrder,
-          colors: m.colors.map((c) => ({
-            id: c.id,
-            name: c.name,
-            imageUrl: c.imageUrl,
-            sortOrder: c.sortOrder,
-          })),
-        })),
+        sizeOptions: full.sizeOptions.map((sz) => this.mapSizeOptionForAdmin(sz)),
         additionalInfoHtml: full.additionalInfoHtml,
         deliveryText: full.deliveryText,
         technicalSpecs: full.technicalSpecs,

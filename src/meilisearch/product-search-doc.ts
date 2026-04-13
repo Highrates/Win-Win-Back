@@ -1,6 +1,6 @@
-/** Строка для индекса: один документ = один вариант (карточка витрины). */
+/** Строка для индекса: один документ = один товар (карточка витрины). */
 export type ProductVariantSearchIndexRow = {
-  /** id варианта — primary key в Meilisearch */
+  /** id товара — primary key в Meilisearch */
   id: string;
   productId: string;
   slug: string;
@@ -9,14 +9,15 @@ export type ProductVariantSearchIndexRow = {
   categoryId: string;
   categoryIds: string[];
   brandId: string | null;
-  /** Товар и вариант опубликованы */
   isActive: boolean;
   updatedAt: Date;
   category: { name: string };
   brand: { name: string } | null;
-  /** Prisma.Decimal или число */
-  price: unknown;
-  /** Эффективные изображения (общая галерея или галерея варианта) */
+  /** Минимальная цена среди вариантов (сортировка) */
+  sortPrice: number;
+  priceMin: number;
+  priceMax: number;
+  /** Изображения товара (общая галерея) */
   images?: { url: string }[];
 };
 
@@ -32,7 +33,7 @@ export function collectProductCategoryIds(
   return [...s];
 }
 
-function priceToNumber(price: unknown): number {
+export function priceToNumber(price: unknown): number {
   if (price == null) return 0;
   if (typeof price === 'number' && Number.isFinite(price)) return price;
   if (typeof price === 'object' && price !== null && 'toString' in price) {
@@ -75,7 +76,9 @@ export function buildProductSearchDocument(row: ProductVariantSearchIndexRow): R
     brandName: row.brand?.name ?? null,
     isActive: row.isActive,
     updatedAt: Math.floor(row.updatedAt.getTime() / 1000),
-    price: priceToNumber(row.price),
+    price: row.sortPrice,
+    priceMin: row.priceMin,
+    priceMax: row.priceMax,
     thumbUrl,
     imageUrls,
   };
