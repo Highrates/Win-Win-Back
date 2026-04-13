@@ -24,6 +24,10 @@ export class MailService {
       port,
       secure,
       auth: { user, pass },
+      // Без явных таймаутов TCP к SMTP может висеть минутами → nginx отдаёт 504, пользователь видит «Отправка…».
+      connectionTimeout: 15_000,
+      greetingTimeout: 15_000,
+      socketTimeout: 15_000,
       ...(port === 587 ? { requireTLS: true } : {}),
     });
   }
