@@ -6,6 +6,9 @@ import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { JwtStrategy } from './jwt.strategy';
 import { UsersModule } from '../users/users.module';
+import { MailService } from './mail.service';
+import { ExolveSmsService } from './exolve-sms.service';
+import { RegistrationService } from './registration.service';
 @Module({
   imports: [
     UsersModule,
@@ -19,7 +22,7 @@ import { UsersModule } from '../users/users.module';
       inject: [ConfigService],
     }),
   ],
-  providers: [AuthService, JwtStrategy],
+  providers: [AuthService, JwtStrategy, MailService, ExolveSmsService, RegistrationService],
   controllers: [AuthController],
   exports: [AuthService],
 })

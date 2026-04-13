@@ -481,6 +481,52 @@ export class CatalogProductAdminService {
     return firstSizeId;
   }
 
+  /** Подпись «цвет — материал» для списка вариантов в админке. */
+  private formatVariantColorMaterialLabel(v: {
+    colorOption?: { name: string } | null;
+    materialOption?: { name: string } | null;
+    optionAttributes: Prisma.JsonValue | null;
+  }): string | null {
+    let color = v.colorOption?.name?.trim() || '';
+    let material = v.materialOption?.name?.trim() || '';
+    const raw = v.optionAttributes;
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      const o = raw as Record<string, unknown>;
+      if (!color && typeof o.color === 'string' && o.color.trim()) color = o.color.trim();
+      if (!material && typeof o.material === 'string' && o.material.trim()) material = o.material.trim();
+    }
+    if (!color && !material) return null;
+    if (color && material) return `${color} — ${material}`;
+    return color || material;
+  }
+
+  private mapVariantAdminSummary(
+    v: {
+      id: string;
+      variantLabel: string | null;
+      price: Prisma.Decimal;
+      currency: string;
+      isActive: boolean;
+      isDefault: boolean;
+      sizeOption: { name: string } | null;
+      materialOption: { name: string } | null;
+      colorOption: { name: string } | null;
+      optionAttributes: Prisma.JsonValue | null;
+    },
+    productName: string,
+  ) {
+    return {
+      id: v.id,
+      displayName: v.variantLabel?.trim() || productName,
+      price: v.price.toString(),
+      currency: v.currency,
+      isActive: v.isActive,
+      isDefault: v.isDefault,
+      sizeLabel: v.sizeOption?.name?.trim() || null,
+      colorMaterialLabel: this.formatVariantColorMaterialLabel(v),
+    };
+  }
+
   private mapSizeOptionForAdmin(sz: {
     id: string;
     name: string;
@@ -847,7 +893,14 @@ export class CatalogProductAdminService {
         category: { select: { id: true, name: true } },
         brand: { select: { id: true, name: true } },
         productCategories: { select: { categoryId: true } },
-        variants: { orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }] },
+        variants: {
+          orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+          include: {
+            sizeOption: { select: { name: true } },
+            materialOption: { select: { name: true } },
+            colorOption: { select: { name: true } },
+          },
+        },
       },
     });
     if (!row) throw new NotFoundException('Товар не найден');
@@ -886,14 +939,7 @@ export class CatalogProductAdminService {
       seoDescription: row.seoDescription,
       category: row.category,
       brand: row.brand,
-      variants: row.variants.map((v) => ({
-        id: v.id,
-        displayName: v.variantLabel?.trim() || row.name,
-        price: v.price.toString(),
-        currency: v.currency,
-        isActive: v.isActive,
-        isDefault: v.isDefault,
-      })),
+      variants: row.variants.map((v) => this.mapVariantAdminSummary(v, row.name)),
     };
   }
 
@@ -1086,7 +1132,14 @@ export class CatalogProductAdminService {
             category: true,
             brand: true,
             productCategories: { select: { categoryId: true } },
-            variants: { orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }] },
+            variants: {
+              orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+              include: {
+                sizeOption: { select: { name: true } },
+                materialOption: { select: { name: true } },
+                colorOption: { select: { name: true } },
+              },
+            },
           },
         });
         if (!row) throw new BadRequestException('Не удалось прочитать товар после сохранения');
@@ -1137,14 +1190,7 @@ export class CatalogProductAdminService {
         seoDescription: full.seoDescription,
         category: full.category,
         brand: full.brand,
-        variants: full.variants.map((v) => ({
-          id: v.id,
-          displayName: v.variantLabel?.trim() || full.name,
-          price: v.price.toString(),
-          currency: v.currency,
-          isActive: v.isActive,
-          isDefault: v.isDefault,
-        })),
+        variants: full.variants.map((v) => this.mapVariantAdminSummary(v, full.name)),
       };
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError) {

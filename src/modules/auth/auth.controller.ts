@@ -15,7 +15,15 @@ import { AuditService } from '../audit/audit.service';
 import { Public } from '../../common/decorators/public.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { LoginDto, RegisterDto } from './dto/auth.dto';
+import { LoginDto } from './dto/auth.dto';
+import {
+  RegisterCompleteDto,
+  RegisterEmailStartDto,
+  RegisterEmailVerifyDto,
+  RegisterPhoneStartDto,
+  RegisterPhoneVerifyDto,
+} from './dto/register-flow.dto';
+import { RegistrationService } from './registration.service';
 
 @Controller('auth')
 export class AuthController {
@@ -23,12 +31,44 @@ export class AuthController {
     private authService: AuthService,
     private usersService: UsersService,
     private audit: AuditService,
+    private registration: RegistrationService,
   ) {}
 
   @Public()
-  @Post('register')
-  register(@Body() dto: RegisterDto) {
-    return this.authService.register(dto);
+  @Post('register/phone/start')
+  async registerPhoneStart(@Body() dto: RegisterPhoneStartDto) {
+    return this.registration.startPhone(dto);
+  }
+
+  @Public()
+  @Post('register/phone/verify')
+  async registerPhoneVerify(@Body() dto: RegisterPhoneVerifyDto) {
+    return this.registration.verifyPhone(dto);
+  }
+
+  @Public()
+  @Post('register/email/start')
+  async registerEmailStart(@Body() dto: RegisterEmailStartDto) {
+    return this.registration.startEmail(dto);
+  }
+
+  @Public()
+  @Post('register/email/verify')
+  async registerEmailVerify(@Body() dto: RegisterEmailVerifyDto) {
+    return this.registration.verifyEmail(dto);
+  }
+
+  @Public()
+  @Post('register/complete')
+  async registerComplete(@Body() dto: RegisterCompleteDto) {
+    const user = await this.registration.complete(dto);
+    const token = await this.authService.login({
+      id: user.id,
+      email: user.email,
+      phone: user.phone,
+      role: user.role,
+    });
+    return { ...token, user };
   }
 
   @Public()

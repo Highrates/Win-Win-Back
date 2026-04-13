@@ -18,6 +18,10 @@ model User {
   passwordHash String?
   role      UserRole @default(USER)
   isActive  Boolean  @default(true)
+  /// Согласие на обработку ПДн (отметка времени при регистрации).
+  consentPersonalDataAcceptedAt DateTime?
+  /// Согласие на SMS-уведомления/рассылку (не транзакционный OTP).
+  consentSmsMarketingAcceptedAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -37,6 +41,29 @@ enum UserRole {
   USER      // дизайнер / клиент
   MODERATOR // модератор каталога
   ADMIN     // суперадмин
+}
+
+enum RegistrationOtpChannel {
+  PHONE
+  EMAIL
+}
+
+/// OTP при регистрации: либо SMS на телефон, либо письмо на email.
+model RegistrationChallenge {
+  id                  String                  @id @default(cuid())
+  channel             RegistrationOtpChannel
+  /// Цифры без «+», например 79001234567; для регистрации по email — null
+  phone               String?
+  email               String?
+  codeHash            String
+  expiresAt           DateTime
+  attempts            Int                     @default(0)
+  consentPersonalData Boolean
+  consentSms          Boolean
+  createdAt           DateTime                @default(now())
+
+  @@index([phone])
+  @@index([email])
 }
 
 model UserProfile {
