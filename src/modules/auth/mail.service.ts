@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { resolve4 } from 'node:dns/promises';
+import { isIP } from 'node:net';
 import * as nodemailer from 'nodemailer';
 
 @Injectable()
@@ -8,19 +10,48 @@ export class MailService {
 
   constructor(private readonly config: ConfigService) {}
 
-  private transporter() {
-    const host = this.config.get<string>('SMTP_HOST')?.trim();
+  /**
+   * На VPS без маршрута IPv6 nodemailer может выбрать AAAA → ENETUNREACH (см. 2a00:1450:… для Gmail).
+   * По умолчанию подключаемся к первому A-записи и задаём servername для TLS/SNI.
+   */
+  private async smtpConnectTarget(hostname: string): Promise<{ host: string; servername?: string }> {
+    const raw = String(this.config.get('SMTP_FORCE_IPV4', 'true')).toLowerCase();
+    const forceIpv4 = !['0', 'false', 'no', 'off'].includes(raw);
+    if (!forceIpv4 || isIP(hostname)) {
+      return { host: hostname };
+    }
+    try {
+      const v4 = await resolve4(hostname);
+      if (!v4.length) {
+        this.logger.warn(`SMTP_FORCE_IPV4: нет A-записей для ${hostname}, подключаемся по имени`);
+        return { host: hostname };
+      }
+      return { host: v4[0], servername: hostname };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      this.logger.warn(`SMTP_FORCE_IPV4: resolve4(${hostname}) — ${msg}, подключаемся по имени`);
+      return { host: hostname };
+    }
+  }
+
+  private transporter(target: { host: string; servername?: string }) {
     const user = this.config.get<string>('SMTP_USER')?.trim();
     const passRaw = this.config.get<string>('SMTP_PASSWORD') ?? '';
     const pass = passRaw.replace(/\s/g, '');
-    if (!host || !user || !pass) {
+    if (!target.host || !user || !pass) {
       throw new Error('SMTP_HOST, SMTP_USER и SMTP_PASSWORD должны быть заданы для отправки почты');
     }
     const port = Number(this.config.get('SMTP_PORT', 587));
     const secure =
       String(this.config.get('SMTP_SECURE', 'false')).toLowerCase() === 'true' || port === 465;
+    const requireTls =
+      port === 587 &&
+      !['0', 'false', 'no', 'off'].includes(
+        String(this.config.get('SMTP_REQUIRE_TLS', 'true')).toLowerCase(),
+      );
     return nodemailer.createTransport({
-      host,
+      host: target.host,
+      ...(target.servername ? { servername: target.servername } : {}),
       port,
       secure,
       auth: { user, pass },
@@ -28,7 +59,7 @@ export class MailService {
       connectionTimeout: 15_000,
       greetingTimeout: 15_000,
       socketTimeout: 15_000,
-      ...(port === 587 ? { requireTLS: true } : {}),
+      ...(requireTls ? { requireTLS: true } : {}),
     });
   }
 
@@ -36,7 +67,12 @@ export class MailService {
     const from = this.config.get<string>('MAIL_FROM')?.trim() || this.config.get<string>('SMTP_USER');
     if (!from) throw new Error('MAIL_FROM или SMTP_USER нужен для отправки письма');
 
-    const transport = this.transporter();
+    const configuredHost = this.config.get<string>('SMTP_HOST')?.trim();
+    if (!configuredHost) {
+      throw new Error('SMTP_HOST, SMTP_USER и SMTP_PASSWORD должны быть заданы для отправки почты');
+    }
+    const endpoint = await this.smtpConnectTarget(configuredHost);
+    const transport = this.transporter(endpoint);
     await transport.sendMail({
       from,
       to,

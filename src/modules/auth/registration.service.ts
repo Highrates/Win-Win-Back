@@ -25,6 +25,20 @@ import {
 const OTP_TTL_MS = 10 * 60 * 1000;
 const MAX_OTP_ATTEMPTS = 5;
 
+/** Детали ошибки nodemailer/SMTP для логов (в UI не отдаём). */
+function formatMailSendError(e: unknown): string {
+  if (!(e instanceof Error)) return String(e);
+  const ex = e as Error & { code?: string; responseCode?: number; response?: string; command?: string };
+  const parts = [ex.message];
+  if (ex.code) parts.push(`code=${ex.code}`);
+  if (ex.command) parts.push(`cmd=${ex.command}`);
+  if (ex.responseCode != null) parts.push(`smtp=${ex.responseCode}`);
+  if (typeof ex.response === 'string' && ex.response.trim()) {
+    parts.push(ex.response.trim().slice(0, 400));
+  }
+  return parts.join(' | ');
+}
+
 export interface RegistrationCompletionJwtPayload {
   purpose: 'register_complete';
   phone: string | null;
@@ -140,7 +154,7 @@ export class RegistrationService {
       await this.mail.sendRegistrationOtp(email, code);
     } catch (e) {
       await this.prisma.registrationChallenge.delete({ where: { id: challenge.id } }).catch(() => {});
-      this.logger.error(e);
+      this.logger.error(`sendRegistrationOtp: ${formatMailSendError(e)}`);
       throw new InternalServerErrorException(
         'Не удалось отправить письмо. Проверьте настройки SMTP или попробуйте позже.',
       );
