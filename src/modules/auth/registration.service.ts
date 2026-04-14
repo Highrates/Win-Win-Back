@@ -109,10 +109,8 @@ export class RegistrationService {
       },
     });
 
-    const text = `Код подтверждения Win-Win: ${code}`;
-
     try {
-      await this.sms.sendText(phone, text);
+      await this.sms.sendRegistrationOtp(phone, code);
     } catch (e) {
       await this.prisma.registrationChallenge.delete({ where: { id: challenge.id } }).catch(() => {});
       this.logger.error(e);

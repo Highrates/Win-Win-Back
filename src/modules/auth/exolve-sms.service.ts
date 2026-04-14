@@ -8,6 +8,12 @@ export class ExolveSmsService {
 
   constructor(private readonly config: ConfigService) {}
 
+  /** OTP при регистрации по телефону — один текстовый параметр `text` в API Exolve. */
+  async sendRegistrationOtp(destinationDigits: string, code: string): Promise<void> {
+    const text = `Код подтверждения Win-Win: ${code}`;
+    return this.sendText(destinationDigits, text);
+  }
+
   async sendText(destinationDigits: string, text: string): Promise<void> {
     const token = this.config.get<string>('EXOLVE_API_TOKEN')?.trim();
     const sender = this.config.get<string>('EXOLVE_SMS_SENDER')?.trim();
@@ -18,10 +24,17 @@ export class ExolveSmsService {
       throw new Error('EXOLVE_API_TOKEN и EXOLVE_SMS_SENDER должны быть заданы для SMS');
     }
 
+    // Отправитель — как в ЛК (цифры без + для мобильного или согласованное альфа-имя); получатель — только цифры.
+    const number = sender.trim();
+    const destination = destinationDigits.replace(/\D/g, '');
+    if (!number || !destination) {
+      throw new Error('EXOLVE_SMS_SENDER и номер получателя не должны быть пустыми');
+    }
+
     // Формат тела — см. https://docs.exolve.ru/docs/ru/instructions/sending-sms/ (поля в нижнем регистре).
     const body = {
-      number: sender,
-      destination: destinationDigits,
+      number,
+      destination,
       text,
     };
 
@@ -60,7 +73,7 @@ export class ExolveSmsService {
     }
 
     this.logger.log(
-      `Exolve SendSMS принят API: destination=${destinationDigits} message_id=${messageId ?? '—'} (статус доставки — в ЛК Exolve)`,
+      `Exolve SendSMS принят API: destination=${destination} message_id=${messageId ?? '—'} (статус доставки — в ЛК Exolve)`,
     );
   }
 }
