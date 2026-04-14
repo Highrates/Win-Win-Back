@@ -13,7 +13,7 @@ import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { MailService } from './mail.service';
-import { ExolveSmsService } from './exolve-sms.service';
+import { UnimtxOtpService } from './unimtx-otp.service';
 import {
   RegisterCompleteDto,
   RegisterEmailStartDto,
@@ -55,7 +55,7 @@ export class RegistrationService {
     private readonly prisma: PrismaService,
     private readonly users: UsersService,
     private readonly mail: MailService,
-    private readonly sms: ExolveSmsService,
+    private readonly smsOtp: UnimtxOtpService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
   ) {}
@@ -73,6 +73,11 @@ export class RegistrationService {
     const digits = (t.startsWith('+') ? t.slice(1) : t).replace(/\D/g, '');
     if (digits.length < 10) throw new BadRequestException('Некорректный номер телефона');
     return digits;
+  }
+
+  /** E.164 для Unimatrix: + и только цифры после него. */
+  private phoneDigitsToE164(digits: string): string {
+    return `+${digits.replace(/\D/g, '')}`;
   }
 
   normalizeEmail(raw: string): string {
@@ -93,6 +98,7 @@ export class RegistrationService {
 
     await this.prisma.registrationChallenge.deleteMany({ where: { phone } });
 
+    // Код генерируем у нас, а доставку делаем через Unimatrix sms.message.send (с signature).
     const code = this.generateOtp();
     const codeHash = await bcrypt.hash(code, 8);
     const expiresAt = new Date(Date.now() + OTP_TTL_MS);
@@ -110,12 +116,13 @@ export class RegistrationService {
     });
 
     try {
-      await this.sms.sendRegistrationOtp(phone, code);
+      await this.smsOtp.sendSmsOtp(this.phoneDigitsToE164(phone), code);
     } catch (e) {
       await this.prisma.registrationChallenge.delete({ where: { id: challenge.id } }).catch(() => {});
       this.logger.error(e);
+      const details = e instanceof Error ? e.message : 'Unknown error';
       throw new InternalServerErrorException(
-        'Не удалось отправить SMS. Проверьте настройки Exolve или попробуйте позже.',
+        `Не удалось отправить SMS. ${details}`,
       );
     }
 
@@ -191,6 +198,31 @@ export class RegistrationService {
     return this.finishVerify(challenge, dto.code);
   }
 
+  private async issueCompletionTokenFromChallenge(challenge: {
+    id: string;
+    phone: string | null;
+    email: string | null;
+    consentPersonalData: boolean;
+    consentSms: boolean;
+  }): Promise<{ completionToken: string }> {
+    await this.prisma.registrationChallenge.delete({ where: { id: challenge.id } });
+
+    const payload: RegistrationCompletionJwtPayload = {
+      purpose: 'register_complete',
+      phone: challenge.phone,
+      email: challenge.email,
+      consentPersonalData: challenge.consentPersonalData,
+      consentSms: challenge.consentSms,
+    };
+
+    const completionToken = await this.jwt.signAsync(
+      { ...payload, sub: 'register-complete' },
+      { secret: this.regTokenSecret(), expiresIn: '1h' },
+    );
+
+    return { completionToken };
+  }
+
   private async finishVerify(
     challenge: {
       id: string;
@@ -221,22 +253,7 @@ export class RegistrationService {
       throw new BadRequestException('Неверный код');
     }
 
-    await this.prisma.registrationChallenge.delete({ where: { id: challenge.id } });
-
-    const payload: RegistrationCompletionJwtPayload = {
-      purpose: 'register_complete',
-      phone: challenge.phone,
-      email: challenge.email,
-      consentPersonalData: challenge.consentPersonalData,
-      consentSms: challenge.consentSms,
-    };
-
-    const completionToken = await this.jwt.signAsync(
-      { ...payload, sub: 'register-complete' },
-      { secret: this.regTokenSecret(), expiresIn: '1h' },
-    );
-
-    return { completionToken };
+    return this.issueCompletionTokenFromChallenge(challenge);
   }
 
   async complete(dto: RegisterCompleteDto) {
