@@ -157,7 +157,7 @@ export class CreateBrandAdminDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(280)
+  @MaxLength(400)
   shortDescription?: string | null;
 
   @IsOptional()
@@ -208,7 +208,7 @@ export class UpdateBrandAdminDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(280)
+  @MaxLength(400)
   shortDescription?: string | null;
 
   @IsOptional()

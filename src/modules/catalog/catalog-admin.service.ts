@@ -97,7 +97,7 @@ export class CatalogAdminService {
   }
 
   private normBrandShortDescription(raw: string | null | undefined): string | null {
-    const t = raw?.trim().slice(0, 280) ?? '';
+    const t = raw?.trim().slice(0, 400) ?? '';
     return t || null;
   }
 

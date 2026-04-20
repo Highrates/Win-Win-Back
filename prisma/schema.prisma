@@ -105,8 +105,8 @@ model Brand {
   id          String   @id @default(cuid())
   slug        String   @unique
   name        String
-  /// Короткое описание для витрины (до 280 символов)
-  shortDescription String? @db.VarChar(280)
+  /// Короткое описание для витрины (до 400 символов)
+  shortDescription String? @db.VarChar(400)
   description String?   @db.Text // HTML из RichBlock (админка)
   logoUrl     String?
   siteUrl     String?
