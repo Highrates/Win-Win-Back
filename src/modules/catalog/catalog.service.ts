@@ -221,6 +221,12 @@ export class CatalogService {
                 brandMaterialColorId: true,
               },
             },
+            variantProductImages: {
+              orderBy: { sortOrder: 'asc' },
+              include: {
+                productImage: { select: { url: true, alt: true } },
+              },
+            },
           },
         },
       },
@@ -254,7 +260,10 @@ export class CatalogService {
         productElementId: s.productElementId,
         brandMaterialColorId: s.brandMaterialColorId,
       })),
-      images: shared,
+      images: resolveEffectiveVariantImages({
+        sharedProductImages: shared,
+        variantProductImagesFromJunction: v.variantProductImages,
+      }),
     }));
 
     const modifications = row.modifications.map((m) => ({
