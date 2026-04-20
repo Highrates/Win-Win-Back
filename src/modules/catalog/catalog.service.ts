@@ -158,16 +158,15 @@ export class CatalogService {
 
   /**
    * Карточка товара для витрины.
-   * @param variantQuery — `vs` / `v`: выбранный SKU. Без них — без выбранного варианта (галерея объединённая, цена min–max).
-   * `sizeParam` (`sz`): фильтр по размеру без SKU (уже в рамках «без v/vs»).
+   * Отдаёт общий набор кадров, диапазон цен активных вариантов, а также новую
+   * структуру: модификации, пул элементов (с пулом «материал-цветов» из бренда)
+   * и собранные варианты (modification + selections).
    */
   async getProductBySlug(
     slug: string,
     variantQuery?: { variantSlug?: string; variantId?: string; sizeParam?: string },
   ) {
-    const variantSlugQ = variantQuery?.variantSlug?.trim();
-    const variantIdQ = variantQuery?.variantId?.trim();
-    const sizeParamQ = variantQuery?.sizeParam?.trim();
+    void variantQuery;
     const row = await this.prisma.product.findUnique({
       where: { slug, isActive: true },
       include: {
@@ -175,24 +174,52 @@ export class CatalogService {
         productCategories: { include: { category: true } },
         brand: true,
         images: { orderBy: { sortOrder: 'asc' } },
-        sizeOptions: {
+        modifications: {
+          orderBy: { sortOrder: 'asc' },
+          select: {
+            id: true,
+            name: true,
+            modificationSlug: true,
+            sortOrder: true,
+          },
+        },
+        elements: {
           orderBy: { sortOrder: 'asc' },
           include: {
-            materialOptions: { orderBy: { sortOrder: 'asc' } },
-            colorOptions: {
+            availabilities: {
               orderBy: { sortOrder: 'asc' },
-              include: { materialLinks: true },
+              include: {
+                brandMaterialColor: {
+                  select: {
+                    id: true,
+                    name: true,
+                    imageUrl: true,
+                    sortOrder: true,
+                    brandMaterial: { select: { id: true, name: true, sortOrder: true } },
+                  },
+                },
+              },
             },
           },
         },
         variants: {
           where: { isActive: true },
           orderBy: [{ isDefault: 'desc' }, { sortOrder: 'asc' }, { id: 'asc' }],
-          include: {
-            images: { orderBy: { sortOrder: 'asc' } },
-            variantProductImages: {
-              orderBy: { sortOrder: 'asc' },
-              include: { productImage: true },
+          select: {
+            id: true,
+            variantSlug: true,
+            variantLabel: true,
+            modificationId: true,
+            price: true,
+            sku: true,
+            isDefault: true,
+            model3dUrl: true,
+            drawingUrl: true,
+            elementSelections: {
+              select: {
+                productElementId: true,
+                brandMaterialColorId: true,
+              },
             },
           },
         },
@@ -202,59 +229,6 @@ export class CatalogService {
 
     const shared = row.images.map((i) => ({ url: i.url, alt: i.alt }));
 
-    const variants = row.variants.map((v) => {
-      const images = resolveEffectiveVariantImages({
-        sharedProductImages: shared,
-        variantProductImagesFromJunction: v.variantProductImages,
-        variantLegacyImages: v.images.map((i) => ({ url: i.url, alt: i.alt })),
-      });
-      return {
-        id: v.id,
-        variantSlug: v.variantSlug,
-        variantLabel: v.variantLabel,
-        sizeOptionId: v.sizeOptionId,
-        price: v.price,
-        sku: v.sku,
-        specsJson: v.specsJson,
-        optionAttributes: v.optionAttributes,
-        isDefault: v.isDefault,
-        model3dUrl: v.model3dUrl,
-        drawingUrl: v.drawingUrl,
-        images,
-      };
-    });
-
-    const hasVariantPick = Boolean(variantSlugQ || variantIdQ);
-    const chosenRaw = hasVariantPick
-      ? (variantSlugQ ? row.variants.find((v) => v.variantSlug === variantSlugQ) : undefined) ??
-        (variantIdQ ? row.variants.find((v) => v.id === variantIdQ) : undefined)
-      : undefined;
-
-    const sizeOptionsPayload = row.sizeOptions.map((sz) => ({
-      id: sz.id,
-      name: sz.name,
-      sizeSlug: sz.sizeSlug,
-      sortOrder: sz.sortOrder,
-      materials: sz.materialOptions.map((m) => ({
-        id: m.id,
-        name: m.name,
-        sortOrder: m.sortOrder,
-        colors: sz.colorOptions
-          .filter((c) => c.materialLinks.some((l) => l.materialOptionId === m.id))
-          .map((c) => ({
-            id: c.id,
-            name: c.name,
-            imageUrl: c.imageUrl,
-            sortOrder: c.sortOrder,
-          })),
-      })),
-    }));
-
-    const selectedSizeOptionId =
-      !hasVariantPick && sizeParamQ && row.sizeOptions.length
-        ? row.sizeOptions.find((s) => s.sizeSlug === sizeParamQ || s.id === sizeParamQ)?.id ?? null
-        : null;
-
     const decimalPrice = (p: unknown): number => {
       if (p == null) return 0;
       if (typeof p === 'number' && Number.isFinite(p)) return p;
@@ -262,51 +236,53 @@ export class CatalogService {
       return Number.isFinite(n) ? n : 0;
     };
 
-    if (chosenRaw) {
-      const chosenImages = resolveEffectiveVariantImages({
-        sharedProductImages: shared,
-        variantProductImagesFromJunction: chosenRaw.variantProductImages,
-        variantLegacyImages: chosenRaw.images.map((i) => ({ url: i.url, alt: i.alt })),
-      });
-      const p = decimalPrice(chosenRaw.price);
-      return {
-        slug: row.slug,
-        name: row.name,
-        price: chosenRaw.price,
-        priceMin: p,
-        priceMax: p,
-        shortDescription: row.shortDescription,
-        description: row.description,
-        seoTitle: row.seoTitle,
-        seoDescription: row.seoDescription,
-        deliveryText: row.deliveryText,
-        technicalSpecs: row.technicalSpecs,
-        additionalInfoHtml: row.additionalInfoHtml,
-        specsJson: chosenRaw.specsJson ?? null,
-        category: row.category,
-        brand: row.brand,
-        images: chosenImages.length ? chosenImages : shared,
-        variants,
-        sizeOptions: sizeOptionsPayload,
-        defaultVariantId: chosenRaw.id,
-        selectedSizeOptionId: chosenRaw.sizeOptionId,
-      };
-    }
-
-    const aggregateVariants = selectedSizeOptionId
-      ? row.variants.filter((v) => v.sizeOptionId === selectedSizeOptionId)
-      : row.variants;
-    const variantImageLists = aggregateVariants.map((v) =>
-      resolveEffectiveVariantImages({
-        sharedProductImages: shared,
-        variantProductImagesFromJunction: v.variantProductImages,
-        variantLegacyImages: v.images.map((i) => ({ url: i.url, alt: i.alt })),
-      }),
-    );
-    const merged = this.mergeDedupeGallery(shared, variantImageLists);
-    const prices = aggregateVariants.map((v) => decimalPrice(v.price)).filter((n) => n > 0);
+    const prices = row.variants.map((v) => decimalPrice(v.price)).filter((n) => n > 0);
     const priceMin = prices.length ? Math.min(...prices) : 0;
     const priceMax = prices.length ? Math.max(...prices) : 0;
+
+    const variants = row.variants.map((v) => ({
+      id: v.id,
+      variantSlug: v.variantSlug,
+      variantLabel: v.variantLabel,
+      modificationId: v.modificationId,
+      price: v.price,
+      sku: v.sku,
+      isDefault: v.isDefault,
+      model3dUrl: v.model3dUrl,
+      drawingUrl: v.drawingUrl,
+      selections: v.elementSelections.map((s) => ({
+        productElementId: s.productElementId,
+        brandMaterialColorId: s.brandMaterialColorId,
+      })),
+      images: shared,
+    }));
+
+    const modifications = row.modifications.map((m) => ({
+      id: m.id,
+      name: m.name,
+      modificationSlug: m.modificationSlug,
+      sortOrder: m.sortOrder,
+    }));
+
+    const elements = row.elements.map((el) => ({
+      id: el.id,
+      name: el.name,
+      sortOrder: el.sortOrder,
+      availabilities: el.availabilities.map((a) => ({
+        brandMaterialColorId: a.brandMaterialColor.id,
+        brandMaterialId: a.brandMaterialColor.brandMaterial.id,
+        materialName: a.brandMaterialColor.brandMaterial.name,
+        materialSortOrder: a.brandMaterialColor.brandMaterial.sortOrder,
+        colorName: a.brandMaterialColor.name,
+        imageUrl: a.brandMaterialColor.imageUrl,
+        sortOrder: a.sortOrder,
+      })),
+    }));
+
+    const defaultVariant =
+      row.variants.find((v) => v.isDefault) ?? row.variants[0] ?? null;
+    const defaultModificationId =
+      defaultVariant?.modificationId ?? row.modifications[0]?.id ?? null;
 
     return {
       slug: row.slug,
@@ -324,35 +300,13 @@ export class CatalogService {
       specsJson: null,
       category: row.category,
       brand: row.brand,
-      images: merged.length ? merged : shared,
+      images: shared,
+      modifications,
+      elements,
       variants,
-      sizeOptions: sizeOptionsPayload,
-      defaultVariantId: null,
-      selectedSizeOptionId,
+      defaultVariantId: defaultVariant?.id ?? null,
+      defaultModificationId,
     };
-  }
-
-  private mergeDedupeGallery(
-    shared: { url: string; alt?: string | null }[],
-    variantLists: { url: string; alt?: string | null }[][],
-  ): { url: string; alt?: string | null }[] {
-    const seen = new Set<string>();
-    const out: { url: string; alt?: string | null }[] = [];
-    for (const im of shared) {
-      const u = im.url?.trim();
-      if (!u || seen.has(u)) continue;
-      seen.add(u);
-      out.push(im);
-    }
-    for (const list of variantLists) {
-      for (const im of list) {
-        const u = im.url?.trim();
-        if (!u || seen.has(u)) continue;
-        seen.add(u);
-        out.push(im);
-      }
-    }
-    return out;
   }
 
   async searchProducts(params: {
@@ -660,11 +614,6 @@ export class CatalogService {
                 id: true,
                 variantLabel: true,
                 price: true,
-                images: {
-                  take: 6,
-                  orderBy: { sortOrder: 'asc' },
-                  select: { url: true, alt: true },
-                },
                 variantProductImages: {
                   take: 6,
                   orderBy: { sortOrder: 'asc' },
@@ -689,7 +638,6 @@ export class CatalogService {
         ? resolveEffectiveVariantImages({
             sharedProductImages: shared,
             variantProductImagesFromJunction: dv.variantProductImages,
-            variantLegacyImages: dv.images.map((im) => ({ url: im.url, alt: im.alt })),
           })
         : shared;
       const imageUrls = effective.map((im) => im.url.trim()).filter(Boolean);

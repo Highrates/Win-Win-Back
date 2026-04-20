@@ -5,19 +5,16 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { CuratedCollectionKind, Prisma } from '@prisma/client';
+import { CuratedCollectionKind, Prisma, ProductPriceMode } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ProductSearchIndexService } from '../../meilisearch/product-search-index.service';
 import { ObjectStorageService } from '../storage/object-storage.service';
 import {
   CreateProductAdminDto,
   ProductGalleryItemDto,
-  ProductMaterialOptionShellDto,
-  ProductSizeOptionShellDto,
   UpdateProductShellAdminDto,
 } from './dto/catalog-admin.dto';
 import { CatalogVariantAdminService } from './catalog-variant-admin.service';
-import { CatalogVariantPricingService } from './catalog-variant-pricing.service';
 import { slugifyProductBase } from './slug-transliteration';
 import { buildCategoryPathLabel } from './catalog-category-path';
 
@@ -30,7 +27,6 @@ export class CatalogProductAdminService {
     private readonly objectStorage: ObjectStorageService,
     private readonly productSearchIndex: ProductSearchIndexService,
     private readonly variantAdmin: CatalogVariantAdminService,
-    private readonly variantPricing: CatalogVariantPricingService,
   ) {}
 
   private async ensureUniqueProductSlug(base: string): Promise<string> {
@@ -62,19 +58,11 @@ export class CatalogProductAdminService {
     return t || null;
   }
 
-  private validateProductMediaAndActiveRules(dto: CreateProductAdminDto): void {
+  private validateProductMediaAndActiveRules(dto: CreateProductAdminDto | UpdateProductShellAdminDto): void {
     for (const g of dto.gallery ?? []) {
       const u = g.url?.trim();
       if (u) this.objectStorage.assertProductImageUrlAllowed(u);
     }
-    for (const c of dto.colors ?? []) {
-      const u = c.imageUrl?.trim();
-      if (u) this.objectStorage.assertProductImageUrlAllowed(u);
-    }
-    const m3d = dto.model3dUrl?.trim();
-    if (m3d) this.objectStorage.assertProductImageUrlAllowed(m3d);
-    const dw = dto.drawingUrl?.trim();
-    if (dw) this.objectStorage.assertProductImageUrlAllowed(dw);
     const galleryCount = (dto.gallery ?? []).filter((g) => g.url?.trim()).length;
     const isActive = dto.isActive ?? true;
     if (isActive && galleryCount < 1) {
@@ -194,7 +182,11 @@ export class CatalogProductAdminService {
     }
   }
 
-  private async syncProductGallery(tx: Prisma.TransactionClient, productId: string, gallery: ProductGalleryItemDto[]) {
+  private async syncProductGallery(
+    tx: Prisma.TransactionClient,
+    productId: string,
+    gallery: ProductGalleryItemDto[],
+  ) {
     const existing = await tx.productImage.findMany({ where: { productId } });
     const existingById = new Map<string, { id: string }>(
       existing.map((r: { id: string }) => [r.id, r]),
@@ -230,353 +222,6 @@ export class CatalogProductAdminService {
     }
   }
 
-  /** Если заданы только legacy `materialColorOptions` — один размер «Стандарт». */
-  private normalizeSizeRowsForCreate(dto: CreateProductAdminDto): ProductSizeOptionShellDto[] {
-    if (dto.sizeOptions?.length) return dto.sizeOptions;
-    const legacy = dto.materialColorOptions;
-    if (legacy?.length) {
-      return [
-        {
-          name: 'Стандарт',
-          sortOrder: 0,
-          sizeSlug: null,
-          materials: legacy.map((m, mi) => ({
-            ...(m.id ? { id: m.id } : {}),
-            name: m.name,
-            sortOrder: m.sortOrder ?? mi,
-          })),
-          colorOptions: legacy.flatMap((m, mi) =>
-            (m.colors ?? []).map((c, ci) => ({
-              ...(c.id ? { id: c.id } : {}),
-              name: c.name,
-              imageUrl: c.imageUrl,
-              sortOrder: c.sortOrder ?? ci,
-              materialIds: m.id ? [m.id] : [],
-              materialIndex: m.id ? undefined : mi,
-            })),
-          ),
-        },
-      ];
-    }
-    return [{ name: 'Стандарт', sortOrder: 0, sizeSlug: null, materials: [], colorOptions: [] }];
-  }
-
-  /**
-   * Синхронизирует размеры, материалы, цвета и связи цвет↔материал (M2M).
-   * @returns id первого размера по sortOrder (для привязки дефолтного варианта при создании).
-   */
-  private async syncSizeMaterialColorOptions(
-    tx: Prisma.TransactionClient,
-    productId: string,
-    rows: ProductSizeOptionShellDto[],
-  ): Promise<string> {
-    if (!rows.length) {
-      throw new BadRequestException('Нужен хотя бы один размер');
-    }
-    const sorted = [...rows].sort((a, b) => a.sortOrder - b.sortOrder);
-    const keptSizeIds: string[] = [];
-    let firstSizeId: string | null = null;
-
-    for (const sz of sorted) {
-      const name = sz.name.trim();
-      if (!name) throw new BadRequestException('У размера должно быть название');
-
-      let sizeId: string;
-      if (sz.id) {
-        const existingSz = await tx.productSizeOption.findFirst({
-          where: { id: sz.id, productId },
-        });
-        if (existingSz) {
-          await tx.productSizeOption.update({
-            where: { id: sz.id },
-            data: {
-              name,
-              sortOrder: sz.sortOrder,
-              sizeSlug: sz.sizeSlug?.trim() || null,
-            },
-          });
-          sizeId = sz.id;
-        } else {
-          const created = await tx.productSizeOption.create({
-            data: {
-              productId,
-              name,
-              sortOrder: sz.sortOrder,
-              sizeSlug: sz.sizeSlug?.trim() || null,
-            },
-          });
-          sizeId = created.id;
-        }
-      } else {
-        const created = await tx.productSizeOption.create({
-          data: {
-            productId,
-            name,
-            sortOrder: sz.sortOrder,
-            sizeSlug: sz.sizeSlug?.trim() || null,
-          },
-        });
-        sizeId = created.id;
-      }
-      keptSizeIds.push(sizeId);
-      if (!firstSizeId) firstSizeId = sizeId;
-
-      const materials = sz.materials ?? [];
-      const keyToMatId = new Map<string, string>();
-      const keptMatIds: string[] = [];
-
-      for (const m of materials) {
-        const matName = m.name.trim();
-        if (!matName) throw new BadRequestException('У материала должно быть название');
-
-        let matId: string;
-        if (m.id) {
-          const existingMat = await tx.productMaterialOption.findFirst({
-            where: { id: m.id, sizeOptionId: sizeId },
-          });
-          if (existingMat) {
-            await tx.productMaterialOption.update({
-              where: { id: m.id },
-              data: { name: matName, sortOrder: m.sortOrder },
-            });
-            matId = m.id;
-          } else {
-            const created = await tx.productMaterialOption.create({
-              data: { sizeOptionId: sizeId, name: matName, sortOrder: m.sortOrder },
-            });
-            matId = created.id;
-          }
-        } else {
-          const created = await tx.productMaterialOption.create({
-            data: { sizeOptionId: sizeId, name: matName, sortOrder: m.sortOrder },
-          });
-          matId = created.id;
-        }
-        keptMatIds.push(matId);
-        if (m.id) keyToMatId.set(m.id, matId);
-        if (m.ref?.trim()) keyToMatId.set(m.ref.trim(), matId);
-      }
-
-      const colorRows = sz.colorOptions ?? [];
-      const keptColorIds: string[] = [];
-
-      for (const c of colorRows) {
-        const cn = c.name?.trim();
-        const imageUrl = c.imageUrl?.trim();
-        if (!cn || !imageUrl) continue;
-        this.objectStorage.assertProductImageUrlAllowed(imageUrl);
-
-        let targetMatIds: string[] = [];
-        if (c.materialIds?.length) {
-          targetMatIds = [
-            ...new Set(
-              c.materialIds.map((k) => keyToMatId.get(k) ?? k).filter((id): id is string => Boolean(id)),
-            ),
-          ];
-        } else if (c.materialIndex != null && keptMatIds[c.materialIndex]) {
-          targetMatIds = [keptMatIds[c.materialIndex]!];
-        }
-        if (!targetMatIds.length) {
-          throw new BadRequestException(
-            `У цвета «${cn}» укажите хотя бы один материал (materialIds или materialIndex)`,
-          );
-        }
-        for (const mid of targetMatIds) {
-          const ok = await tx.productMaterialOption.findFirst({
-            where: { id: mid, sizeOptionId: sizeId },
-          });
-          if (!ok) {
-            throw new BadRequestException('Цвет ссылается на материал не из этого размера');
-          }
-        }
-
-        let colorId: string;
-        if (c.id) {
-          const col = await tx.productColorOption.findFirst({
-            where: { id: c.id, sizeOptionId: sizeId },
-          });
-          if (col) {
-            await tx.productColorOption.update({
-              where: { id: c.id },
-              data: { name: cn, imageUrl, sortOrder: c.sortOrder },
-            });
-            colorId = c.id;
-          } else {
-            const created = await tx.productColorOption.create({
-              data: {
-                sizeOptionId: sizeId,
-                name: cn,
-                imageUrl,
-                sortOrder: c.sortOrder,
-              },
-            });
-            colorId = created.id;
-          }
-        } else {
-          const created = await tx.productColorOption.create({
-            data: {
-              sizeOptionId: sizeId,
-              name: cn,
-              imageUrl,
-              sortOrder: c.sortOrder,
-            },
-          });
-          colorId = created.id;
-        }
-        keptColorIds.push(colorId);
-
-        await tx.productColorMaterial.deleteMany({ where: { colorOptionId: colorId } });
-        for (const mid of targetMatIds) {
-          await tx.productColorMaterial.create({
-            data: { colorOptionId: colorId, materialOptionId: mid },
-          });
-        }
-      }
-
-      await tx.productColorOption.deleteMany({
-        where: {
-          sizeOptionId: sizeId,
-          ...(keptColorIds.length ? { id: { notIn: keptColorIds } } : {}),
-        },
-      });
-
-      await tx.productMaterialOption.deleteMany({
-        where: {
-          sizeOptionId: sizeId,
-          ...(keptMatIds.length ? { id: { notIn: keptMatIds } } : {}),
-        },
-      });
-    }
-
-    const sizesToRemove = await tx.productSizeOption.findMany({
-      where: {
-        productId,
-        ...(keptSizeIds.length ? { id: { notIn: keptSizeIds } } : {}),
-      },
-    });
-    for (const s of sizesToRemove) {
-      const vc = await tx.productVariant.count({ where: { sizeOptionId: s.id } });
-      if (vc > 0) {
-        throw new BadRequestException(
-          `Размер «${s.name}» используется вариантами SKU — сначала переназначьте варианты`,
-        );
-      }
-    }
-    if (keptSizeIds.length) {
-      await tx.productSizeOption.deleteMany({
-        where: { productId, id: { notIn: keptSizeIds } },
-      });
-    } else {
-      await tx.productSizeOption.deleteMany({ where: { productId } });
-    }
-
-    if (!firstSizeId) {
-      const fb = await tx.productSizeOption.findFirst({
-        where: { productId },
-        orderBy: { sortOrder: 'asc' },
-      });
-      firstSizeId = fb?.id ?? null;
-    }
-    if (!firstSizeId) throw new BadRequestException('Не удалось сохранить размеры');
-    return firstSizeId;
-  }
-
-  /** Подпись «цвет — материал» для списка вариантов в админке. */
-  private formatVariantColorMaterialLabel(v: {
-    colorOption?: { name: string } | null;
-    materialOption?: { name: string } | null;
-    optionAttributes: Prisma.JsonValue | null;
-  }): string | null {
-    let color = v.colorOption?.name?.trim() || '';
-    let material = v.materialOption?.name?.trim() || '';
-    const raw = v.optionAttributes;
-    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-      const o = raw as Record<string, unknown>;
-      if (!color && typeof o.color === 'string' && o.color.trim()) color = o.color.trim();
-      if (!material && typeof o.material === 'string' && o.material.trim()) material = o.material.trim();
-    }
-    if (!color && !material) return null;
-    if (color && material) return `${color} — ${material}`;
-    return color || material;
-  }
-
-  private mapVariantAdminSummary(
-    v: {
-      id: string;
-      variantLabel: string | null;
-      price: Prisma.Decimal;
-      currency: string;
-      isActive: boolean;
-      isDefault: boolean;
-      sizeOption: { name: string } | null;
-      materialOption: { name: string } | null;
-      colorOption: { name: string } | null;
-      optionAttributes: Prisma.JsonValue | null;
-    },
-    productName: string,
-  ) {
-    return {
-      id: v.id,
-      displayName: v.variantLabel?.trim() || productName,
-      price: v.price.toString(),
-      currency: v.currency,
-      isActive: v.isActive,
-      isDefault: v.isDefault,
-      sizeLabel: v.sizeOption?.name?.trim() || null,
-      colorMaterialLabel: this.formatVariantColorMaterialLabel(v),
-    };
-  }
-
-  private mapSizeOptionForAdmin(sz: {
-    id: string;
-    name: string;
-    sizeSlug: string | null;
-    sortOrder: number;
-    materialOptions: { id: string; name: string; sortOrder: number }[];
-    colorOptions: {
-      id: string;
-      name: string;
-      imageUrl: string;
-      sortOrder: number;
-      materialLinks: { materialOptionId: string }[];
-    }[];
-  }) {
-    const materials = sz.materialOptions.map((m) => ({
-      id: m.id,
-      name: m.name,
-      sortOrder: m.sortOrder,
-    }));
-    const colorOptions = sz.colorOptions.map((c) => ({
-      id: c.id,
-      name: c.name,
-      imageUrl: c.imageUrl,
-      sortOrder: c.sortOrder,
-      materialIds: c.materialLinks.map((l) => l.materialOptionId),
-    }));
-    const materialColorOptions = sz.materialOptions.map((m) => ({
-      id: m.id,
-      name: m.name,
-      sortOrder: m.sortOrder,
-      colors: sz.colorOptions
-        .filter((c) => c.materialLinks.some((l) => l.materialOptionId === m.id))
-        .map((c) => ({
-          id: c.id,
-          name: c.name,
-          imageUrl: c.imageUrl,
-          sortOrder: c.sortOrder,
-        })),
-    }));
-    return {
-      id: sz.id,
-      name: sz.name,
-      sizeSlug: sz.sizeSlug,
-      sortOrder: sz.sortOrder,
-      materials,
-      colorOptions,
-      materialColorOptions,
-    };
-  }
-
   async listProductsForAdmin(q?: string) {
     const trim = q?.trim();
     const where: Prisma.ProductWhereInput = trim
@@ -608,11 +253,6 @@ export class CatalogProductAdminService {
             select: {
               price: true,
               currency: true,
-              images: {
-                take: 1,
-                orderBy: { sortOrder: 'asc' },
-                select: { url: true },
-              },
             },
           },
         },
@@ -625,7 +265,7 @@ export class CatalogProductAdminService {
     const byId = new Map(cats.map((c) => [c.id, { name: c.name, parentId: c.parentId }]));
     return rows.map((r) => {
       const dv = r.variants[0];
-      const thumbUrl = r.images[0]?.url ?? dv?.images[0]?.url ?? null;
+      const thumbUrl = r.images[0]?.url ?? null;
       return {
         id: r.id,
         name: r.name,
@@ -685,6 +325,10 @@ export class CatalogProductAdminService {
     return { deleted, skipped };
   }
 
+  /**
+   * Создаёт товар. Варианты не создаёт — их добавляют через
+   * /catalog/admin/products/:id/modifications → /variants.
+   */
   async createProduct(dto: CreateProductAdminDto) {
     const brandIdNorm =
       dto.brandId != null && String(dto.brandId).trim() !== '' ? String(dto.brandId).trim() : null;
@@ -699,13 +343,6 @@ export class CatalogProductAdminService {
     const baseSlug = dto.slug?.trim() ? dto.slug.trim() : slugifyProductBase(dto.name);
     const slug = await this.ensureUniqueProductSlug(baseSlug);
 
-    const skuRaw = dto.sku?.trim();
-    const sku = skuRaw || null;
-    if (sku) {
-      const taken = await this.prisma.productVariant.findUnique({ where: { sku } });
-      if (taken) throw new ConflictException('SKU уже занят');
-    }
-
     this.validateProductMediaAndActiveRules(dto);
 
     const additionalCatIds = this.normalizeAdditionalCategoryIds(
@@ -715,42 +352,12 @@ export class CatalogProductAdminService {
     await this.assertAdditionalCategoriesExist(additionalCatIds);
 
     const gallery = dto.gallery ?? [];
-    const useMaterialColorShell =
-      dto.materialColorOptions !== undefined || dto.sizeOptions !== undefined;
-
-    const colors = (dto.colors ?? []).filter((c) => c.name?.trim() && c.imageUrl?.trim());
-    const materials = (dto.materials ?? []).filter((m) => m.name?.trim());
-    const sizes = (dto.sizes ?? []).filter((s) => s.value?.trim());
-    const labels = [...new Set((dto.labels ?? []).map((l) => l.trim()).filter(Boolean))].slice(0, 40);
-
-    const specsJson: Prisma.InputJsonValue = useMaterialColorShell
-      ? { colors: [], materials: [], sizes: [], labels: [] }
-      : {
-          colors: colors.map((c) => ({ name: c.name.trim(), imageUrl: c.imageUrl.trim() })),
-          materials: materials.map((m) => ({ name: m.name.trim() })),
-          sizes: sizes.map((s) => ({ value: s.value.trim() })),
-          labels,
-        };
 
     const agg = await this.prisma.product.aggregate({
       where: { categoryId: dto.categoryId },
       _max: { sortOrder: true },
     });
     const sortOrder = (agg._max.sortOrder ?? -1) + 1;
-
-    const currency = (dto.currency?.trim().toUpperCase() || 'RUB').slice(0, 8);
-
-    const priceNum = dto.price ?? 0;
-    const priceBlock = await this.variantPricing.resolveVariantPriceForWrite(
-      {
-        price: priceNum,
-        priceMode: dto.priceMode === 'formula' ? 'formula' : 'manual',
-        costPriceCny: dto.costPriceCny ?? null,
-        weightKg: dto.weightKg ?? null,
-        volumeLiters: dto.volumeLiters ?? null,
-      },
-      [dto.categoryId, ...additionalCatIds],
-    );
 
     try {
       const full = await this.prisma.$transaction(async (tx) => {
@@ -769,55 +376,6 @@ export class CatalogProductAdminService {
             seoDescription: dto.seoDescription?.trim() || null,
             isActive: dto.isActive ?? true,
             sortOrder,
-          },
-        });
-
-        const firstSizeId = useMaterialColorShell
-          ? await this.syncSizeMaterialColorOptions(
-              tx,
-              product.id,
-              this.normalizeSizeRowsForCreate(dto),
-            )
-          : (
-              await tx.productSizeOption.create({
-                data: { productId: product.id, name: 'Стандарт', sortOrder: 0 },
-              })
-            ).id;
-
-        const variantSlug = await this.variantAdmin.ensureUniqueVariantSlug(tx, product.id, 'v-0');
-
-        await tx.productVariant.create({
-          data: {
-            productId: product.id,
-            sizeOptionId: firstSizeId,
-            variantSlug,
-            sortOrder: 0,
-            isDefault: true,
-            isActive: true,
-            specsJson,
-            sku,
-            lengthMm: dto.lengthMm ?? null,
-            widthMm: dto.widthMm ?? null,
-            heightMm: dto.heightMm ?? null,
-            volumeLiters: this.variantPricing.normalizeOptionalVolumeM3(dto.volumeLiters),
-            weightKg:
-              dto.weightKg != null && Number.isFinite(dto.weightKg)
-                ? new Prisma.Decimal(dto.weightKg)
-                : null,
-            netLengthMm: dto.netLengthMm ?? null,
-            netWidthMm: dto.netWidthMm ?? null,
-            netHeightMm: dto.netHeightMm ?? null,
-            netVolumeLiters: this.variantPricing.normalizeOptionalVolumeM3(dto.netVolumeLiters),
-            netWeightKg:
-              dto.netWeightKg != null && Number.isFinite(dto.netWeightKg)
-                ? new Prisma.Decimal(dto.netWeightKg)
-                : null,
-            priceMode: priceBlock.priceMode,
-            costPriceCny: priceBlock.costPriceCny,
-            price: priceBlock.price,
-            currency,
-            model3dUrl: dto.model3dUrl?.trim() || null,
-            drawingUrl: dto.drawingUrl?.trim() || null,
           },
         });
 
@@ -860,19 +418,69 @@ export class CatalogProductAdminService {
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError) {
         if (e.code === 'P2002') {
-          throw new ConflictException('Такой slug или SKU уже существует');
+          throw new ConflictException('Такой slug уже существует');
         }
         if (e.code === 'P2003') {
           throw new BadRequestException('Неверная категория или бренд');
         }
-        if (e.code === 'P2022') {
-          throw new BadRequestException(
-            'База данных без новых колонок товара — выполните: npx prisma migrate deploy',
-          );
-        }
       }
       throw e;
     }
+  }
+
+  private formatVariantLabel(v: {
+    variantLabel: string | null;
+    modification: { name: string };
+    elementSelections: {
+      productElement: { name: string };
+      brandMaterialColor: { name: string; brandMaterial: { name: string } };
+    }[];
+  }): string {
+    if (v.variantLabel?.trim()) return v.variantLabel.trim();
+    const mod = v.modification.name.trim();
+    const parts = v.elementSelections.map((s) => {
+      const el = s.productElement.name.trim();
+      const mat = s.brandMaterialColor.brandMaterial.name.trim();
+      const col = s.brandMaterialColor.name.trim();
+      return `${el}: ${mat}/${col}`;
+    });
+    return parts.length ? `${mod} · ${parts.join(', ')}` : mod;
+  }
+
+  private mapVariantSummary(
+    v: {
+      id: string;
+      variantLabel: string | null;
+      price: Prisma.Decimal;
+      currency: string;
+      isActive: boolean;
+      isDefault: boolean;
+      modification: { id: string; name: string };
+      elementSelections: {
+        productElement: { name: string };
+        brandMaterialColor: { name: string; brandMaterial: { name: string } };
+      }[];
+    },
+    productName: string,
+  ) {
+    const displayName = this.formatVariantLabel(v) || productName;
+    return {
+      id: v.id,
+      displayName,
+      price: v.price.toString(),
+      currency: v.currency,
+      isActive: v.isActive,
+      isDefault: v.isDefault,
+      modificationId: v.modification.id,
+      modificationLabel: v.modification.name,
+      selectionsLabel:
+        v.elementSelections
+          .map(
+            (s) =>
+              `${s.productElement.name}: ${s.brandMaterialColor.brandMaterial.name}/${s.brandMaterialColor.name}`,
+          )
+          .join(' · ') || null,
+    };
   }
 
   async getProductForAdmin(id: string) {
@@ -880,25 +488,43 @@ export class CatalogProductAdminService {
       where: { id },
       include: {
         images: { orderBy: { sortOrder: 'asc' } },
-        sizeOptions: {
-          orderBy: { sortOrder: 'asc' },
-          include: {
-            materialOptions: { orderBy: { sortOrder: 'asc' } },
-            colorOptions: {
-              orderBy: { sortOrder: 'asc' },
-              include: { materialLinks: true },
-            },
-          },
-        },
         category: { select: { id: true, name: true } },
         brand: { select: { id: true, name: true } },
         productCategories: { select: { categoryId: true } },
+        modifications: {
+          orderBy: { sortOrder: 'asc' },
+        },
+        elements: {
+          orderBy: { sortOrder: 'asc' },
+          include: {
+            availabilities: {
+              orderBy: { sortOrder: 'asc' },
+              include: {
+                brandMaterialColor: {
+                  select: {
+                    id: true,
+                    name: true,
+                    imageUrl: true,
+                    sortOrder: true,
+                    brandMaterial: { select: { id: true, name: true } },
+                  },
+                },
+              },
+            },
+          },
+        },
         variants: {
           orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
           include: {
-            sizeOption: { select: { name: true } },
-            materialOption: { select: { name: true } },
-            colorOption: { select: { name: true } },
+            modification: { select: { id: true, name: true } },
+            elementSelections: {
+              include: {
+                productElement: { select: { name: true } },
+                brandMaterialColor: {
+                  select: { name: true, brandMaterial: { select: { name: true } } },
+                },
+              },
+            },
           },
         },
       },
@@ -931,7 +557,24 @@ export class CatalogProductAdminService {
         alt: i.alt,
         sortOrder: i.sortOrder,
       })),
-      sizeOptions: row.sizeOptions.map((sz) => this.mapSizeOptionForAdmin(sz)),
+      modifications: row.modifications.map((m) => ({
+        id: m.id,
+        name: m.name,
+        modificationSlug: m.modificationSlug,
+        sortOrder: m.sortOrder,
+      })),
+      elements: row.elements.map((el) => ({
+        id: el.id,
+        name: el.name,
+        sortOrder: el.sortOrder,
+        availabilities: el.availabilities.map((a) => ({
+          brandMaterialColorId: a.brandMaterialColor.id,
+          sortOrder: a.sortOrder,
+          materialName: a.brandMaterialColor.brandMaterial.name,
+          colorName: a.brandMaterialColor.name,
+          imageUrl: a.brandMaterialColor.imageUrl,
+        })),
+      })),
       additionalInfoHtml: row.additionalInfoHtml,
       deliveryText: row.deliveryText,
       technicalSpecs: row.technicalSpecs,
@@ -939,7 +582,7 @@ export class CatalogProductAdminService {
       seoDescription: row.seoDescription,
       category: row.category,
       brand: row.brand,
-      variants: row.variants.map((v) => this.mapVariantAdminSummary(v, row.name)),
+      variants: row.variants.map((v) => this.mapVariantSummary(v, row.name)),
     };
   }
 
@@ -963,7 +606,7 @@ export class CatalogProductAdminService {
       nextSlug = await this.ensureUniqueProductSlugExcept(slugTrim, id);
     }
 
-    this.validateProductMediaAndActiveRules(dto as unknown as CreateProductAdminDto);
+    this.validateProductMediaAndActiveRules(dto);
 
     const additionalCatIds = this.normalizeAdditionalCategoryIds(
       dto.categoryId,
@@ -1008,11 +651,8 @@ export class CatalogProductAdminService {
     }
 
     try {
-      const full = await this.prisma.$transaction(async (tx) => {
-        await tx.product.update({
-          where: { id },
-          data,
-        });
+      await this.prisma.$transaction(async (tx) => {
+        await tx.product.update({ where: { id }, data });
 
         await tx.productCategory.deleteMany({ where: { productId: id } });
         if (additionalCatIds.length) {
@@ -1031,119 +671,6 @@ export class CatalogProductAdminService {
         if (dto.gallery !== undefined) {
           await this.syncProductGallery(tx, id, dto.gallery);
         }
-        if (dto.sizeOptions !== undefined) {
-          await this.syncSizeMaterialColorOptions(tx, id, dto.sizeOptions);
-        } else if (dto.materialColorOptions !== undefined) {
-          const existing = await tx.productSizeOption.findMany({
-            where: { productId: id },
-            orderBy: { sortOrder: 'asc' },
-            include: {
-              materialOptions: { orderBy: { sortOrder: 'asc' } },
-              colorOptions: {
-                orderBy: { sortOrder: 'asc' },
-                include: { materialLinks: true },
-              },
-            },
-          });
-          const mat = dto.materialColorOptions ?? [];
-          const rows: ProductSizeOptionShellDto[] =
-            existing.length === 0
-              ? [
-                  {
-                    name: 'Стандарт',
-                    sortOrder: 0,
-                    sizeSlug: null,
-                    materials: mat.map((m, mi) => ({
-                      ...(m.id ? { id: m.id } : {}),
-                      name: m.name,
-                      sortOrder: m.sortOrder ?? mi,
-                    })),
-                    colorOptions: mat.flatMap((m, mi) =>
-                      (m.colors ?? []).map((c, ci) => ({
-                        ...(c.id ? { id: c.id } : {}),
-                        name: c.name,
-                        imageUrl: c.imageUrl,
-                        sortOrder: c.sortOrder ?? ci,
-                        materialIds: m.id ? [m.id] : [],
-                        materialIndex: m.id ? undefined : mi,
-                      })),
-                    ),
-                  },
-                ]
-              : existing.map((s, i) =>
-                  i === 0
-                    ? {
-                        id: s.id,
-                        name: s.name,
-                        sortOrder: s.sortOrder,
-                        sizeSlug: s.sizeSlug,
-                        materials: mat.map((m, mi) => ({
-                          ...(m.id ? { id: m.id } : {}),
-                          name: m.name,
-                          sortOrder: m.sortOrder ?? mi,
-                        })),
-                        colorOptions: mat.flatMap((m, mi) =>
-                          (m.colors ?? []).map((c, ci) => ({
-                            ...(c.id ? { id: c.id } : {}),
-                            name: c.name,
-                            imageUrl: c.imageUrl,
-                            sortOrder: c.sortOrder ?? ci,
-                            materialIds: m.id ? [m.id] : [],
-                            materialIndex: m.id ? undefined : mi,
-                          })),
-                        ),
-                      }
-                    : {
-                        id: s.id,
-                        name: s.name,
-                        sortOrder: s.sortOrder,
-                        sizeSlug: s.sizeSlug,
-                        materials: s.materialOptions.map((m) => ({
-                          id: m.id,
-                          name: m.name,
-                          sortOrder: m.sortOrder,
-                        })),
-                        colorOptions: s.colorOptions.map((c) => ({
-                          id: c.id,
-                          name: c.name,
-                          imageUrl: c.imageUrl,
-                          sortOrder: c.sortOrder,
-                          materialIds: c.materialLinks.map((l) => l.materialOptionId),
-                        })),
-                      },
-                );
-          await this.syncSizeMaterialColorOptions(tx, id, rows);
-        }
-
-        const row = await tx.product.findUnique({
-          where: { id },
-          include: {
-            images: { orderBy: { sortOrder: 'asc' } },
-            sizeOptions: {
-              orderBy: { sortOrder: 'asc' },
-              include: {
-                materialOptions: { orderBy: { sortOrder: 'asc' } },
-                colorOptions: {
-                  orderBy: { sortOrder: 'asc' },
-                  include: { materialLinks: true },
-                },
-              },
-            },
-            category: true,
-            brand: true,
-            productCategories: { select: { categoryId: true } },
-            variants: {
-              orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
-              include: {
-                sizeOption: { select: { name: true } },
-                materialOption: { select: { name: true } },
-                colorOption: { select: { name: true } },
-              },
-            },
-          },
-        });
-        if (!row) throw new BadRequestException('Не удалось прочитать товар после сохранения');
-        return row;
       });
       void this.productSearchIndex.syncProduct(id);
       if (removedGalleryUrls.length) {
@@ -1155,43 +682,7 @@ export class CatalogProductAdminService {
             ),
           );
       }
-      const [colLinks, setLinks] = await Promise.all([
-        this.prisma.curatedCollectionProductItem.findMany({
-          where: { productId: id },
-          select: { collectionId: true },
-        }),
-        this.prisma.curatedProductSetItem.findMany({
-          where: { productId: id },
-          select: { setId: true },
-        }),
-      ]);
-      return {
-        id: full.id,
-        slug: full.slug,
-        name: full.name,
-        categoryId: full.categoryId,
-        additionalCategoryIds: full.productCategories.map((p) => p.categoryId),
-        curatedCollectionIds: colLinks.map((r) => r.collectionId),
-        curatedProductSetIds: setLinks.map((r) => r.setId),
-        brandId: full.brandId,
-        shortDescription: full.shortDescription,
-        isActive: full.isActive,
-        images: full.images.map((i) => ({
-          id: i.id,
-          url: i.url,
-          alt: i.alt,
-          sortOrder: i.sortOrder,
-        })),
-        sizeOptions: full.sizeOptions.map((sz) => this.mapSizeOptionForAdmin(sz)),
-        additionalInfoHtml: full.additionalInfoHtml,
-        deliveryText: full.deliveryText,
-        technicalSpecs: full.technicalSpecs,
-        seoTitle: full.seoTitle,
-        seoDescription: full.seoDescription,
-        category: full.category,
-        brand: full.brand,
-        variants: full.variants.map((v) => this.mapVariantAdminSummary(v, full.name)),
-      };
+      return this.getProductForAdmin(id);
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError) {
         if (e.code === 'P2002') {
@@ -1200,13 +691,18 @@ export class CatalogProductAdminService {
         if (e.code === 'P2003') {
           throw new BadRequestException('Неверная категория или бренд');
         }
-        if (e.code === 'P2022') {
-          throw new BadRequestException(
-            'База данных без новых колонок товара — выполните: npx prisma migrate deploy',
-          );
-        }
       }
       throw e;
     }
+  }
+
+  /** Использовано в preview-формул — по FORMULA-вариантам. */
+  resolveVariantFormulaMode(mode: string | null | undefined): ProductPriceMode {
+    return mode === 'formula' ? ProductPriceMode.FORMULA : ProductPriceMode.MANUAL;
+  }
+
+  /** Проксирование на variantAdmin для обратной совместимости контроллера. */
+  get variantsAdmin() {
+    return this.variantAdmin;
   }
 }

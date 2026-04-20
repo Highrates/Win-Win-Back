@@ -7,7 +7,6 @@ import {
   IsIn,
   IsInt,
   IsNumber,
-  IsObject,
   IsOptional,
   IsString,
   Max,
@@ -90,17 +89,12 @@ export class UpdateCategoryAdminDto {
   @Max(999999)
   sortOrder?: number;
 
-  /**
-   * Обложка: непустой URL, или null чтобы убрать.
-   * Не передавайте поле, если не меняете.
-   */
   @IsOptional()
   @ValidateIf((_, v) => v !== undefined && v !== null && String(v).trim() !== '')
   @IsString()
   @MinLength(1)
   backgroundImageUrl?: string | null;
 
-  /** Вместе с непустым backgroundImageUrl — связь с MediaObject; null при снятии обложки. */
   @IsOptional()
   @ValidateIf((_, v) => v !== undefined && v !== null && String(v).trim() !== '')
   @IsString()
@@ -244,7 +238,6 @@ export class ReorderCategoriesDto {
 }
 
 export class ProductGalleryItemDto {
-  /** Сохранение id при PATCH — чтобы ссылки вариантов на кадры не ломались. */
   @IsOptional()
   @IsString()
   id?: string;
@@ -260,8 +253,11 @@ export class ProductGalleryItemDto {
   alt?: string | null;
 }
 
-/** Цвет внутри материала (legacy nested в materialColorOptions при создании товара). */
-export class ProductColorOptionShellDto {
+/* ------------------------------------------------------------------ *
+ *  Brand materials / colors (библиотека материалов бренда)
+ * ------------------------------------------------------------------ */
+
+export class UpsertBrandMaterialColorDto {
   @IsOptional()
   @IsString()
   id?: string;
@@ -271,73 +267,18 @@ export class ProductColorOptionShellDto {
   @MaxLength(200)
   name!: string;
 
+  @IsOptional()
+  @ValidateIf((_, v) => v != null && String(v).trim() !== '')
   @IsString()
-  @MinLength(1)
   @MaxLength(2048)
-  imageUrl!: string;
+  imageUrl?: string | null;
 
   @IsInt()
   @Min(0)
   sortOrder!: number;
 }
 
-/** Цвет в размере; materialIds — id материала на сервере или ref из той же заявки. */
-export class ProductColorOptionWithMaterialsShellDto {
-  @IsOptional()
-  @IsString()
-  id?: string;
-
-  @IsString()
-  @MinLength(1)
-  @MaxLength(200)
-  name!: string;
-
-  @IsString()
-  @MinLength(1)
-  @MaxLength(2048)
-  imageUrl!: string;
-
-  @IsInt()
-  @Min(0)
-  sortOrder!: number;
-
-  @IsOptional()
-  @IsArray()
-  @IsString({ each: true })
-  @ArrayMaxSize(40)
-  materialIds?: string[];
-
-  /** Только для разбора legacy nested materialColorOptions без id у материалов. */
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  materialIndex?: number;
-}
-
-/** Материал внутри размера. */
-export class ProductMaterialOptionShellDto {
-  @IsOptional()
-  @IsString()
-  id?: string;
-
-  /** Ключ строки в форме (совпадает с color.materialIds при первом сохранении). */
-  @IsOptional()
-  @IsString()
-  @MaxLength(64)
-  ref?: string;
-
-  @IsString()
-  @MinLength(1)
-  @MaxLength(200)
-  name!: string;
-
-  @IsInt()
-  @Min(0)
-  sortOrder!: number;
-}
-
-/** Legacy: материал с вложенными цветами (только deprecated materialColorOptions в CreateProduct). */
-export class ProductMaterialOptionShellLegacyDto {
+export class UpsertBrandMaterialDto {
   @IsOptional()
   @IsString()
   id?: string;
@@ -352,14 +293,25 @@ export class ProductMaterialOptionShellLegacyDto {
   sortOrder!: number;
 
   @IsArray()
-  @ArrayMaxSize(80)
+  @ArrayMaxSize(200)
   @ValidateNested({ each: true })
-  @Type(() => ProductColorOptionShellDto)
-  colors!: ProductColorOptionShellDto[];
+  @Type(() => UpsertBrandMaterialColorDto)
+  colors!: UpsertBrandMaterialColorDto[];
 }
 
-/** Размер товара: материалы и цвета отдельно (цвет может ссылаться на несколько материалов). */
-export class ProductSizeOptionShellDto {
+export class UpdateBrandMaterialsAdminDto {
+  @IsArray()
+  @ArrayMaxSize(120)
+  @ValidateNested({ each: true })
+  @Type(() => UpsertBrandMaterialDto)
+  materials!: UpsertBrandMaterialDto[];
+}
+
+/* ------------------------------------------------------------------ *
+ *  Модификации / элементы товара
+ * ------------------------------------------------------------------ */
+
+export class UpsertProductModificationDto {
   @IsOptional()
   @IsString()
   id?: string;
@@ -372,71 +324,83 @@ export class ProductSizeOptionShellDto {
   @IsOptional()
   @IsString()
   @MaxLength(120)
-  sizeSlug?: string | null;
+  modificationSlug?: string | null;
+
+  @IsInt()
+  @Min(0)
+  sortOrder!: number;
+}
+
+/** Пересобрать модификации товара целиком (id → сохранить, без id → создать, отсутствующие — удалить). */
+export class UpdateProductModificationsDto {
+  @IsArray()
+  @ArrayMaxSize(60)
+  @ValidateNested({ each: true })
+  @Type(() => UpsertProductModificationDto)
+  modifications!: UpsertProductModificationDto[];
+}
+
+export class UpsertProductElementAvailabilityDto {
+  @IsString()
+  @MinLength(1)
+  brandMaterialColorId!: string;
+
+  @IsInt()
+  @Min(0)
+  sortOrder!: number;
+}
+
+export class UpsertProductElementDto {
+  @IsOptional()
+  @IsString()
+  id?: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  name!: string;
 
   @IsInt()
   @Min(0)
   sortOrder!: number;
 
+  /** Пул «материал-цветов» бренда, доступных для выбора в варианте. */
+  @IsArray()
+  @ArrayMaxSize(400)
+  @ValidateNested({ each: true })
+  @Type(() => UpsertProductElementAvailabilityDto)
+  availabilities!: UpsertProductElementAvailabilityDto[];
+}
+
+export class UpdateProductElementsDto {
   @IsArray()
   @ArrayMaxSize(40)
   @ValidateNested({ each: true })
-  @Type(() => ProductMaterialOptionShellDto)
-  materials!: ProductMaterialOptionShellDto[];
-
-  @IsArray()
-  @ArrayMaxSize(120)
-  @ValidateNested({ each: true })
-  @Type(() => ProductColorOptionWithMaterialsShellDto)
-  colorOptions!: ProductColorOptionWithMaterialsShellDto[];
+  @Type(() => UpsertProductElementDto)
+  elements!: UpsertProductElementDto[];
 }
 
-export class ProductColorSpecDto {
-  @IsString()
-  @MinLength(1)
-  @MaxLength(160)
-  name!: string;
-
-  @IsString()
-  @MinLength(1)
-  @MaxLength(2048)
-  imageUrl!: string;
-}
-
-export class ProductMaterialSpecDto {
-  @IsString()
-  @MinLength(1)
-  @MaxLength(200)
-  name!: string;
-}
-
-export class ProductSizeSpecDto {
-  @IsString()
-  @MinLength(1)
-  @MaxLength(200)
-  value!: string;
-}
+/* ------------------------------------------------------------------ *
+ *  Товар (без размеров/материалов/цветов — всё через модификации)
+ * ------------------------------------------------------------------ */
 
 export class CreateProductAdminDto {
   @IsString()
   @MinLength(1)
   categoryId!: string;
 
-  /** Дополнительные категории (основная — categoryId). */
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(24)
   @IsString({ each: true })
   additionalCategoryIds?: string[];
 
-  /** Коллекции типа «товары», в которых состоит товар. */
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(80)
   @IsString({ each: true })
   curatedCollectionIds?: string[];
 
-  /** Наборы, в которых состоит товар. */
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(80)
@@ -473,50 +437,6 @@ export class CreateProductAdminDto {
   gallery?: ProductGalleryItemDto[];
 
   @IsOptional()
-  @IsArray()
-  @ArrayMaxSize(24)
-  @ValidateNested({ each: true })
-  @Type(() => ProductColorSpecDto)
-  colors?: ProductColorSpecDto[];
-
-  @IsOptional()
-  @IsArray()
-  @ArrayMaxSize(40)
-  @ValidateNested({ each: true })
-  @Type(() => ProductMaterialSpecDto)
-  materials?: ProductMaterialSpecDto[];
-
-  @IsOptional()
-  @IsArray()
-  @ArrayMaxSize(40)
-  @ValidateNested({ each: true })
-  @Type(() => ProductSizeSpecDto)
-  sizes?: ProductSizeSpecDto[];
-
-  /** @deprecated Предпочтительно `sizeOptions` (один уровень — размеры). */
-  @IsOptional()
-  @IsArray()
-  @ArrayMaxSize(40)
-  @ValidateNested({ each: true })
-  @Type(() => ProductMaterialOptionShellLegacyDto)
-  materialColorOptions?: ProductMaterialOptionShellLegacyDto[];
-
-  /** Размеры; внутри — материалы и цвета. Если не задано, но есть `materialColorOptions` — один размер «Стандарт». */
-  @IsOptional()
-  @IsArray()
-  @ArrayMaxSize(24)
-  @ValidateNested({ each: true })
-  @Type(() => ProductSizeOptionShellDto)
-  sizeOptions?: ProductSizeOptionShellDto[];
-
-  @IsOptional()
-  @IsArray()
-  @ArrayMaxSize(40)
-  @IsString({ each: true })
-  @MaxLength(80, { each: true })
-  labels?: string[];
-
-  @IsOptional()
   @IsString()
   @MaxLength(20000)
   deliveryText?: string | null;
@@ -531,80 +451,6 @@ export class CreateProductAdminDto {
   @MaxLength(500000)
   additionalInfoHtml?: string | null;
 
-  /** URL 3D-модели (медиатека / своё хранилище). */
-  @IsOptional()
-  @ValidateIf((_, v) => v !== undefined && v !== null && String(v).trim() !== '')
-  @IsString()
-  @MinLength(1)
-  @MaxLength(2048)
-  model3dUrl?: string | null;
-
-  /** URL чертежа (PDF и т.п.). */
-  @IsOptional()
-  @ValidateIf((_, v) => v !== undefined && v !== null && String(v).trim() !== '')
-  @IsString()
-  @MinLength(1)
-  @MaxLength(2048)
-  drawingUrl?: string | null;
-
-  @IsOptional()
-  @ValidateIf((_, v) => v != null && String(v).trim() !== '')
-  @IsString()
-  @MaxLength(120)
-  sku?: string | null;
-
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  lengthMm?: number | null;
-
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  widthMm?: number | null;
-
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  heightMm?: number | null;
-
-  /** Объём брутто в м³ (задаётся вручную в админке). */
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  volumeLiters?: number | null;
-
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  weightKg?: number | null;
-
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  netLengthMm?: number | null;
-
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  netWidthMm?: number | null;
-
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  netHeightMm?: number | null;
-
-  /** Объём нетто в м³ (вручную). */
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  netVolumeLiters?: number | null;
-
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  netWeightKg?: number | null;
-
   @IsOptional()
   @IsString()
   @MaxLength(500)
@@ -615,33 +461,12 @@ export class CreateProductAdminDto {
   @MaxLength(2000)
   seoDescription?: string | null;
 
-  /** Цена дефолтного варианта; по умолчанию 0 — задаётся в карточке варианта. */
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  price?: number;
-
-  @IsOptional()
-  @IsString()
-  @IsIn(['manual', 'formula'])
-  priceMode?: 'manual' | 'formula';
-
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  costPriceCny?: number | null;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(8)
-  currency?: string;
-
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
 }
 
-/** PATCH товара: общие поля без варианта (цена, SKU, габариты — в варианте). */
+/** PATCH общих полей товара (без вариантов/модификаций — для них отдельные ручки). */
 export class UpdateProductShellAdminDto {
   @IsString()
   @MinLength(1)
@@ -722,25 +547,36 @@ export class UpdateProductShellAdminDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+}
 
-  /** @deprecated Предпочтительно `sizeOptions`. */
+/* ------------------------------------------------------------------ *
+ *  Варианты товара (Модификация + selection «элемент → brandMaterialColor»)
+ * ------------------------------------------------------------------ */
+
+export class VariantElementSelectionDto {
+  @IsString()
+  @MinLength(1)
+  productElementId!: string;
+
+  @IsString()
+  @MinLength(1)
+  brandMaterialColorId!: string;
+}
+
+export class CreateProductVariantAdminDto {
+  @IsString()
+  @MinLength(1)
+  modificationId!: string;
+
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(40)
   @ValidateNested({ each: true })
-  @Type(() => ProductMaterialOptionShellLegacyDto)
-  materialColorOptions?: ProductMaterialOptionShellLegacyDto[];
-
-  /** Размеры и вложенные материалы/цвета; при отсутствии поля — не менять. */
-  @IsOptional()
-  @IsArray()
-  @ArrayMaxSize(24)
-  @ValidateNested({ each: true })
-  @Type(() => ProductSizeOptionShellDto)
-  sizeOptions?: ProductSizeOptionShellDto[];
+  @Type(() => VariantElementSelectionDto)
+  selections?: VariantElementSelectionDto[];
 }
 
-/** PATCH варианта товара. */
+/** PATCH варианта — все бизнес-поля. */
 export class UpdateProductVariantAdminDto {
   @IsOptional()
   @IsString()
@@ -753,64 +589,23 @@ export class UpdateProductVariantAdminDto {
   variantSlug?: string | null;
 
   @IsOptional()
-  @ValidateIf((_, v) => v != null && v !== '')
   @IsString()
-  sizeOptionId?: string | null;
+  modificationId?: string;
 
+  /** Полный список selection (по одной строке на элемент модификации). */
   @IsOptional()
-  @ValidateIf((_, v) => v != null && v !== '')
-  @IsString()
-  materialOptionId?: string | null;
+  @IsArray()
+  @ArrayMaxSize(40)
+  @ValidateNested({ each: true })
+  @Type(() => VariantElementSelectionDto)
+  selections?: VariantElementSelectionDto[];
 
-  @IsOptional()
-  @ValidateIf((_, v) => v != null && v !== '')
-  @IsString()
-  colorOptionId?: string | null;
-
+  /** Кадры варианта — подмножество ProductImage (по id). */
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(40)
   @IsString({ each: true })
   galleryProductImageIds?: string[];
-
-  @IsOptional()
-  @IsObject()
-  optionAttributes?: Record<string, string>;
-
-  @IsOptional()
-  @IsArray()
-  @ArrayMaxSize(40)
-  @ValidateNested({ each: true })
-  @Type(() => ProductGalleryItemDto)
-  gallery?: ProductGalleryItemDto[];
-
-  @IsOptional()
-  @IsArray()
-  @ArrayMaxSize(24)
-  @ValidateNested({ each: true })
-  @Type(() => ProductColorSpecDto)
-  colors?: ProductColorSpecDto[];
-
-  @IsOptional()
-  @IsArray()
-  @ArrayMaxSize(40)
-  @ValidateNested({ each: true })
-  @Type(() => ProductMaterialSpecDto)
-  materials?: ProductMaterialSpecDto[];
-
-  @IsOptional()
-  @IsArray()
-  @ArrayMaxSize(40)
-  @ValidateNested({ each: true })
-  @Type(() => ProductSizeSpecDto)
-  sizes?: ProductSizeSpecDto[];
-
-  @IsOptional()
-  @IsArray()
-  @ArrayMaxSize(40)
-  @IsString({ each: true })
-  @MaxLength(80, { each: true })
-  labels?: string[];
 
   @IsOptional()
   @ValidateIf((_, v) => v != null && String(v).trim() !== '')

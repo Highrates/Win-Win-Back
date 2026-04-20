@@ -12,8 +12,12 @@ import {
   CreateBrandAdminDto,
   CreateCategoryAdminDto,
   CreateProductAdminDto,
+  CreateProductVariantAdminDto,
   UpdateBrandAdminDto,
+  UpdateBrandMaterialsAdminDto,
   UpdateCategoryAdminDto,
+  UpdateProductElementsDto,
+  UpdateProductModificationsDto,
   UpdateProductShellAdminDto,
   UpdateProductVariantAdminDto,
 } from './dto/catalog-admin.dto';
@@ -21,6 +25,8 @@ import { slugifyBase } from './slug-transliteration';
 import { CatalogProductAdminService } from './catalog-product-admin.service';
 import { CatalogVariantAdminService } from './catalog-variant-admin.service';
 import { CatalogVariantPricingService } from './catalog-variant-pricing.service';
+import { BrandMaterialsAdminService } from './brand-materials-admin.service';
+import { ProductStructureAdminService } from './product-structure-admin.service';
 
 @Injectable()
 export class CatalogAdminService {
@@ -31,6 +37,8 @@ export class CatalogAdminService {
     private readonly productAdmin: CatalogProductAdminService,
     private readonly variantAdmin: CatalogVariantAdminService,
     private readonly variantPricing: CatalogVariantPricingService,
+    private readonly brandMaterials: BrandMaterialsAdminService,
+    private readonly productStructure: ProductStructureAdminService,
   ) {}
 
   private normUrl(u: string): string {
@@ -690,8 +698,8 @@ export class CatalogAdminService {
     return this.variantAdmin.updateProductVariant(productId, variantId, dto);
   }
 
-  async createProductVariant(productId: string) {
-    return this.variantAdmin.createProductVariant(productId);
+  async createProductVariant(productId: string, dto: CreateProductVariantAdminDto) {
+    return this.variantAdmin.createProductVariant(productId, dto);
   }
 
   async deleteProductVariant(productId: string, variantId: string) {
@@ -700,5 +708,21 @@ export class CatalogAdminService {
 
   async recalculateAllFormulaProductPrices() {
     return this.variantPricing.recalculateAllFormulaProductPrices();
+  }
+
+  async listBrandMaterials(brandId: string) {
+    return this.brandMaterials.listForBrand(brandId);
+  }
+
+  async updateBrandMaterials(brandId: string, dto: UpdateBrandMaterialsAdminDto) {
+    return this.brandMaterials.replace(brandId, dto);
+  }
+
+  async updateProductModifications(productId: string, dto: UpdateProductModificationsDto) {
+    return this.productStructure.updateModifications(productId, dto);
+  }
+
+  async updateProductElements(productId: string, dto: UpdateProductElementsDto) {
+    return this.productStructure.updateElements(productId, dto);
   }
 }

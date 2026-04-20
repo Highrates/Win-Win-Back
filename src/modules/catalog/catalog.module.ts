@@ -9,6 +9,8 @@ import { CatalogVariantPricingService } from './catalog-variant-pricing.service'
 import { CuratedCollectionsAdminService } from './curated-collections-admin.service';
 import { ProductSetsAdminService } from './product-sets-admin.service';
 import { PricingAdminService } from './pricing-admin.service';
+import { BrandMaterialsAdminService } from './brand-materials-admin.service';
+import { ProductStructureAdminService } from './product-structure-admin.service';
 import { StorageModule } from '../storage/storage.module';
 import { MediaLibraryModule } from '../media-library/media-library.module';
 
@@ -23,6 +25,8 @@ import { MediaLibraryModule } from '../media-library/media-library.module';
     CuratedCollectionsAdminService,
     ProductSetsAdminService,
     PricingAdminService,
+    BrandMaterialsAdminService,
+    ProductStructureAdminService,
   ],
   controllers: [CatalogController, CatalogAdminController],
   exports: [CatalogService, StorageModule],

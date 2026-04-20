@@ -123,6 +123,40 @@ model Brand {
   products Product[]
   curatedCollectionBrandItems CuratedCollectionBrandItem[]
   curatedProductSets       CuratedProductSet[]
+  /// Библиотека материалов бренда (используется в модификациях товаров этого бренда).
+  materials BrandMaterial[]
+}
+
+/// Материал бренда (группа в библиотеке «Материалы → Цвета»).
+model BrandMaterial {
+  id        String   @id @default(cuid())
+  brandId   String
+  brand     Brand    @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  name      String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  colors BrandMaterialColor[]
+
+  @@index([brandId])
+}
+
+/// Конкретный цвет материала бренда (ключевая сущность выбора в варианте).
+model BrandMaterialColor {
+  id              String        @id @default(cuid())
+  brandMaterialId String
+  brandMaterial   BrandMaterial @relation(fields: [brandMaterialId], references: [id], onDelete: Cascade)
+  name            String
+  imageUrl        String?
+  sortOrder       Int           @default(0)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  elementAvailabilities ProductElementMaterialColor[]
+  variantSelections     ProductVariantElementSelection[]
+
+  @@index([brandMaterialId])
 }
 
 // --- Каталог (категории/подкатегории по parentId) ---
@@ -245,61 +279,54 @@ model Product {
   productCategories ProductCategory[]
   curatedCollectionProductItems CuratedCollectionProductItem[]
   curatedProductSetItems      CuratedProductSetItem[]
-  sizeOptions                 ProductSizeOption[]
+  modifications    ProductModification[]
+  elements         ProductElement[]
 }
 
-/// Размер / конфигурация товара; материалы и цвета задаются внутри размера.
-model ProductSizeOption {
-  id        String   @id @default(cuid())
-  productId String
-  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-  name      String
-  /// Сегмент URL: /product/{slug}?sz={sizeSlug}
-  sizeSlug  String?
-  sortOrder Int      @default(0)
-  materialOptions ProductMaterialOption[]
-  colorOptions    ProductColorOption[]
-  variants        ProductVariant[] @relation("VariantSizeOption")
+/// Модификация товара (размер/конфигурация). Простой товар может иметь одну модификацию без элементов.
+model ProductModification {
+  id               String  @id @default(cuid())
+  productId        String
+  product          Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  /// Подпись (пример: «2000x800 — большой угловой диван»).
+  name             String
+  /// Сегмент URL: /product/{slug}?m={modificationSlug}
+  modificationSlug String?
+  sortOrder        Int     @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  variants ProductVariant[]
 
   @@index([productId])
 }
 
-/// Материал на карточке товара (группа на витрине).
-model ProductMaterialOption {
-  id        String   @id @default(cuid())
-  sizeOptionId String
-  sizeOption   ProductSizeOption @relation(fields: [sizeOptionId], references: [id], onDelete: Cascade)
+/// Настраиваемый элемент товара (обивка, ножки, корпус, фасад …). Общий пул на товар — используется всеми модификациями.
+model ProductElement {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
   name      String
-  sortOrder Int      @default(0)
-  colorLinks ProductColorMaterial[]
-  variants  ProductVariant[] @relation("VariantMaterialOption")
+  sortOrder Int     @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  @@index([sizeOptionId])
+  availabilities    ProductElementMaterialColor[]
+  variantSelections ProductVariantElementSelection[]
+
+  @@index([productId])
 }
 
-/// Связь «цвет ↔ материал» внутри размера (один цвет может быть доступен для нескольких материалов).
-model ProductColorMaterial {
-  colorOptionId    String
-  materialOptionId String
-  colorOption      ProductColorOption @relation(fields: [colorOptionId], references: [id], onDelete: Cascade)
-  materialOption   ProductMaterialOption @relation(fields: [materialOptionId], references: [id], onDelete: Cascade)
+/// Пул доступных «материал-цветов» (из библиотеки бренда) для конкретного элемента.
+model ProductElementMaterialColor {
+  productElementId     String
+  brandMaterialColorId String
+  sortOrder            Int @default(0)
+  productElement       ProductElement     @relation(fields: [productElementId], references: [id], onDelete: Cascade)
+  brandMaterialColor   BrandMaterialColor @relation(fields: [brandMaterialColorId], references: [id], onDelete: Cascade)
 
-  @@id([colorOptionId, materialOptionId])
-  @@index([materialOptionId])
-}
-
-/// Цвет на карточке товара (в размере); привязка к материалам — через ProductColorMaterial.
-model ProductColorOption {
-  id           String   @id @default(cuid())
-  sizeOptionId String
-  sizeOption   ProductSizeOption @relation(fields: [sizeOptionId], references: [id], onDelete: Cascade)
-  name         String
-  imageUrl     String
-  sortOrder    Int      @default(0)
-  materialLinks ProductColorMaterial[]
-  variants      ProductVariant[] @relation("VariantColorOption")
-
-  @@index([sizeOptionId])
+  @@id([productElementId, brandMaterialColorId])
+  @@index([brandMaterialColorId])
 }
 
 /// Кадры варианта — подмножество ProductImage (порядок в sortOrder).
@@ -314,67 +341,65 @@ model ProductVariantProductImage {
   @@index([variantId])
 }
 
-/// Вариант товара (SKU): цена, габариты, артикул, опции; минимум один на Product.
+/// Вариант товара (SKU): цена, габариты, артикул; ровно одна модификация + по одной «материал-цвет» на элемент.
 model ProductVariant {
-  id          String   @id @default(cuid())
-  productId   String
-  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-  sortOrder   Int      @default(0)
-  isDefault   Boolean  @default(false)
-  isActive    Boolean  @default(true)
-  /// Подпись варианта в админке и на PDP (не путать с названием товара).
-  variantLabel String?
+  id             String   @id @default(cuid())
+  productId      String
+  product        Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  modificationId String
+  modification   ProductModification @relation(fields: [modificationId], references: [id], onDelete: Restrict)
+  sortOrder      Int      @default(0)
+  isDefault      Boolean  @default(false)
+  isActive       Boolean  @default(true)
+  /// Подпись варианта в админке и на PDP. Авто-генерация на сервере, если не задано (размер + selections).
+  variantLabel   String?
   /// Сегмент URL: /product/{productSlug}?vs={variantSlug}
-  variantSlug  String?
-  sizeOptionId String?
-  sizeOption   ProductSizeOption? @relation("VariantSizeOption", fields: [sizeOptionId], references: [id], onDelete: Restrict)
-  materialOptionId String?
-  materialOption   ProductMaterialOption? @relation("VariantMaterialOption", fields: [materialOptionId], references: [id], onDelete: SetNull)
-  colorOptionId    String?
-  colorOption      ProductColorOption? @relation("VariantColorOption", fields: [colorOptionId], references: [id], onDelete: SetNull)
-  /// Для переключателя на PDP: { "color": "Дуб", "material": "МДФ" } — дубль имён при наличии FK.
-  optionAttributes Json?
-  /// colors[], materials[], sizes[], labels[]
-  specsJson   Json?
-  sku         String?  @unique
-  lengthMm   Int?
-  widthMm    Int?
-  heightMm   Int?
-  volumeLiters Decimal? @db.Decimal(12, 4)
+  variantSlug    String?
+  sku            String?  @unique
+  lengthMm       Int?
+  widthMm        Int?
+  heightMm       Int?
+  volumeLiters   Decimal? @db.Decimal(12, 4)
   weightKg       Decimal? @db.Decimal(12, 4)
-  netLengthMm   Int?
-  netWidthMm    Int?
-  netHeightMm   Int?
+  netLengthMm    Int?
+  netWidthMm     Int?
+  netHeightMm    Int?
   netVolumeLiters Decimal? @db.Decimal(12, 4)
   netWeightKg     Decimal? @db.Decimal(12, 4)
-  priceMode   ProductPriceMode @default(MANUAL)
-  costPriceCny Decimal? @db.Decimal(14, 4)
-  price       Decimal  @db.Decimal(12, 2)
-  currency    String   @default("RUB")
-  /// 3D-модель (GLB и т.п.), URL из медиатеки / хранилища
-  model3dUrl  String?
+  priceMode      ProductPriceMode @default(MANUAL)
+  costPriceCny   Decimal? @db.Decimal(14, 4)
+  price          Decimal  @db.Decimal(12, 2)
+  currency       String   @default("RUB")
+  /// 3D-модель (GLB и т.п.)
+  model3dUrl     String?
   /// Чертёж (PDF и т.п.)
-  drawingUrl  String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  drawingUrl     String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  images     ProductVariantImage[]
   variantProductImages ProductVariantProductImage[]
+  elementSelections    ProductVariantElementSelection[]
   favorites  Favorite[]
   cartItems  CartItem[]
   orderItems OrderItem[]
 
   @@index([productId])
+  @@index([modificationId])
+  @@unique([productId, variantSlug])
 }
 
-/// Галерея варианта прямыми URL (legacy). Предпочтительно: подмножество `ProductImage` через `ProductVariantProductImage`.
-model ProductVariantImage {
-  id        String   @id @default(cuid())
-  variantId String
-  variant   ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
-  url       String
-  alt       String?
-  sortOrder Int      @default(0)
+/// Выбор «материал-цвет» для элемента внутри варианта.
+model ProductVariantElementSelection {
+  variantId            String
+  productElementId     String
+  brandMaterialColorId String
+  variant              ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  productElement       ProductElement @relation(fields: [productElementId], references: [id], onDelete: Cascade)
+  brandMaterialColor   BrandMaterialColor @relation(fields: [brandMaterialColorId], references: [id], onDelete: Restrict)
+
+  @@id([variantId, productElementId])
+  @@index([productElementId])
+  @@index([brandMaterialColorId])
 }
 
 model ProductImage {

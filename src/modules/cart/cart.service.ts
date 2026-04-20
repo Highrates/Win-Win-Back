@@ -14,7 +14,14 @@ export class CartService {
         items: {
           include: {
             product: { include: { images: true, brand: true } },
-            productVariant: { include: { images: true } },
+            productVariant: {
+              include: {
+                variantProductImages: {
+                  orderBy: { sortOrder: 'asc' },
+                  include: { productImage: true },
+                },
+              },
+            },
           },
         },
       },

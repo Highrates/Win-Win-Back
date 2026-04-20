@@ -42,9 +42,13 @@ import {
   CreateBrandAdminDto,
   CreateCategoryAdminDto,
   CreateProductAdminDto,
+  CreateProductVariantAdminDto,
   ReorderCategoriesDto,
   UpdateBrandAdminDto,
+  UpdateBrandMaterialsAdminDto,
   UpdateCategoryAdminDto,
+  UpdateProductElementsDto,
+  UpdateProductModificationsDto,
   UpdateProductShellAdminDto,
   UpdateProductVariantAdminDto,
 } from './dto/catalog-admin.dto';
@@ -262,8 +266,37 @@ export class CatalogAdminController {
   }
 
   @Post('products/:productId/variants')
-  createProductVariant(@Param('productId') productId: string) {
-    return this.catalogAdmin.createProductVariant(productId);
+  createProductVariant(
+    @Param('productId') productId: string,
+    @Body() dto: CreateProductVariantAdminDto,
+  ) {
+    return this.catalogAdmin.createProductVariant(productId, dto);
+  }
+
+  @Patch('products/:productId/modifications')
+  updateProductModifications(
+    @Param('productId') productId: string,
+    @Body() dto: UpdateProductModificationsDto,
+  ) {
+    return this.catalogAdmin.updateProductModifications(productId, dto);
+  }
+
+  @Patch('products/:productId/elements')
+  updateProductElements(
+    @Param('productId') productId: string,
+    @Body() dto: UpdateProductElementsDto,
+  ) {
+    return this.catalogAdmin.updateProductElements(productId, dto);
+  }
+
+  @Get('brands/:id/materials')
+  listBrandMaterials(@Param('id') id: string) {
+    return this.catalogAdmin.listBrandMaterials(id);
+  }
+
+  @Patch('brands/:id/materials')
+  updateBrandMaterials(@Param('id') id: string, @Body() dto: UpdateBrandMaterialsAdminDto) {
+    return this.catalogAdmin.updateBrandMaterials(id, dto);
   }
 
   @Delete('products/:productId/variants/:variantId')

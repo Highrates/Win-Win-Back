@@ -2,9 +2,16 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma, ProductPriceMode } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ProductSearchIndexService } from '../../meilisearch/product-search-index.service';
-import { CreateProductAdminDto } from './dto/catalog-admin.dto';
 import { PricingAdminService } from './pricing-admin.service';
 import { calcMskAndRetailRub, type PricingProfileCalcInput } from './pricing-calculation';
+
+export type VariantPricingInput = {
+  price?: number | null;
+  priceMode?: 'manual' | 'formula';
+  costPriceCny?: number | null;
+  weightKg?: number | null;
+  volumeLiters?: number | null;
+};
 
 @Injectable()
 export class CatalogVariantPricingService {
@@ -59,10 +66,7 @@ export class CatalogVariantPricingService {
   }
 
   async resolveVariantPriceForWrite(
-    dto: Pick<
-      CreateProductAdminDto,
-      'price' | 'priceMode' | 'costPriceCny' | 'weightKg' | 'volumeLiters'
-    >,
+    dto: VariantPricingInput,
     categoryIdsForMatch: string[],
   ): Promise<{
     price: Prisma.Decimal;

@@ -116,7 +116,7 @@ export class RegistrationService {
     });
 
     try {
-      await this.smsOtp.sendSmsOtp(this.phoneDigitsToE164(phone), code);
+      await this.smsOtp.sendSmsOtp(this.phoneDigitsToE164(phone), code, OTP_TTL_MS / 60000);
     } catch (e) {
       await this.prisma.registrationChallenge.delete({ where: { id: challenge.id } }).catch(() => {});
       this.logger.error(e);
