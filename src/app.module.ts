@@ -23,6 +23,7 @@ import { CartModule } from './modules/cart/cart.module';
 import { PagesModule } from './modules/pages/pages.module';
 import { PublicCollectionsModule } from './modules/public-collections/public-collections.module';
 import { MediaLibraryModule } from './modules/media-library/media-library.module';
+import { SiteSettingsModule } from './modules/site-settings/site-settings.module';
 
 @Module({
   imports: [
@@ -52,6 +53,7 @@ import { MediaLibraryModule } from './modules/media-library/media-library.module
     PagesModule,
     PublicCollectionsModule,
     MediaLibraryModule,
+    SiteSettingsModule,
     AuditModule,
   ],
   providers: [

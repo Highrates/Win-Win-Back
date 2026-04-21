@@ -7,6 +7,16 @@ import { join } from 'path';
 import { AppModule } from './app.module';
 import { ConfigService } from '@nestjs/config';
 
+function repoRootDir(): string {
+  const cwd = process.cwd().replace(/\/+$/, '');
+  return cwd.endsWith('/backend') ? join(cwd, '..') : cwd;
+}
+
+function backendRootDir(): string {
+  const cwd = process.cwd().replace(/\/+$/, '');
+  return cwd.endsWith('/backend') ? cwd : join(repoRootDir(), 'backend');
+}
+
 function shouldServeLocalUploads(config: ConfigService): boolean {
   const v = (config.get<string>('LOCAL_UPLOADS_ENABLED') || '').toLowerCase();
   if (v === '1' || v === 'true' || v === 'yes') return true;
@@ -39,7 +49,7 @@ async function bootstrap() {
   if (shouldServeLocalUploads(config)) {
     const localDir =
       config.get<string>('LOCAL_UPLOADS_DIR')?.trim() ||
-      join(process.cwd(), '.data', 'local-uploads');
+      join(backendRootDir(), '.data', 'local-uploads');
     mkdirSync(localDir, { recursive: true });
     app.useStaticAssets(localDir, { prefix: '/uploads/' });
   }

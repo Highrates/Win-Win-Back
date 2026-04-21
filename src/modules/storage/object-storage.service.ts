@@ -105,10 +105,25 @@ export class ObjectStorageService {
     return !this.isS3Ready();
   }
 
+  /**
+   * В монорепо Nest иногда запускают из `backend/`, иногда из корня.
+   * Чтобы ссылки из БД не ломались между перезапусками, по умолчанию используем
+   * ЕДИНЫЙ каталог `<repo-root>/backend/.data/local-uploads`.
+   */
+  private repoRootDir(): string {
+    const cwd = process.cwd().replace(/\/+$/, '');
+    return cwd.endsWith('/backend') ? join(cwd, '..') : cwd;
+  }
+
+  private backendRootDir(): string {
+    const cwd = process.cwd().replace(/\/+$/, '');
+    return cwd.endsWith('/backend') ? cwd : join(this.repoRootDir(), 'backend');
+  }
+
   localUploadRoot(): string {
     return (
       this.config.get<string>('LOCAL_UPLOADS_DIR')?.trim() ||
-      join(process.cwd(), '.data', 'local-uploads')
+      join(this.backendRootDir(), '.data', 'local-uploads')
     );
   }
 

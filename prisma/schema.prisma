@@ -803,3 +803,13 @@ model AuditLog {
   @@index([actorUserId])
   @@index([action])
 }
+
+/// Настройки витрины (singleton: 1 строка).
+model SiteSettings {
+  id String @id @default("site")
+
+  /// Изображения hero на главной (до 8 URL), порядок важен.
+  heroImageUrls Json?
+
+  updatedAt DateTime @updatedAt
+}
