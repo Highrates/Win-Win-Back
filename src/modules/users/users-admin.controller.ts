@@ -1,4 +1,12 @@
-import { Controller, DefaultValuePipe, Get, ParseIntPipe, Query, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  DefaultValuePipe,
+  Get,
+  Param,
+  ParseIntPipe,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -20,5 +28,10 @@ export class UsersAdminController {
   ) {
     const t = Math.min(Math.max(take, 1), 100);
     return this.users.listRetailUsers({ skip: Math.max(skip, 0), take: t, q });
+  }
+
+  @Get(':id')
+  one(@Param('id') id: string) {
+    return this.users.findRetailUserByIdForAdmin(id);
   }
 }

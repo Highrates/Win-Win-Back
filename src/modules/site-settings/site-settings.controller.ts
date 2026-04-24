@@ -31,7 +31,10 @@ export class SiteSettingsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.MODERATOR)
   updateAdmin(@Body() dto: UpdateSiteSettingsAdminDto) {
-    return this.svc.updateAdmin({ heroImageUrls: dto.heroImageUrls });
+    return this.svc.updateAdmin({
+      heroImageUrls: dto.heroImageUrls,
+      designerServiceOptions: dto.designerServiceOptions,
+    });
   }
 }
 

@@ -60,12 +60,32 @@ function slugifySegment(name: string): string {
 
 const CATEGORY_BG_FOLDER_PATH_KEY = 'category-backgrounds';
 
+/** Корень дерева: дочерние `user-profiles/{userId}` для загрузок из ЛК. */
+const USER_PROFILES_ROOT_PATH_KEY = 'user-profiles';
+
 @Injectable()
 export class MediaLibraryService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: ObjectStorageService,
   ) {}
+
+  /** ЛК: аватар / обложка — только изображения (JPEG/PNG/WebP/GIF), лимит 2 / 5 МБ. */
+  assertLkVitrineImage(file: Express.Multer.File, part: 'avatar' | 'cover'): void {
+    this.storage.assertUserProfileVitrineImage(
+      { size: file.size, mimetype: file.mimetype },
+      part,
+    );
+  }
+
+  /** RichBlock «подробнее о вас»: как общая медиатека (изображения, видео, лимит 100 МБ). */
+  assertLkProfileRichFile(file: Express.Multer.File): void {
+    this.storage.assertLibraryFile({
+      size: file.size,
+      mimetype: file.mimetype,
+      originalname: file.originalname,
+    });
+  }
 
   private async getOrCreateCategoryBackgroundFolderId(): Promise<string> {
     const existing = await this.prisma.mediaFolder.findFirst({
@@ -81,6 +101,86 @@ export class MediaLibraryService {
       },
     });
     return row.id;
+  }
+
+  /** Системная папка верхнего уровня: не удалять вручную. */
+  async ensureUserProfilesRootFolderId(): Promise<string> {
+    const existing = await this.prisma.mediaFolder.findUnique({
+      where: { pathKey: USER_PROFILES_ROOT_PATH_KEY },
+    });
+    if (existing) return existing.id;
+    const row = await this.prisma.mediaFolder.create({
+      data: {
+        name: 'Профили пользователей (ЛК)',
+        slugSegment: 'user-profiles',
+        parentId: null,
+        pathKey: USER_PROFILES_ROOT_PATH_KEY,
+      },
+    });
+    return row.id;
+  }
+
+  private formatUserProfileFolderLabel(
+    lastName: string | null | undefined,
+    firstName: string | null | undefined,
+    userId: string,
+  ): string {
+    const last = lastName?.trim() ?? '';
+    const first = firstName?.trim() ?? '';
+    if (last && first) {
+      return `${last} ${first}`.slice(0, 120);
+    }
+    if (last) return last.slice(0, 120);
+    if (first) return first.slice(0, 120);
+    return `Пользователь ${userId.slice(0, 8)}…`;
+  }
+
+  /**
+   * Папка `user-profiles/{userId}`: pathKey стабилен, отображаемое имя — «Фамилия Имя» при известных данных.
+   */
+  async ensureUserProfileFolderId(
+    userId: string,
+    nameHint?: { lastName?: string | null; firstName?: string | null },
+  ): Promise<string> {
+    const id = userId?.trim();
+    if (!id) throw new BadRequestException('userId is required');
+    const pathKey = `${USER_PROFILES_ROOT_PATH_KEY}/${id}`;
+    const existing = await this.prisma.mediaFolder.findUnique({ where: { pathKey } });
+    if (existing) return existing.id;
+    const parentId = await this.ensureUserProfilesRootFolderId();
+    const name = this.formatUserProfileFolderLabel(
+      nameHint?.lastName,
+      nameHint?.firstName,
+      id,
+    );
+    const row = await this.prisma.mediaFolder.create({
+      data: {
+        name,
+        slugSegment: id,
+        parentId,
+        pathKey,
+      },
+    });
+    return row.id;
+  }
+
+  /** Обновить подпись папки ЛК при смене ФИО в профиле. */
+  async syncUserProfileMediaFolderName(
+    userId: string,
+    lastName: string | null,
+    firstName: string | null,
+  ): Promise<void> {
+    const id = userId?.trim();
+    if (!id) return;
+    const pathKey = `${USER_PROFILES_ROOT_PATH_KEY}/${id}`;
+    const row = await this.prisma.mediaFolder.findUnique({ where: { pathKey } });
+    if (!row) return;
+    const name = this.formatUserProfileFolderLabel(lastName, firstName, id);
+    if (row.name === name) return;
+    await this.prisma.mediaFolder.update({
+      where: { id: row.id },
+      data: { name },
+    });
   }
 
   /**
@@ -188,11 +288,27 @@ export class MediaLibraryService {
     return {};
   }
 
-  async listFolders() {
-    return this.prisma.mediaFolder.findMany({
+  /**
+   * @param scope `winwin` — всё, кроме ветки `user-profiles`; `user` — только ветка ЛК.
+   */
+  async listFolders(params?: { scope?: 'winwin' | 'user' }) {
+    const all = await this.prisma.mediaFolder.findMany({
       orderBy: [{ pathKey: 'asc' }],
       include: { _count: { select: { objects: true, children: true } } },
     });
+    const scope = params?.scope ?? 'winwin';
+    if (scope === 'user') {
+      return all.filter(
+        (f) =>
+          f.pathKey === USER_PROFILES_ROOT_PATH_KEY ||
+          f.pathKey.startsWith(`${USER_PROFILES_ROOT_PATH_KEY}/`),
+      );
+    }
+    return all.filter(
+      (f) =>
+        f.pathKey !== USER_PROFILES_ROOT_PATH_KEY &&
+        !f.pathKey.startsWith(`${USER_PROFILES_ROOT_PATH_KEY}/`),
+    );
   }
 
   async createFolder(name: string, parentId?: string | null) {
@@ -234,6 +350,9 @@ export class MediaLibraryService {
       include: { _count: { select: { children: true, objects: true } } },
     });
     if (!row) throw new NotFoundException('Папка не найдена');
+    if (row.pathKey === USER_PROFILES_ROOT_PATH_KEY) {
+      throw new BadRequestException('Системная папка загрузок ЛК не удаляется');
+    }
     if (row._count.children > 0) {
       throw new BadRequestException('Сначала удалите или перенесите вложенные папки');
     }
@@ -248,21 +367,48 @@ export class MediaLibraryService {
     q?: string;
     tab?: 'all' | 'images' | 'documents' | 'models' | 'videos';
     folderId?: string;
+    scope?: 'winwin' | 'user';
   }) {
-    const where: Prisma.MediaObjectWhereInput = {};
-    if (params.folderId) where.folderId = params.folderId;
+    const andFilters: Prisma.MediaObjectWhereInput[] = [];
+    const scope = params.scope ?? 'winwin';
+
+    if (params.folderId) {
+      andFilters.push({ folderId: params.folderId });
+    } else if (scope === 'user') {
+      andFilters.push({
+        OR: [
+          { folder: { pathKey: USER_PROFILES_ROOT_PATH_KEY } },
+          { folder: { pathKey: { startsWith: `${USER_PROFILES_ROOT_PATH_KEY}/` } } },
+        ],
+      });
+    } else {
+      andFilters.push({
+        NOT: {
+          OR: [
+            { folder: { pathKey: USER_PROFILES_ROOT_PATH_KEY } },
+            { folder: { pathKey: { startsWith: `${USER_PROFILES_ROOT_PATH_KEY}/` } } },
+          ],
+        },
+      });
+    }
+
     const q = params.q?.trim();
     if (q) {
-      where.OR = [
-        { originalName: { contains: q, mode: 'insensitive' } },
-        { altText: { contains: q, mode: 'insensitive' } },
-      ];
+      andFilters.push({
+        OR: [
+          { originalName: { contains: q, mode: 'insensitive' } },
+          { altText: { contains: q, mode: 'insensitive' } },
+        ],
+      });
     }
     const tab = params.tab ?? 'all';
-    if (tab === 'images') where.category = MediaLibraryCategory.IMAGE;
-    else if (tab === 'documents') where.category = MediaLibraryCategory.DOCUMENT;
-    else if (tab === 'models') where.category = MediaLibraryCategory.MODEL;
-    else if (tab === 'videos') where.category = MediaLibraryCategory.VIDEO;
+    if (tab === 'images') andFilters.push({ category: MediaLibraryCategory.IMAGE });
+    else if (tab === 'documents') andFilters.push({ category: MediaLibraryCategory.DOCUMENT });
+    else if (tab === 'models') andFilters.push({ category: MediaLibraryCategory.MODEL });
+    else if (tab === 'videos') andFilters.push({ category: MediaLibraryCategory.VIDEO });
+
+    const where: Prisma.MediaObjectWhereInput =
+      andFilters.length > 1 ? { AND: andFilters } : andFilters[0] ?? {};
 
     const rows = await this.prisma.mediaObject.findMany({
       where,
@@ -381,5 +527,28 @@ export class MediaLibraryService {
     await this.storage.removeObjectKey(row.storageKey);
     await this.prisma.mediaObject.delete({ where: { id } });
     return { ok: true as const };
+  }
+
+  /**
+   * Удаляет запись в медиатеке и файл в хранилище по публичному URL, если объект не
+   * используется в каталоге / коллекциях. Подходит для смены аватара/обложки в ЛК.
+   */
+  async tryDeleteObjectByPublicUrlIfUnreferenced(url: string | null | undefined): Promise<void> {
+    const u = url?.trim();
+    if (!u) return;
+    const key = this.storage.tryPublicUrlToKey(u);
+    if (!key) return;
+    const row = await this.prisma.mediaObject.findUnique({ where: { storageKey: key } });
+    if (!row) return;
+    const [catRefs, curatedCollectionRefs, curatedSetRefs] = await Promise.all([
+      this.prisma.category.count({ where: { backgroundMediaObjectId: row.id } }),
+      this.prisma.curatedCollection.count({ where: { coverMediaObjectId: row.id } }),
+      this.prisma.curatedProductSet.count({ where: { coverMediaObjectId: row.id } }),
+    ]);
+    if (catRefs + curatedCollectionRefs + curatedSetRefs > 0) {
+      return;
+    }
+    await this.storage.removeObjectKey(row.storageKey);
+    await this.prisma.mediaObject.delete({ where: { id: row.id } });
   }
 }

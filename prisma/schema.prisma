@@ -35,6 +35,7 @@ model User {
   favorites     Favorite[]
   cart          Cart?
   designer      Designer?         // публичная страница дизайнера (опционально)
+  accountContactChallenges AccountContactChallenge[]
 }
 
 enum UserRole {
@@ -66,6 +67,24 @@ model RegistrationChallenge {
   @@index([email])
 }
 
+/// OTP для привязки/смены email или телефона у существующего пользователя (ЛК).
+model AccountContactChallenge {
+  id       String                 @id @default(cuid())
+  userId   String
+  user     User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel  RegistrationOtpChannel
+  newPhone String?
+  newEmail String?
+  codeHash String
+  expiresAt DateTime
+  attempts Int                    @default(0)
+  createdAt DateTime               @default(now())
+
+  @@index([userId])
+  @@index([newPhone])
+  @@index([newEmail])
+}
+
 model UserProfile {
   id           String    @id @default(cuid())
   userId       String    @unique
@@ -73,6 +92,18 @@ model UserProfile {
   firstName    String?
   lastName     String?
   avatarUrl    String?
+  /// Город для публичного превью профиля дизайнера
+  city         String?
+  /// Коды/метки услуг (мультивыбор в ЛК)
+  services     Json?
+  /// HTML «Подробнее о вас»
+  aboutHtml    String?   @db.Text
+  /// Сетка обложки: "4:3" | "16:9"
+  coverLayout  String?
+  /// URL обложек (1–2 для 4:3, 1 для 16:9) — те же S3-ключи, что и медиатека `objects/…`
+  coverImageUrls Json?
+  /// После первого захода в ЛК после регистрации показываем `/account/profile` (таб «Инфо») один раз
+  profileOnboardingPending Boolean @default(true)
   legalType    LegalType? @default(INDIVIDUAL)
   companyName  String?
   inn          String?
@@ -810,6 +841,9 @@ model SiteSettings {
 
   /// Изображения hero на главной (до 8 URL), порядок важен.
   heroImageUrls Json?
+
+  /// Список услуг для мультиселекта в профиле дизайнера (массив строк).
+  designerServiceOptions Json?
 
   updatedAt DateTime @updatedAt
 }

@@ -7,5 +7,11 @@ export class UpdateSiteSettingsAdminDto {
   @IsString({ each: true })
   @MinLength(1, { each: true })
   heroImageUrls?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(200)
+  @IsString({ each: true })
+  designerServiceOptions?: string[];
 }
 

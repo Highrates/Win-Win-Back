@@ -9,6 +9,7 @@ import { UsersModule } from '../users/users.module';
 import { MailService } from './mail.service';
 import { UnimtxOtpService } from './unimtx-otp.service';
 import { RegistrationService } from './registration.service';
+import { AccountContactService } from './account-contact.service';
 @Module({
   imports: [
     UsersModule,
@@ -22,8 +23,8 @@ import { RegistrationService } from './registration.service';
       inject: [ConfigService],
     }),
   ],
-  providers: [AuthService, JwtStrategy, MailService, UnimtxOtpService, RegistrationService],
+  providers: [AuthService, JwtStrategy, MailService, UnimtxOtpService, RegistrationService, AccountContactService],
   controllers: [AuthController],
-  exports: [AuthService],
+  exports: [AuthService, AccountContactService],
 })
 export class AuthModule {}

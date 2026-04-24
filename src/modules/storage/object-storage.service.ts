@@ -17,6 +17,9 @@ import { copyFile, mkdir, readdir, unlink, writeFile } from 'fs/promises';
 import { dirname, join } from 'path';
 
 const MAX_BYTES = 6 * 1024 * 1024;
+/** Аватар / обложка в ЛК (сжатие на клиенте; Multer согласован с этим). */
+const LK_VITRINE_AVATAR_MAX = 2 * 1024 * 1024;
+const LK_VITRINE_COVER_MAX = 5 * 1024 * 1024;
 const ALLOWED = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 
 /** Rich text editor: те же типы, отдельный префикс в бакете */
@@ -141,6 +144,22 @@ export class ObjectStorageService {
     }
     if (file.size > MAX_BYTES) {
       throw new BadRequestException('Файл больше 6 МБ');
+    }
+  }
+
+  /** Аватар / обложка в ЛК: только изображения, лимит 2 МБ (аватар) / 5 МБ (обложка). */
+  assertUserProfileVitrineImage(
+    file: { size: number; mimetype: string },
+    part: 'avatar' | 'cover',
+  ): void {
+    if (!ALLOWED.has(file.mimetype)) {
+      throw new BadRequestException('Допустимы только изображения: JPEG, PNG, WebP или GIF');
+    }
+    const cap = part === 'avatar' ? LK_VITRINE_AVATAR_MAX : LK_VITRINE_COVER_MAX;
+    if (file.size > cap) {
+      throw new BadRequestException(
+        part === 'avatar' ? 'Аватар не больше 2 МБ' : 'Файл обложки не больше 5 МБ',
+      );
     }
   }
 

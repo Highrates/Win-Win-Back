@@ -38,8 +38,9 @@ export class MediaLibraryAdminController {
   ) {}
 
   @Get('folders')
-  listFolders() {
-    return this.media.listFolders();
+  listFolders(@Query('scope') scopeRaw?: string) {
+    const scope = scopeRaw === 'user' ? 'user' : 'winwin';
+    return this.media.listFolders({ scope });
   }
 
   @Post('folders')
@@ -57,6 +58,7 @@ export class MediaLibraryAdminController {
     @Query('q') q?: string,
     @Query('tab') tabRaw?: string,
     @Query('folderId') folderId?: string,
+    @Query('scope') scopeRaw?: string,
   ) {
     const tab =
       tabRaw === 'images' ||
@@ -65,7 +67,8 @@ export class MediaLibraryAdminController {
       tabRaw === 'videos'
         ? tabRaw
         : 'all';
-    return this.media.listObjects({ q, tab, folderId });
+    const scope = scopeRaw === 'user' ? 'user' : 'winwin';
+    return this.media.listObjects({ q, tab, folderId, scope });
   }
 
   @Get('objects/:id')

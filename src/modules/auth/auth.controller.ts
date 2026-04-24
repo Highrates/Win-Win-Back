@@ -7,6 +7,13 @@ import {
   UnauthorizedException,
   Req,
 } from '@nestjs/common';
+import { AccountContactService } from './account-contact.service';
+import {
+  AccountContactEmailStartDto,
+  AccountContactEmailVerifyDto,
+  AccountContactPhoneStartDto,
+  AccountContactPhoneVerifyDto,
+} from './dto/account-contact.dto';
 import type { Request } from 'express';
 import { AuditAction } from '@prisma/client';
 import { AuthService } from './auth.service';
@@ -32,6 +39,7 @@ export class AuthController {
     private usersService: UsersService,
     private audit: AuditService,
     private registration: RegistrationService,
+    private accountContact: AccountContactService,
   ) {}
 
   @Public()
@@ -68,7 +76,8 @@ export class AuthController {
       phone: user.phone,
       role: user.role,
     });
-    return { ...token, user };
+    const full = await this.usersService.findByIdPublic(user.id);
+    return { ...token, user: full ?? user };
   }
 
   @Public()
@@ -130,5 +139,61 @@ export class AuthController {
     const user = await this.usersService.findByIdPublic(userId);
     if (!user) throw new UnauthorizedException();
     return user;
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('account/contact/email/start')
+  async accountContactEmailStart(
+    @CurrentUser('sub') userId: string,
+    @Body() dto: AccountContactEmailStartDto,
+    @Req() req: Request,
+  ) {
+    return this.accountContact.startEmail(
+      userId,
+      dto,
+      (req.originalUrl || req.url || '').split('?')[0],
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('account/contact/email/verify')
+  async accountContactEmailVerify(
+    @CurrentUser('sub') userId: string,
+    @Body() dto: AccountContactEmailVerifyDto,
+    @Req() req: Request,
+  ) {
+    return this.accountContact.verifyEmail(
+      userId,
+      dto,
+      (req.originalUrl || req.url || '').split('?')[0],
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('account/contact/phone/start')
+  async accountContactPhoneStart(
+    @CurrentUser('sub') userId: string,
+    @Body() dto: AccountContactPhoneStartDto,
+    @Req() req: Request,
+  ) {
+    return this.accountContact.startPhone(
+      userId,
+      dto,
+      (req.originalUrl || req.url || '').split('?')[0],
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('account/contact/phone/verify')
+  async accountContactPhoneVerify(
+    @CurrentUser('sub') userId: string,
+    @Body() dto: AccountContactPhoneVerifyDto,
+    @Req() req: Request,
+  ) {
+    return this.accountContact.verifyPhone(
+      userId,
+      dto,
+      (req.originalUrl || req.url || '').split('?')[0],
+    );
   }
 }
