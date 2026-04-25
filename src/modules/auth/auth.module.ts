@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -10,9 +10,10 @@ import { MailService } from './mail.service';
 import { UnimtxOtpService } from './unimtx-otp.service';
 import { RegistrationService } from './registration.service';
 import { AccountContactService } from './account-contact.service';
+import { DesignerInviteService } from './designer-invite.service';
 @Module({
   imports: [
-    UsersModule,
+    forwardRef(() => UsersModule),
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
       imports: [ConfigModule],
@@ -23,8 +24,8 @@ import { AccountContactService } from './account-contact.service';
       inject: [ConfigService],
     }),
   ],
-  providers: [AuthService, JwtStrategy, MailService, UnimtxOtpService, RegistrationService, AccountContactService],
+  providers: [AuthService, JwtStrategy, MailService, UnimtxOtpService, RegistrationService, AccountContactService, DesignerInviteService],
   controllers: [AuthController],
-  exports: [AuthService, AccountContactService],
+  exports: [AuthService, AccountContactService, DesignerInviteService, MailService],
 })
 export class AuthModule {}

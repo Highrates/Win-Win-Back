@@ -8,6 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { RegistrationOtpChannel } from '@prisma/client';
+import { DesignerInviteService } from './designer-invite.service';
 import { randomInt } from 'crypto';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -58,6 +59,7 @@ export class RegistrationService {
     private readonly smsOtp: UnimtxOtpService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
+    private readonly designerInvites: DesignerInviteService,
   ) {}
 
   private regTokenSecret(): string {
@@ -275,12 +277,28 @@ export class RegistrationService {
       throw new BadRequestException('Неверный токен регистрации');
     }
 
+    if (dto.designerInviteToken?.trim() && !payload.email) {
+      throw new BadRequestException('Приглашение дизайнера доступно только при регистрации по email');
+    }
+
+    let inviteResolved: { inviteId: string; refCode: string } | null = null;
+    if (dto.designerInviteToken?.trim() && payload.email) {
+      inviteResolved = await this.designerInvites.assertValidForNewAccountEmail(
+        dto.designerInviteToken,
+        payload.email,
+      );
+    }
+    const refFromDto = (dto.referralCode ?? '').trim();
+    const refUse = (inviteResolved?.refCode ?? refFromDto) || null;
+
     return this.users.createRetailUser({
       phone: payload.phone,
       email: payload.email,
       password: dto.password,
       consentPersonalData: payload.consentPersonalData,
       consentSms: payload.consentSms,
+      referralCode: refUse,
+      designerInviteId: inviteResolved?.inviteId ?? null,
     });
   }
 }

@@ -1,4 +1,4 @@
-import { IsBoolean, IsEmail, IsString, Matches, MinLength, Equals } from 'class-validator';
+import { IsBoolean, IsEmail, IsOptional, IsString, Matches, MinLength, MaxLength, Equals } from 'class-validator';
 
 export class RegisterPhoneStartDto {
   @IsString()
@@ -53,4 +53,16 @@ export class RegisterCompleteDto {
   @IsString()
   @MinLength(8)
   password!: string;
+
+  /** Публичный реф. номер Win-Win (из ссылки ?ref=); L1 / L2 — см. UsersService.createRetailUser. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  referralCode?: string;
+
+  /** JWT приглашения дизайнера (из письма); ref берётся из БД, не из URL. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(90000)
+  designerInviteToken?: string;
 }

@@ -31,6 +31,9 @@ import {
   RegisterPhoneVerifyDto,
 } from './dto/register-flow.dto';
 import { RegistrationService } from './registration.service';
+import { DesignerInviteService } from './designer-invite.service';
+import { DesignerInviteTokenBodyDto } from './dto/designer-invite.dto';
+import { Throttle } from '@nestjs/throttler';
 
 @Controller('auth')
 export class AuthController {
@@ -40,6 +43,7 @@ export class AuthController {
     private audit: AuditService,
     private registration: RegistrationService,
     private accountContact: AccountContactService,
+    private designerInvites: DesignerInviteService,
   ) {}
 
   @Public()
@@ -195,5 +199,13 @@ export class AuthController {
       dto,
       (req.originalUrl || req.url || '').split('?')[0],
     );
+  }
+
+  /** Публично: что в ссылке из письма (регистрация / вход, prefill ref). */
+  @Public()
+  @Throttle({ default: { ttl: 60_000, limit: 20 } })
+  @Post('designer-invite/verify')
+  async verifyDesignerInvite(@Body() dto: DesignerInviteTokenBodyDto) {
+    return this.designerInvites.verifyToken(dto.token);
   }
 }

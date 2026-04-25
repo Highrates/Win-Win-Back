@@ -6,16 +6,23 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { UpdateUserProfileDto } from './dto/user-profile.dto';
 import { UpdateConsentsDto, UpdatePasswordDto } from './dto/user-account.dto';
+import { SendDesignerInviteDto, DesignerInviteTokenBodyDto } from '../auth/dto/designer-invite.dto';
+import { DesignerInviteService } from '../auth/designer-invite.service';
+import { Throttle } from '@nestjs/throttler';
 
 const LK_AVATAR_MAX = 2 * 1024 * 1024;
 const LK_COVER_MAX = 5 * 1024 * 1024;
 const LK_RICH_MAX = 100 * 1024 * 1024;
+const LK_PARTNER_CV_MAX = 20 * 1024 * 1024;
 
 @Controller('users')
 @UseGuards(JwtAuthGuard)
 @UseFilters(LkVitrineUploadExceptionFilter)
 export class UsersController {
-  constructor(private usersService: UsersService) {}
+  constructor(
+    private usersService: UsersService,
+    private designerInvites: DesignerInviteService,
+  ) {}
 
   @Get('me')
   me(@CurrentUser('sub') userId: string) {
@@ -77,5 +84,30 @@ export class UsersController {
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: LK_RICH_MAX } }))
   async uploadProfileRichMedia(@CurrentUser('sub') userId: string, @UploadedFile() file: Express.Multer.File) {
     return this.usersService.uploadUserProfileRichMedia(userId, file);
+  }
+
+  /** Заявка на партнёра Win-Win: multipart `coverLetter` (текст) + `file` (CV). */
+  @Post('me/designer-invite')
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  sendDesignerInvite(@CurrentUser('sub') userId: string, @Body() dto: SendDesignerInviteDto) {
+    return this.designerInvites.sendInvite(userId, dto.email);
+  }
+
+  @Post('me/designer-invite/claim')
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  claimDesignerInvite(@CurrentUser('sub') userId: string, @Body() dto: DesignerInviteTokenBodyDto) {
+    return this.designerInvites.claimByTokenForUser(userId, dto.token);
+  }
+
+  @Post('me/partner-application')
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: LK_PARTNER_CV_MAX } }))
+  async submitPartnerApplication(
+    @CurrentUser('sub') userId: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body('coverLetter') coverLetter: string,
+    @Body('referralCode') referralCode: string,
+  ) {
+    return this.usersService.submitPartnerApplication(userId, file, coverLetter ?? '', referralCode);
   }
 }

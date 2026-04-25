@@ -1,8 +1,8 @@
 import { join } from 'path';
 import { MiddlewareConsumer, Module, NestModule, RequestMethod } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_INTERCEPTOR } from '@nestjs/core';
-import { ThrottlerModule } from '@nestjs/throttler';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { RequestContextMiddleware } from './common/middleware/request-context.middleware';
 import { AuditHttpInterceptor } from './modules/audit/audit-http.interceptor';
 import { AuditModule } from './modules/audit/audit.module';
@@ -35,7 +35,8 @@ import { SiteSettingsModule } from './modules/site-settings/site-settings.module
         join(process.cwd(), 'backend', '.env'),
       ],
     }),
-    ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]),
+    // default limiter: 100 req/min per tracker (см. ThrottlerGuard).
+    ThrottlerModule.forRoot([{ name: 'default', ttl: 60000, limit: 100 }]),
     PrismaModule,
     RedisModule,
     MeilisearchModule,
@@ -57,6 +58,10 @@ import { SiteSettingsModule } from './modules/site-settings/site-settings.module
     AuditModule,
   ],
   providers: [
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
     {
       provide: APP_INTERCEPTOR,
       useClass: AuditHttpInterceptor,

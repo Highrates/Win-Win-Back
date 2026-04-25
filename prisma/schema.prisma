@@ -36,6 +36,22 @@ model User {
   cart          Cart?
   designer      Designer?         // публичная страница дизайнера (опционально)
   accountContactChallenges AccountContactChallenge[]
+  designerInvitesSent      DesignerInvite[]     @relation("DesignerInviteInviter")
+}
+
+/// Приглашение дизайнера по email: ссылка с подписанным токеном, ref-код на момент отправки.
+model DesignerInvite {
+  id         String   @id @default(cuid())
+  inviterId  String
+  inviter    User     @relation("DesignerInviteInviter", fields: [inviterId], references: [id], onDelete: Cascade)
+  emailNorm  String
+  refCode    String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime @default(now())
+
+  @@index([inviterId, createdAt])
+  @@index([emailNorm])
 }
 
 enum UserRole {
@@ -104,6 +120,20 @@ model UserProfile {
   coverImageUrls Json?
   /// После первого захода в ЛК после регистрации показываем `/account/profile` (таб «Инфо») один раз
   profileOnboardingPending Boolean @default(true)
+  /// Партнёр Win-Win: одобрено админом (реферальная программа, разделы Кейсы/Команда/Проекты и т.д.)
+  winWinPartnerApproved Boolean @default(false)
+  /// Заявка на партнёра: сопроводительный текст
+  partnerApplicationCoverLetter  String?   @db.Text
+  /// Заявка: URL CV в хранилище
+  partnerApplicationCvUrl         String?
+  /// Заявка: время подачи (пока null — заявка не подана)
+  partnerApplicationSubmittedAt   DateTime?
+  /// Админ отклонил заявку (в очереди снова не показываем; повторная подача снимает)
+  partnerApplicationRejectedAt     DateTime?
+  /// Реферальный номер приглашающего (если требуется; для «первых» / exempt — null)
+  partnerApplicationReferralCode  String?
+  /// Публичный реф. код партнёра (только у одобренных; для приглашения других)
+  winWinReferralCode              String?  @unique
   legalType    LegalType? @default(INDIVIDUAL)
   companyName  String?
   inn          String?

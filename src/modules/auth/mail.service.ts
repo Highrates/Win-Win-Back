@@ -82,4 +82,65 @@ export class MailService {
     });
     this.logger.log(`Registration OTP email sent to ${to}`);
   }
+
+  async sendDesignerInvite(params: { to: string; inviteLink: string; inviterLabel: string; refCode: string }): Promise<void> {
+    const { to, inviteLink, inviterLabel, refCode } = params;
+    const from = this.config.get<string>('MAIL_FROM')?.trim() || this.config.get<string>('SMTP_USER');
+    if (!from) throw new Error('MAIL_FROM или SMTP_USER нужен для отправки письма');
+    const configuredHost = this.config.get<string>('SMTP_HOST')?.trim();
+    if (!configuredHost) {
+      throw new Error('SMTP_HOST, SMTP_USER и SMTP_PASSWORD должны быть заданы для отправки почты');
+    }
+    const endpoint = await this.smtpConnectTarget(configuredHost);
+    const transport = this.transporter(endpoint);
+    const subject = 'Приглашение стать партнёром Win-Win';
+    const text = [
+      `${inviterLabel} приглашает вас присоединиться к Win-Win как дизайнер-партнёр.`,
+      ``,
+      `Реферальный номер в приглашении: ${refCode}`,
+      ``,
+      `Перейдите по ссылке (действительна 14 дней):`,
+      inviteLink,
+      ``,
+      `Если вы не ждали это письмо, проигнорируйте его.`,
+    ].join('\n');
+    const html = [
+      `<p><strong>${inviterLabel}</strong> приглашает вас стать партнёром Win-Win.</p>`,
+      `<p>Реферальный номер: <strong>${refCode}</strong></p>`,
+      `<p><a href="${inviteLink}">Перейти к регистрации или входу</a> (ссылка действительна 14 дней)</p>`,
+      `<p style="color:#666;font-size:12px">Если вы не ждали письмо, проигнорируйте.</p>`,
+    ].join('');
+    await transport.sendMail({ from, to, subject, text, html });
+    this.logger.log(`Designer invite email sent to ${to}`);
+  }
+
+  async sendWinWinPartnerApproved(params: { to: string; name: string | null; referralCode: string }): Promise<void> {
+    const { to, name, referralCode } = params;
+    const from = this.config.get<string>('MAIL_FROM')?.trim() || this.config.get<string>('SMTP_USER');
+    if (!from) throw new Error('MAIL_FROM или SMTP_USER нужен для отправки письма');
+    const configuredHost = this.config.get<string>('SMTP_HOST')?.trim();
+    if (!configuredHost) {
+      throw new Error('SMTP_HOST, SMTP_USER и SMTP_PASSWORD должны быть заданы для отправки почты');
+    }
+    const endpoint = await this.smtpConnectTarget(configuredHost);
+    const transport = this.transporter(endpoint);
+    const hello = name?.trim() ? `${name.trim()}, поздравляем!` : 'Поздравляем!';
+    const subject = 'Вы стали партнёром Win-Win';
+    const text = [
+      hello,
+      ``,
+      `Ваш статус на Win-Win изменён: вы стали партнёром.`,
+      `Ваш реферальный номер: ${referralCode}`,
+      ``,
+      `Зайдите в личный кабинет, чтобы пригласить других дизайнеров и отслеживать доход.`,
+    ].join('\n');
+    const html = [
+      `<p><strong>${hello}</strong></p>`,
+      `<p>Ваш статус на Win-Win изменён: вы стали партнёром.</p>`,
+      `<p>Ваш реферальный номер: <strong>${referralCode}</strong></p>`,
+      `<p style="color:#666;font-size:12px">Зайдите в личный кабинет, чтобы пригласить других дизайнеров и отслеживать доход.</p>`,
+    ].join('');
+    await transport.sendMail({ from, to, subject, text, html });
+    this.logger.log(`WinWin partner approved email sent to ${to}`);
+  }
 }
