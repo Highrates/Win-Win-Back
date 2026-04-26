@@ -91,7 +91,7 @@ export class DesignerInviteService {
         .map((s) => String(s).trim())
         .join(' ') || (inviter.email ? inviter.email : 'Партнёр Win-Win');
     await this.mail.sendDesignerInvite({ to: email, inviteLink: link, inviterLabel: invName, refCode });
-    return { ok: true as const, expiresAt: expiresAt.toISOString() };
+    return { ok: true as const, expiresAt: expiresAt.toISOString(), inviteLink: link };
   }
 
   async verifyToken(token: string) {
