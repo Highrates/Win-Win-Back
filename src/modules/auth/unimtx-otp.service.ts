@@ -109,14 +109,15 @@ export class UnimtxOtpService {
     // Если задан UNIMTX_SMS_TEMPLATE_ID — используем его; иначе пытаемся отправить plain content.
     const templateId = this.config.get<string>('UNIMTX_SMS_TEMPLATE_ID')?.trim();
     const ttl = Number.isFinite(ttlMinutes) && ttlMinutes > 0 ? Math.round(ttlMinutes) : 10;
-    const sig = this.signature();
     /**
      * С шаблоном отправитель уже задан в консоли Unimtx (привязка к шаблону).
-     * Лишний `signature` в теле иногда даёт SmsSignatureNotExists (другой регион API / несовпадение строки).
-     * Явно передать имя можно через UNIMTX_SMS_SIGNATURE_WITH_TEMPLATE=1.
+     * `UNIMTX_SMS_SIGNATURE` в запрос не передаём по умолчанию — не требуем и в .env, если задан только шаблон.
+     * Лишний `signature` в теле иногда даёт SmsSignatureNotExists. Явно: UNIMTX_SMS_SIGNATURE_WITH_TEMPLATE=1.
      */
     const sigWithTplRaw = this.config.get<string>('UNIMTX_SMS_SIGNATURE_WITH_TEMPLATE')?.trim().toLowerCase();
     const withTemplateSig = sigWithTplRaw === '1' || sigWithTplRaw === 'true' || sigWithTplRaw === 'yes';
+    const needsSignature = !templateId || withTemplateSig;
+    const sig = needsSignature ? this.signature() : '';
 
     const body: Record<string, unknown> = templateId
       ? {
