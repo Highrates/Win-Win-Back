@@ -1,4 +1,4 @@
-import { IsArray, IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsArray, IsBoolean, IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class UpdateUserProfileDto {
   @IsOptional()
@@ -39,4 +39,10 @@ export class UpdateUserProfileDto {
 
   @IsOptional()
   avatarUrl?: string | null;
+}
+
+/** Видимость карточки партнёра в каталоге дизайнеров на сайте (только одобренные Win-Win). */
+export class DesignerSiteVisibilityDto {
+  @IsBoolean()
+  visible!: boolean;
 }

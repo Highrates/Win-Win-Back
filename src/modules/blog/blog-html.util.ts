@@ -1,6 +1,27 @@
 /** `export =` из пакета; default import без esModuleInterop даёт undefined в Nest (CJS). */
 import DOMPurify = require('isomorphic-dompurify');
 
+let anchorsRelHookRegistered = false;
+
+function ensureAnchorRelNoopenerHook(): void {
+  if (anchorsRelHookRegistered) return;
+  anchorsRelHookRegistered = true;
+  try {
+    DOMPurify.addHook('afterSanitizeAttributes', (node: Element & { setAttribute?: (n: string, v: string) => void }) => {
+      const name = node.nodeName?.toUpperCase?.() ?? '';
+      if (name !== 'A') return;
+      const tgt = node.getAttribute?.('target');
+      if (tgt !== '_blank') return;
+      const existing = (node.getAttribute?.('rel') ?? '').trim().split(/\s+/).filter(Boolean);
+      const need = ['noopener', 'noreferrer'];
+      const merged = [...new Set([...existing, ...need])].join(' ');
+      node.setAttribute?.('rel', merged);
+    });
+  } catch {
+    /* без хука санитайз всё равно режет XSS */
+  }
+}
+
 const SANITIZE = {
   ALLOWED_TAGS: [
     'p',
@@ -52,7 +73,13 @@ const SANITIZE = {
  * Публичный вывод HTML из RichBlock: без скриптов, iframe, on* и прочего.
  */
 export function sanitizeBlogPostBodyHtml(html: string): string {
+  ensureAnchorRelNoopenerHook();
   return DOMPurify.sanitize(html ?? '', SANITIZE);
+}
+
+/** RichBlock «Подробнее о вас» в профиле дизайнера — тот же allowlist, что и тело поста блога. */
+export function sanitizeProfileAboutHtml(html: string): string {
+  return sanitizeBlogPostBodyHtml(html);
 }
 
 /** URL из img / video / source[src] в HTML редактора. */

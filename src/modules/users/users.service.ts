@@ -10,8 +10,15 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { Prisma, UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { randomBytes } from 'node:crypto';
+import { slugifyVariantLabel } from '../catalog/slug-transliteration';
+import { sanitizeProfileAboutHtml } from '../blog/blog-html.util';
 import { MediaLibraryService } from '../media-library/media-library.service';
 import { MailService } from '../auth/mail.service';
+import {
+  mapUserProfileToVitrineDto,
+  USER_PROFILE_VITRINE_SELECT,
+  type UserProfileVitrineDto,
+} from './dto/user-profile-vitrine.dto';
 
 /** Символы для публичного кода (без 0/O, I, L). */
 const WinWinCrockford = '0123456789ABCDEFGHJKMNPQRSTVWXYZ' as const;
@@ -363,22 +370,153 @@ export class UsersService {
     });
   }
 
-  async getUserProfileVitrine(userId: string) {
-    const p = await this.prisma.userProfile.upsert({
+  async getUserProfileVitrine(userId: string): Promise<UserProfileVitrineDto> {
+    const p = await this.prisma.userProfile.findUnique({
       where: { userId },
-      create: { userId },
-      update: {},
+      select: USER_PROFILE_VITRINE_SELECT,
     });
+    if (!p) {
+      throw new NotFoundException('Профиль не найден');
+    }
     const u = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { email: true },
     });
     const email = u?.email?.trim() ? u.email.trim() : null;
-    return {
-      ...p,
+
+    let designerSlug: string | null = null;
+    let designerSiteVisible = false;
+    if (p.winWinPartnerApproved) {
+      const designer = await this.prisma.designer.findUnique({
+        where: { userId },
+        select: { slug: true, isPublic: true },
+      });
+      designerSlug = designer?.slug ?? null;
+      designerSiteVisible = designer?.isPublic ?? false;
+    }
+
+    return mapUserProfileToVitrineDto(
+      p,
       email,
-      referralInviteCodeExempt: this.isReferralInviteCodeExempt(email),
-    };
+      this.isReferralInviteCodeExempt(email),
+      designerSlug,
+      designerSiteVisible,
+    );
+  }
+
+  /** Видимость страницы дизайнера на сайте (только одобренные партнёры). */
+  async setDesignerSiteVisibility(userId: string, visible: boolean) {
+    const p = await this.prisma.userProfile.findUnique({
+      where: { userId },
+      select: { winWinPartnerApproved: true },
+    });
+    if (!p?.winWinPartnerApproved) {
+      throw new ForbiddenException('Доступно только партнёрам Win-Win');
+    }
+    await this.ensureDesignerRecordForWinWinPartner(userId);
+    await this.prisma.designer.update({
+      where: { userId },
+      data: { isPublic: visible },
+    });
+    return this.getUserProfileVitrine(userId);
+  }
+
+  /** Создаёт запись каталога для одобренного партнёра (slug, имя, фото). Идемпотентно. При гонке за slug — повтор с суффиксом (уникальный индекс в БД). */
+  private async ensureDesignerRecordForWinWinPartner(userId: string): Promise<void> {
+    const row = await this.prisma.userProfile.findUnique({
+      where: { userId },
+      select: { winWinPartnerApproved: true },
+    });
+    if (!row?.winWinPartnerApproved) return;
+
+    const existing = await this.prisma.designer.findUnique({ where: { userId } });
+    if (existing) return;
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true, profile: { select: { firstName: true, lastName: true, avatarUrl: true } } },
+    });
+    const displayName = this.buildDesignerDisplayName(user?.profile ?? null, user?.email ?? null);
+    const emailLocal = (user?.email ?? '').trim().split('@')[0] ?? '';
+    const base =
+      slugifyVariantLabel(displayName || emailLocal || 'designer').slice(0, 72) ||
+      slugifyVariantLabel('designer').slice(0, 72) ||
+      'designer';
+
+    const maxOrder = await this.prisma.designer.aggregate({ _max: { sortOrder: true } });
+    const sortOrder = (maxOrder._max.sortOrder ?? 0) + 1;
+
+    const photoUrl = user?.profile?.avatarUrl?.trim() || null;
+
+    for (let i = 0; i < 64; i++) {
+      const slug = i === 0 ? base : `${base}-${i + 1}`;
+      try {
+        await this.prisma.designer.create({
+          data: {
+            userId,
+            slug,
+            displayName,
+            photoUrl,
+            isPublic: false,
+            sortOrder,
+          },
+        });
+        return;
+      } catch (e) {
+        if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+          const t = e.meta?.target;
+          const target = Array.isArray(t) ? t : typeof t === 'string' ? [t] : [];
+          if (target.includes('userId')) {
+            return;
+          }
+          continue;
+        }
+        throw e;
+      }
+    }
+    throw new BadRequestException('Не удалось сгенерировать адрес страницы дизайнера');
+  }
+
+  private buildDesignerDisplayName(
+    profile: { firstName: string | null; lastName: string | null } | null | undefined,
+    email: string | null | undefined,
+  ): string {
+    const parts = [profile?.firstName, profile?.lastName]
+      .filter((x) => x && String(x).trim())
+      .map((x) => String(x).trim());
+    if (parts.length) return parts.join(' ');
+    const local = email?.trim() ? email.trim().split('@')[0] : '';
+    if (local) return local;
+    return 'Дизайнер';
+  }
+
+  private async syncDesignerCardFromProfile(
+    userId: string,
+    profile: { firstName: string | null; lastName: string | null; avatarUrl: string | null },
+  ): Promise<void> {
+    const approved = await this.prisma.userProfile.findUnique({
+      where: { userId },
+      select: { winWinPartnerApproved: true },
+    });
+    if (!approved?.winWinPartnerApproved) return;
+
+    const d = await this.prisma.designer.findUnique({ where: { userId }, select: { id: true } });
+    if (!d) {
+      await this.ensureDesignerRecordForWinWinPartner(userId);
+      return;
+    }
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true },
+    });
+    const displayName = this.buildDesignerDisplayName(profile, user?.email ?? null);
+    await this.prisma.designer.update({
+      where: { userId },
+      data: {
+        displayName,
+        photoUrl: profile.avatarUrl?.trim() || null,
+      },
+    });
   }
 
   /** Список email (через запятую в `WINWIN_REFERRAL_EXEMPT_EMAILS`) без обязательного реф. кода (первые на платформе). */
@@ -581,6 +719,8 @@ export class UsersService {
           .join(' ') || null;
       return { ok: true as const, winWinReferralCode: publicCode!, email, name };
     });
+
+    await this.ensureDesignerRecordForWinWinPartner(targetUserId);
 
     // Письмо о смене статуса — best-effort (не блокируем апрув).
     if (result.email) {
@@ -936,34 +1076,43 @@ export class UsersService {
       avatarUrl?: string | null;
     },
   ) {
+    const sanitizedAbout =
+      patch.aboutHtml === undefined
+        ? undefined
+        : patch.aboutHtml == null || String(patch.aboutHtml).trim() === ''
+          ? null
+          : sanitizeProfileAboutHtml(patch.aboutHtml);
+    const patchForDb =
+      patch.aboutHtml === undefined ? patch : { ...patch, aboutHtml: sanitizedAbout };
+
     const beforeRow = await this.prisma.userProfile.findUnique({ where: { userId } });
     const beforeUrls = this.vitrineAllReferencedImageUrls(beforeRow);
     const result = await this.prisma.userProfile.upsert({
       where: { userId },
       create: {
         userId,
-        firstName: patch.firstName,
-        lastName: patch.lastName,
-        city: patch.city,
-        services: patch.services == null ? undefined : patch.services,
-        aboutHtml: patch.aboutHtml,
-        coverLayout: patch.coverLayout,
-        coverImageUrls: patch.coverImageUrls == null ? undefined : patch.coverImageUrls,
-        avatarUrl: patch.avatarUrl,
+        firstName: patchForDb.firstName,
+        lastName: patchForDb.lastName,
+        city: patchForDb.city,
+        services: patchForDb.services == null ? undefined : patchForDb.services,
+        aboutHtml: patchForDb.aboutHtml,
+        coverLayout: patchForDb.coverLayout,
+        coverImageUrls: patchForDb.coverImageUrls == null ? undefined : patchForDb.coverImageUrls,
+        avatarUrl: patchForDb.avatarUrl,
       },
       update: {
-        ...(patch.firstName !== undefined ? { firstName: patch.firstName } : {}),
-        ...(patch.lastName !== undefined ? { lastName: patch.lastName } : {}),
-        ...(patch.city !== undefined ? { city: patch.city } : {}),
-        ...(patch.services !== undefined
-          ? { services: patch.services == null ? Prisma.JsonNull : patch.services }
+        ...(patchForDb.firstName !== undefined ? { firstName: patchForDb.firstName } : {}),
+        ...(patchForDb.lastName !== undefined ? { lastName: patchForDb.lastName } : {}),
+        ...(patchForDb.city !== undefined ? { city: patchForDb.city } : {}),
+        ...(patchForDb.services !== undefined
+          ? { services: patchForDb.services == null ? Prisma.JsonNull : patchForDb.services }
           : {}),
-        ...(patch.aboutHtml !== undefined ? { aboutHtml: patch.aboutHtml } : {}),
-        ...(patch.coverLayout !== undefined ? { coverLayout: patch.coverLayout } : {}),
-        ...(patch.coverImageUrls !== undefined
-          ? { coverImageUrls: patch.coverImageUrls == null ? Prisma.JsonNull : patch.coverImageUrls }
+        ...(patchForDb.aboutHtml !== undefined ? { aboutHtml: patchForDb.aboutHtml } : {}),
+        ...(patchForDb.coverLayout !== undefined ? { coverLayout: patchForDb.coverLayout } : {}),
+        ...(patchForDb.coverImageUrls !== undefined
+          ? { coverImageUrls: patchForDb.coverImageUrls == null ? Prisma.JsonNull : patchForDb.coverImageUrls }
           : {}),
-        ...(patch.avatarUrl !== undefined ? { avatarUrl: patch.avatarUrl } : {}),
+        ...(patchForDb.avatarUrl !== undefined ? { avatarUrl: patchForDb.avatarUrl } : {}),
       },
     });
     const afterUrls = this.vitrineAllReferencedImageUrls(result);
@@ -973,13 +1122,19 @@ export class UsersService {
         .syncUserProfileMediaFolderName(userId, result.lastName, result.firstName)
         .catch(() => undefined);
     }
-    return result;
+    await this.syncDesignerCardFromProfile(userId, {
+      firstName: result.firstName,
+      lastName: result.lastName,
+      avatarUrl: result.avatarUrl,
+    });
+    return this.getUserProfileVitrine(userId);
   }
 
   async ackProfileOnboarding(userId: string) {
-    await this.prisma.userProfile.updateMany({
+    await this.prisma.userProfile.upsert({
       where: { userId },
-      data: { profileOnboardingPending: false },
+      create: { userId, profileOnboardingPending: false },
+      update: { profileOnboardingPending: false },
     });
     return this.getUserProfileVitrine(userId);
   }
@@ -1014,16 +1169,20 @@ export class UsersService {
   }
 
   async findRetailUserByIdForAdmin(id: string) {
+    const adminUserInclude = {
+      profile: true as const,
+      designer: { select: { slug: true, isPublic: true } },
+    };
     let u = await this.prisma.user.findFirst({
       where: { id, role: UserRole.USER, isActive: true },
-      include: { profile: true },
+      include: adminUserInclude,
     });
     if (!u) throw new NotFoundException('User not found');
     if (u.profile?.winWinPartnerApproved && !u.profile.winWinReferralCode) {
       await this.ensureWinWinReferralCodeForUser(id);
       u = await this.prisma.user.findFirst({
         where: { id, role: UserRole.USER, isActive: true },
-        include: { profile: true },
+        include: adminUserInclude,
       });
       if (!u) throw new NotFoundException('User not found');
     }

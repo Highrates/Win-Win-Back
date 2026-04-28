@@ -636,7 +636,7 @@ model Designer {
   displayName String
   bio         String?  @db.Text
   photoUrl    String?
-  isPublic    Boolean  @default(true)
+  isPublic    Boolean  @default(false)
   sortOrder   Int      @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt

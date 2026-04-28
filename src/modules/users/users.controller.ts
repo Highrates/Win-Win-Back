@@ -4,7 +4,7 @@ import { UsersService } from './users.service';
 import { LkVitrineUploadExceptionFilter } from './lk-vitrine-upload.exception-filter';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { UpdateUserProfileDto } from './dto/user-profile.dto';
+import { DesignerSiteVisibilityDto, UpdateUserProfileDto } from './dto/user-profile.dto';
 import { UpdateConsentsDto, UpdatePasswordDto } from './dto/user-account.dto';
 import { SendDesignerInviteDto, DesignerInviteTokenBodyDto } from '../auth/dto/designer-invite.dto';
 import { DesignerInviteService } from '../auth/designer-invite.service';
@@ -39,6 +39,11 @@ export class UsersController {
   @Throttle({ default: { ttl: 60_000, limit: 60 } })
   myWinWinTeam(@CurrentUser('sub') userId: string) {
     return this.usersService.getWinWinPartnerTeamOverview(userId);
+  }
+
+  @Patch('me/designer-site-visibility')
+  setDesignerSiteVisibility(@CurrentUser('sub') userId: string, @Body() dto: DesignerSiteVisibilityDto) {
+    return this.usersService.setDesignerSiteVisibility(userId, dto.visible);
   }
 
   @Patch('me/profile')

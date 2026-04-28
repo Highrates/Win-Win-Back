@@ -8,10 +8,11 @@ export class DesignersController {
 
   @Public()
   @Get()
-  findAll(@Query('page') page?: string, @Query('limit') limit?: string) {
+  findAll(@Query('page') page?: string, @Query('limit') limit?: string, @Query('q') q?: string) {
     return this.designersService.findAll(
       page ? parseInt(page, 10) : 1,
       limit ? parseInt(limit, 10) : 20,
+      q,
     );
   }
 
