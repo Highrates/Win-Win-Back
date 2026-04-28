@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
   UnauthorizedException,
@@ -616,7 +617,11 @@ export class UsersService {
 
   /**
    * L1 (прямые) и L2 (привлечённые ими) для админки «Структура дизайнера».
-   * L2 — записи `Referral` с `level: 2` и `referrerId` = userId участника L1.
+   *
+   * Важно: `Referral.level` в нашей модели — не “глубина относительно произвольного корня”,
+   * а уровень относительно реферальной программы (L1/L2) и зависит от позиции приглашающего.
+   * Поэтому для админской таблицы “структура конкретного пользователя” глубину считаем
+   * исключительно по графу `referrerId -> referredId`, игнорируя сохранённый `level`.
    */
   async getWinWinReferralStructureForAdmin(partnerUserId: string) {
     const p = await this.prisma.userProfile.findUnique({
@@ -637,7 +642,7 @@ export class UsersService {
       };
     }
     const l1Rels = await this.prisma.referral.findMany({
-      where: { referrerId: partnerUserId, level: 1 },
+      where: { referrerId: partnerUserId },
       orderBy: { createdAt: 'asc' },
       include: {
         referred: {
@@ -648,6 +653,8 @@ export class UsersService {
               select: {
                 firstName: true,
                 lastName: true,
+                city: true,
+                avatarUrl: true,
                 winWinPartnerApproved: true,
                 partnerApplicationRejectedAt: true,
               },
@@ -660,7 +667,7 @@ export class UsersService {
     const l2Rels =
       l1Ids.length > 0
         ? await this.prisma.referral.findMany({
-            where: { referrerId: { in: l1Ids }, level: 2 },
+            where: { referrerId: { in: l1Ids } },
             orderBy: { createdAt: 'asc' },
             include: {
               referred: {
@@ -671,6 +678,8 @@ export class UsersService {
                     select: {
                       firstName: true,
                       lastName: true,
+                      city: true,
+                      avatarUrl: true,
                       winWinPartnerApproved: true,
                       partnerApplicationRejectedAt: true,
                     },
@@ -691,11 +700,15 @@ export class UsersService {
       const f2 = r2.referred.profile?.firstName?.trim() ?? '';
       const l2n = r2.referred.profile?.lastName?.trim() ?? '';
       const name2 = [f2, l2n].filter(Boolean).join(' ') || '—';
+      const city2 = r2.referred.profile?.city?.trim() || null;
+      const av2 = r2.referred.profile?.avatarUrl?.trim() || null;
       return {
         id: r2.id,
         userId: r2.referredId,
         email: r2.referred.email,
         name: name2,
+        city: city2,
+        avatarUrl: av2,
         isPartner: Boolean(r2.referred.profile?.winWinPartnerApproved),
         joinedAt: r2.createdAt.toISOString(),
       };
@@ -710,20 +723,60 @@ export class UsersService {
         userId: string;
         email: string | null;
         name: string;
+        city: string | null;
+        avatarUrl: string | null;
         isPartner: boolean;
         joinedAt: string;
       }[];
+      const city = r.referred.profile?.city?.trim() || null;
+      const avatarUrl = r.referred.profile?.avatarUrl?.trim() || null;
       return {
         id: r.id,
         userId: r.referredId,
         email: r.referred.email,
         name,
+        city,
+        avatarUrl,
         isPartner: Boolean(r.referred.profile?.winWinPartnerApproved),
         joinedAt: r.createdAt.toISOString(),
         l2,
       };
     });
     return { l1 };
+  }
+
+  /** Команда и реф. структура для ЛК партнёра (витрина «Команда»). */
+  async getWinWinPartnerTeamOverview(partnerUserId: string) {
+    const approved = await this.prisma.userProfile.findUnique({
+      where: { userId: partnerUserId },
+      select: { winWinPartnerApproved: true },
+    });
+    if (!approved?.winWinPartnerApproved) {
+      throw new ForbiddenException('Раздел доступен одобренным партнёрам Win-Win');
+    }
+    const { l1 } = await this.getWinWinReferralStructureForAdmin(partnerUserId);
+    const inviter = await this.getWinWinReferralInviterForAdmin(partnerUserId);
+    let designerSlug: string | null = null;
+    if (inviter) {
+      const d = await this.prisma.designer.findUnique({
+        where: { userId: inviter.referrerId },
+        select: { slug: true },
+      });
+      designerSlug = d?.slug?.trim() ?? null;
+    }
+    const level1 = l1.length;
+    const level2 = l1.reduce((acc, row) => acc + row.l2.length, 0);
+    return {
+      inviter: inviter
+        ? {
+            userId: inviter.referrerId,
+            name: inviter.name,
+            designerSlug,
+          }
+        : null,
+      counts: { total: level1 + level2, level1, level2 },
+      l1,
+    };
   }
 
   /** Пригласивший партнёр (кто «над» в структуре). */

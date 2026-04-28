@@ -34,6 +34,13 @@ export class UsersController {
     return this.usersService.getUserProfileVitrine(userId);
   }
 
+  /** Реферальная структура «Команда» (L1/L2) + сводка для витрины ЛК партнёра. */
+  @Get('me/winwin-team')
+  @Throttle({ default: { ttl: 60_000, limit: 60 } })
+  myWinWinTeam(@CurrentUser('sub') userId: string) {
+    return this.usersService.getWinWinPartnerTeamOverview(userId);
+  }
+
   @Patch('me/profile')
   updateMyProfile(@CurrentUser('sub') userId: string, @Body() dto: UpdateUserProfileDto) {
     return this.usersService.updateUserProfileVitrine(userId, {
