@@ -1,6 +1,7 @@
-import { Controller, Get, NotFoundException, Param, Query } from '@nestjs/common';
+import { Body, Controller, Get, NotFoundException, Param, Post, Query } from '@nestjs/common';
 import { CatalogService } from './catalog.service';
 import { Public } from '../../common/decorators/public.decorator';
+import { ResolveProductIdsDto } from './dto/resolve-product-ids.dto';
 
 @Controller('catalog')
 export class CatalogController {
@@ -47,6 +48,12 @@ export class CatalogController {
     const data = await this.catalogService.getCuratedBrandCollectionBySlug(slug);
     if (!data) throw new NotFoundException();
     return data;
+  }
+
+  @Public()
+  @Post('products/resolve-ids')
+  resolveProductIds(@Body() dto: ResolveProductIdsDto) {
+    return this.catalogService.resolveProductSummariesByIds(dto.ids ?? []);
   }
 
   @Public()

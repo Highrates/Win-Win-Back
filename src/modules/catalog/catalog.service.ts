@@ -662,6 +662,22 @@ export class CatalogService {
     }
     return { items };
   }
+
+  /** Короткие данные товара по id (для ЛК кейсов и т.п.). Только активные; неизвестные id пропускаются. */
+  async resolveProductSummariesByIds(idsInput: string[]) {
+    const ids = [...new Set(idsInput.map((x) => String(x).trim()).filter(Boolean))].slice(0, 80);
+    if (!ids.length) return { items: [] as { id: string; slug: string; name: string }[] };
+    const rows = await this.prisma.product.findMany({
+      where: { id: { in: ids }, isActive: true },
+      select: { id: true, slug: true, name: true },
+    });
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const items = ids.map((id) => {
+      const r = byId.get(id);
+      return r ? { id: r.id, slug: r.slug, name: r.name } : { id, slug: '', name: 'Товар' };
+    });
+    return { items };
+  }
 }
 
 export type PublicSetSiblingProduct = {

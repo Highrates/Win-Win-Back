@@ -34,6 +34,7 @@ export class SiteSettingsController {
     return this.svc.updateAdmin({
       heroImageUrls: dto.heroImageUrls,
       designerServiceOptions: dto.designerServiceOptions,
+      caseRoomTypeOptions: dto.caseRoomTypeOptions,
     });
   }
 }

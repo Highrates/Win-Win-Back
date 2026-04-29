@@ -37,6 +37,8 @@ model User {
   designer      Designer?         // публичная страница дизайнера (опционально)
   accountContactChallenges AccountContactChallenge[]
   designerInvitesSent      DesignerInvite[]     @relation("DesignerInviteInviter")
+
+  cases Case[]
 }
 
 /// Приглашение дизайнера по email: ссылка с подписанным токеном, ref-код на момент отправки.
@@ -146,6 +148,39 @@ model UserProfile {
   kycData      Json?     // документы, верификация
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
+}
+
+/// Кейсы дизайнера (создаются в ЛК; доступны только одобренным партнёрам Win-Win).
+model Case {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  title            String
+  shortDescription String? @db.VarChar(400)
+  location         String?
+  year             Int?
+  budget           String?
+
+  /// HTML из RichBlock
+  descriptionHtml String? @db.Text
+
+  /// Сетка обложки: "4:3" | "16:9"
+  coverLayout String?
+  /// URL обложек (1–2 для 4:3, 1 для 16:9)
+  coverImageUrls Json?
+
+  /// Типы помещений (массив строк, значения из SiteSettings.caseRoomTypeOptions)
+  roomTypes Json?
+
+  /// ID товаров каталога, использованных в проекте (JSON-массив строк)
+  productIds Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, createdAt(sort: Desc)])
 }
 
 enum KycStatus {
@@ -874,6 +909,9 @@ model SiteSettings {
 
   /// Список услуг для мультиселекта в профиле дизайнера (массив строк).
   designerServiceOptions Json?
+
+  /// Типы помещений для кейсов дизайнера (массив строк).
+  caseRoomTypeOptions Json?
 
   updatedAt DateTime @updatedAt
 }

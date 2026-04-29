@@ -24,6 +24,7 @@ import { PagesModule } from './modules/pages/pages.module';
 import { PublicCollectionsModule } from './modules/public-collections/public-collections.module';
 import { MediaLibraryModule } from './modules/media-library/media-library.module';
 import { SiteSettingsModule } from './modules/site-settings/site-settings.module';
+import { CasesModule } from './modules/cases/cases.module';
 
 @Module({
   imports: [
@@ -55,6 +56,7 @@ import { SiteSettingsModule } from './modules/site-settings/site-settings.module
     PublicCollectionsModule,
     MediaLibraryModule,
     SiteSettingsModule,
+    CasesModule,
     AuditModule,
   ],
   providers: [

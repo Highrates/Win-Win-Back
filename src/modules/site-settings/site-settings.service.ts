@@ -4,6 +4,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 export type PublicSiteSettingsPayload = {
   heroImageUrls: string[];
   designerServiceOptions: string[];
+  caseRoomTypeOptions: string[];
 };
 
 @Injectable()
@@ -27,16 +28,26 @@ export class SiteSettingsService {
       : [];
   }
 
+  private static parseCaseRoomTypes(raw: unknown): string[] {
+    return Array.isArray(raw)
+      ? raw
+          .map((x) => (typeof x === 'string' ? x.trim() : ''))
+          .filter((x) => x.length > 0)
+          .slice(0, 200)
+      : [];
+  }
+
   async getPublic(): Promise<PublicSiteSettingsPayload> {
     try {
       const row = await this.prisma.siteSettings.findUnique({ where: { id: 'site' } });
       return {
         heroImageUrls: SiteSettingsService.parseHeroUrlList(row?.heroImageUrls),
         designerServiceOptions: SiteSettingsService.parseDesignerServices(row?.designerServiceOptions),
+        caseRoomTypeOptions: SiteSettingsService.parseCaseRoomTypes(row?.caseRoomTypeOptions),
       };
     } catch {
       // Если миграции ещё не применены (таблицы нет) — не валим витрину.
-      return { heroImageUrls: [], designerServiceOptions: [] };
+      return { heroImageUrls: [], designerServiceOptions: [], caseRoomTypeOptions: [] };
     }
   }
 
@@ -47,6 +58,7 @@ export class SiteSettingsService {
   async updateAdmin(patch: {
     heroImageUrls?: string[];
     designerServiceOptions?: string[];
+    caseRoomTypeOptions?: string[];
   }): Promise<PublicSiteSettingsPayload> {
     const heroImageUrls =
       patch.heroImageUrls === undefined
@@ -64,6 +76,14 @@ export class SiteSettingsService {
             .filter((x) => x.length > 0)
             .slice(0, 200);
 
+    const caseRoomTypeOptions =
+      patch.caseRoomTypeOptions === undefined
+        ? undefined
+        : patch.caseRoomTypeOptions
+            .map((x) => String(x ?? '').trim())
+            .filter((x) => x.length > 0)
+            .slice(0, 200);
+
     try {
       await this.prisma.siteSettings.upsert({
         where: { id: 'site' },
@@ -71,10 +91,12 @@ export class SiteSettingsService {
           id: 'site',
           heroImageUrls: heroImageUrls ?? [],
           designerServiceOptions: designerServiceOptions !== undefined ? designerServiceOptions : [],
+          caseRoomTypeOptions: caseRoomTypeOptions !== undefined ? caseRoomTypeOptions : [],
         },
         update: {
           ...(heroImageUrls !== undefined ? { heroImageUrls } : {}),
           ...(designerServiceOptions !== undefined ? { designerServiceOptions } : {}),
+          ...(caseRoomTypeOptions !== undefined ? { caseRoomTypeOptions } : {}),
         },
       });
     } catch (e) {
