@@ -663,18 +663,65 @@ export class CatalogService {
     return { items };
   }
 
-  /** Короткие данные товара по id (для ЛК кейсов и т.п.). Только активные; неизвестные id пропускаются. */
+  /** Короткие данные товара по id (для ЛК кейсов, витрины дизайнера и т.п.). Только активные; неизвестные id — плейсхолдер. */
   async resolveProductSummariesByIds(idsInput: string[]) {
     const ids = [...new Set(idsInput.map((x) => String(x).trim()).filter(Boolean))].slice(0, 80);
-    if (!ids.length) return { items: [] as { id: string; slug: string; name: string }[] };
+    type Item = {
+      id: string;
+      slug: string;
+      name: string;
+      price: number;
+      imageUrl: string | null;
+    };
+    if (!ids.length) return { items: [] as Item[] };
     const rows = await this.prisma.product.findMany({
       where: { id: { in: ids }, isActive: true },
-      select: { id: true, slug: true, name: true },
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        images: {
+          take: 6,
+          orderBy: { sortOrder: 'asc' },
+          select: { url: true, alt: true },
+        },
+        variants: {
+          where: { isActive: true },
+          orderBy: [{ isDefault: 'desc' }, { sortOrder: 'asc' }],
+          take: 1,
+          select: {
+            variantLabel: true,
+            price: true,
+            variantProductImages: {
+              take: 6,
+              orderBy: { sortOrder: 'asc' },
+              include: { productImage: { select: { url: true, alt: true } } },
+            },
+          },
+        },
+      },
     });
     const byId = new Map(rows.map((r) => [r.id, r]));
-    const items = ids.map((id) => {
+    const items: Item[] = ids.map((id) => {
       const r = byId.get(id);
-      return r ? { id: r.id, slug: r.slug, name: r.name } : { id, slug: '', name: 'Товар' };
+      if (!r) return { id, slug: '', name: 'Товар', price: 0, imageUrl: null };
+      const dv = r.variants[0];
+      const shared = r.images.map((im) => ({ url: im.url, alt: im.alt }));
+      const effective = dv
+        ? resolveEffectiveVariantImages({
+            sharedProductImages: shared,
+            variantProductImagesFromJunction: dv.variantProductImages,
+          })
+        : shared;
+      const imageUrls = effective.map((im) => im.url.trim()).filter(Boolean);
+      const displayName = dv?.variantLabel?.trim() || r.name;
+      return {
+        id: r.id,
+        slug: r.slug,
+        name: displayName,
+        price: priceToNumber(dv?.price ?? 0),
+        imageUrl: imageUrls[0] ?? null,
+      };
     });
     return { items };
   }

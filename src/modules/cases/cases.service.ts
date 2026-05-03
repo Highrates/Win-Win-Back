@@ -1,8 +1,9 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma, UserRole } from '@prisma/client';
+import { AuditAction, Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MediaLibraryService } from '../media-library/media-library.service';
 import { sanitizeProfileAboutHtml } from '../blog/blog-html.util';
+import { AuditService } from '../audit/audit.service';
 
 function parseStringArray(v: unknown, max: number): string[] {
   if (!Array.isArray(v)) return [];
@@ -50,6 +51,7 @@ export class CasesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly media: MediaLibraryService,
+    private readonly audit: AuditService,
   ) {}
 
   private async assertPartnerDesigner(userId: string): Promise<void> {
@@ -228,36 +230,59 @@ export class CasesService {
   }
 
   async getCaseForAdmin(adminUserId: string, role: UserRole, id: string) {
-    void adminUserId;
     if (role !== UserRole.ADMIN && role !== UserRole.MODERATOR) {
       throw new ForbiddenException('Forbidden');
     }
     const row = await this.prisma.case.findUnique({ where: { id } });
     if (!row) throw new NotFoundException('Кейс не найден');
+    await this.audit.log({
+      action: AuditAction.READ,
+      entityType: 'Case',
+      entityId: row.id,
+      path: `/api/v1/cases/admin/${encodeURIComponent(id)}`,
+      httpMethod: 'GET',
+      actorUserId: adminUserId,
+      metadata: { ownerUserId: row.userId },
+    });
     return row;
   }
 
   async listCasesByUserForAdmin(adminUserId: string, targetUserId: string) {
-    // adminUserId сейчас не используется, но оставляем параметром для будущего аудита/политик.
-    void adminUserId;
-    return this.prisma.case.findMany({
+    const rows = await this.prisma.case.findMany({
       where: { userId: targetUserId },
       orderBy: { createdAt: 'desc' },
     });
+    await this.audit.log({
+      action: AuditAction.READ,
+      entityType: 'Case',
+      path: `/api/v1/cases/admin/users/${encodeURIComponent(targetUserId)}`,
+      httpMethod: 'GET',
+      actorUserId: adminUserId,
+      metadata: { targetUserId, caseCount: rows.length },
+    });
+    return rows;
   }
 
   async deleteCaseForAdmin(adminUserId: string, role: UserRole, id: string) {
-    void adminUserId;
     if (role !== UserRole.ADMIN && role !== UserRole.MODERATOR) {
       throw new ForbiddenException('Forbidden');
     }
     const row = await this.prisma.case.findUnique({
       where: { id },
-      select: { id: true, coverImageUrls: true, descriptionHtml: true },
+      select: { id: true, userId: true, coverImageUrls: true, descriptionHtml: true },
     });
     if (!row) throw new NotFoundException('Кейс не найден');
     const urls = referencedUrlsFromCase(row);
     await this.prisma.case.delete({ where: { id } });
+    await this.audit.log({
+      action: AuditAction.DELETE,
+      entityType: 'Case',
+      entityId: id,
+      path: `/api/v1/cases/admin/${encodeURIComponent(id)}`,
+      httpMethod: 'DELETE',
+      actorUserId: adminUserId,
+      metadata: { ownerUserId: row.userId },
+    });
     for (const u of urls) {
       this.media.tryDeleteObjectByPublicUrlIfUnreferenced(u).catch(() => undefined);
     }

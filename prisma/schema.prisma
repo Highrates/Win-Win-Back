@@ -878,6 +878,7 @@ enum AuditAction {
   UPLOAD
   LOGIN
   LOGIN_FAILED
+  READ
 }
 
 model AuditLog {

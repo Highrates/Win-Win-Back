@@ -16,6 +16,13 @@ export class DesignersController {
     );
   }
 
+  /** Все публичные кейсы партнёров (витрина `/projects`). Должен быть выше `:slug`, иначе `cases` станет slug. */
+  @Public()
+  @Get('cases')
+  listPublicCases() {
+    return this.designersService.listAllPublicCases();
+  }
+
   @Public()
   @Get(':slug')
   findBySlug(@Param('slug') slug: string) {
