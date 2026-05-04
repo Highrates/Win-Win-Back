@@ -293,6 +293,7 @@ export class CatalogService {
     const defaultModificationId =
       defaultVariant?.modificationId ?? row.modifications[0]?.id ?? null;
 
+    const likesDisplayCount = Math.max(0, row.likesUserCount + row.likesAdminBoost);
     return {
       id: row.id,
       slug: row.slug,
@@ -301,6 +302,7 @@ export class CatalogService {
       priceMin,
       priceMax,
       casesLinkedCount: row.casesLinkedCount,
+      likesDisplayCount,
       shortDescription: row.shortDescription,
       description: row.description,
       seoTitle: row.seoTitle,
@@ -410,6 +412,8 @@ export class CatalogService {
           isActive: true,
           updatedAt: true,
           casesLinkedCount: true,
+          likesUserCount: true,
+          likesAdminBoost: true,
           category: { select: { name: true } },
           productCategories: { select: { categoryId: true } },
           brand: { select: { name: true } },
@@ -450,6 +454,8 @@ export class CatalogService {
           priceMax,
           images: shared,
           casesLinkedCount: p.casesLinkedCount,
+          likesUserCount: p.likesUserCount,
+          likesAdminBoost: p.likesAdminBoost,
         }) as Record<string, unknown>;
       }),
     );
@@ -676,7 +682,10 @@ export class CatalogService {
       name: string;
       price: number;
       imageUrl: string | null;
+      /** До 6 URL общей галереи товара (как на PDP). */
+      imageUrls: string[];
       casesLinkedCount: number;
+      likesDisplayCount: number;
     };
     if (!ids.length) return { items: [] as Item[] };
     const rows = await this.prisma.product.findMany({
@@ -686,6 +695,8 @@ export class CatalogService {
         slug: true,
         name: true,
         casesLinkedCount: true,
+        likesUserCount: true,
+        likesAdminBoost: true,
         images: {
           take: 6,
           orderBy: { sortOrder: 'asc' },
@@ -706,7 +717,16 @@ export class CatalogService {
     const items: Item[] = ids.map((id) => {
       const r = byId.get(id);
       if (!r)
-        return { id, slug: '', name: 'Товар', price: 0, imageUrl: null, casesLinkedCount: 0 };
+        return {
+          id,
+          slug: '',
+          name: 'Товар',
+          price: 0,
+          imageUrl: null,
+          imageUrls: [],
+          casesLinkedCount: 0,
+          likesDisplayCount: 0,
+        };
       const dv = r.variants[0];
       /** Как на PDP (`product.images`) и в Meilisearch: общая галерея товара, не junction варианта. */
       const galleryUrls = r.images.map((im) => im.url.trim()).filter(Boolean);
@@ -717,7 +737,9 @@ export class CatalogService {
         name: displayName,
         price: priceToNumber(dv?.price ?? 0),
         imageUrl: galleryUrls[0] ?? null,
+        imageUrls: galleryUrls,
         casesLinkedCount: r.casesLinkedCount,
+        likesDisplayCount: Math.max(0, r.likesUserCount + r.likesAdminBoost),
       };
     });
     return { items };

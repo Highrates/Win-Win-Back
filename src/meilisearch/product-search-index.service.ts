@@ -54,6 +54,8 @@ export class ProductSearchIndexService {
             select: { price: true },
           },
           casesLinkedCount: true,
+          likesUserCount: true,
+          likesAdminBoost: true,
         },
       });
       if (!row) return;
@@ -81,6 +83,8 @@ export class ProductSearchIndexService {
         priceMax,
         images: shared,
         casesLinkedCount: row.casesLinkedCount,
+        likesUserCount: row.likesUserCount,
+        likesAdminBoost: row.likesAdminBoost,
       };
       await index.addDocuments([buildProductSearchDocument(r)], { primaryKey: 'id' });
     } catch (e) {
@@ -137,6 +141,8 @@ export class ProductSearchIndexService {
           select: { price: true },
         },
         casesLinkedCount: true,
+        likesUserCount: true,
+        likesAdminBoost: true,
       },
     });
 
@@ -165,6 +171,8 @@ export class ProductSearchIndexService {
         priceMax,
         images: shared,
         casesLinkedCount: row.casesLinkedCount,
+        likesUserCount: row.likesUserCount,
+        likesAdminBoost: row.likesAdminBoost,
       };
       flat.push(buildProductSearchDocument(r));
     }

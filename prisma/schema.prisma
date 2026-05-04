@@ -33,6 +33,8 @@ model User {
   referralRewards ReferralReward[]
   blogPosts       BlogPost[]
   favorites     Favorite[]
+  productLikes  ProductLike[]
+  caseLikes     CaseLike[]
   cart          Cart?
   designer      Designer?         // публичная страница дизайнера (опционально)
   accountContactChallenges AccountContactChallenge[]
@@ -178,11 +180,41 @@ model Case {
   productIds Json?
 
   caseProducts CaseProduct[]
+  caseLikes    CaseLike[]
+
+  /// Лайки зарегистрированных пользователей (CaseLike).
+  likesUserCount  Int @default(0)
+  /// Админское «добавление» к публичному счётчику.
+  likesAdminBoost Int @default(0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([userId, createdAt(sort: Desc)])
+}
+
+model ProductLike {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, productId])
+  @@index([productId])
+}
+
+model CaseLike {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  caseId String
+  case   Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, caseId])
+  @@index([caseId])
 }
 
 /// Связь кейс ↔ товар (для счётчика «коллекции» и фильтра проектов по товару).
@@ -377,10 +409,15 @@ model Product {
   sortOrder   Int      @default(0)
   /// Сколько кейсов партнёров ссылается на товар (инкрементально; не «личные коллекции»).
   casesLinkedCount Int @default(0)
+  /// Лайки зарегистрированных пользователей (по строкам ProductLike).
+  likesUserCount   Int @default(0)
+  /// Админское «добавление» к публичному счётчику (не строки лайков).
+  likesAdminBoost  Int @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   caseLinks        CaseProduct[]
+  productLikes     ProductLike[]
   images           ProductImage[]
   videos           ProductVideo[]
   variants         ProductVariant[]

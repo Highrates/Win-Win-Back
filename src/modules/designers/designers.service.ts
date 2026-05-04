@@ -73,7 +73,9 @@ type ProductSummary = {
   name: string;
   price: number;
   imageUrl: string | null;
+  imageUrls: string[];
   casesLinkedCount: number;
+  likesDisplayCount: number;
 };
 
 type CaseRowForPublicMap = {
@@ -85,6 +87,8 @@ type CaseRowForPublicMap = {
   coverImageUrls: Prisma.JsonValue | null;
   roomTypes: Prisma.JsonValue | null;
   productIds: Prisma.JsonValue | null;
+  likesUserCount: number;
+  likesAdminBoost: number;
 };
 
 @Injectable()
@@ -128,7 +132,9 @@ export class DesignersService {
           name: 'Товар',
           price: 0,
           imageUrl: null as string | null,
+          imageUrls: [] as string[],
           casesLinkedCount: 0,
+          likesDisplayCount: 0,
         };
       return {
         id: p.id,
@@ -136,9 +142,12 @@ export class DesignersService {
         name: p.name,
         price: p.price,
         imageUrl: p.imageUrl,
+        imageUrls: p.imageUrls ?? [],
         casesLinkedCount: p.casesLinkedCount,
+        likesDisplayCount: p.likesDisplayCount,
       };
     });
+    const likesDisplayCount = Math.max(0, c.likesUserCount + c.likesAdminBoost);
     return {
       id: c.id,
       title: c.title,
@@ -149,6 +158,7 @@ export class DesignersService {
       coverLayout: layoutCase,
       coverImageUrls: coverUrls,
       products,
+      likesDisplayCount,
     };
   }
 
@@ -238,6 +248,8 @@ export class DesignersService {
         coverImageUrls: true,
         roomTypes: true,
         productIds: true,
+        likesUserCount: true,
+        likesAdminBoost: true,
       },
     });
 
@@ -280,6 +292,8 @@ export class DesignersService {
         coverImageUrls: true,
         roomTypes: true,
         productIds: true,
+        likesUserCount: true,
+        likesAdminBoost: true,
         user: {
           select: {
             designer: {

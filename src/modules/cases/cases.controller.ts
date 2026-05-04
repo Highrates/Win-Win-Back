@@ -18,7 +18,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { LkVitrineUploadExceptionFilter } from '../users/lk-vitrine-upload.exception-filter';
-import { CreateMyCaseDto, UpdateMyCaseDto } from './dto/cases.dto';
+import { AdminPatchCaseLikesBoostDto, CreateMyCaseDto, UpdateMyCaseDto } from './dto/cases.dto';
 import { CasesService } from './cases.service';
 
 const LK_CASE_MEDIA_MAX = 100 * 1024 * 1024;
@@ -86,6 +86,18 @@ export class CasesController {
     @Param('id') id: string,
   ) {
     return this.svc.getCaseForAdmin(adminUserId, role, id);
+  }
+
+  @Patch('admin/:id/likes-boost')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.MODERATOR)
+  patchCaseLikesBoostAdmin(
+    @CurrentUser('sub') adminUserId: string,
+    @CurrentUser('role') role: UserRole,
+    @Param('id') id: string,
+    @Body() dto: AdminPatchCaseLikesBoostDto,
+  ) {
+    return this.svc.updateCaseLikesAdminBoostForAdmin(adminUserId, role, id, dto.likesAdminBoost);
   }
 
   @Delete('admin/:id')

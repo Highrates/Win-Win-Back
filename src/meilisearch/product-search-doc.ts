@@ -21,6 +21,8 @@ export type ProductVariantSearchIndexRow = {
   images?: { url: string }[];
   /** Кейсы партнёров с этим товаром (публичный счётчик). */
   casesLinkedCount?: number;
+  likesUserCount?: number;
+  likesAdminBoost?: number;
 };
 
 /** @deprecated используйте ProductVariantSearchIndexRow */
@@ -65,6 +67,9 @@ function collectImageUrls(images: { url: string }[] | undefined): string[] {
 export function buildProductSearchDocument(row: ProductVariantSearchIndexRow): Record<string, unknown> {
   const imageUrls = collectImageUrls(row.images);
   const thumbUrl = imageUrls[0] ?? null;
+  const likesUser = typeof row.likesUserCount === 'number' ? row.likesUserCount : 0;
+  const likesAdmin = typeof row.likesAdminBoost === 'number' ? row.likesAdminBoost : 0;
+  const likesDisplayCount = Math.max(0, likesUser + likesAdmin);
   return {
     id: row.id,
     productId: row.productId,
@@ -84,5 +89,6 @@ export function buildProductSearchDocument(row: ProductVariantSearchIndexRow): R
     thumbUrl,
     imageUrls,
     casesLinkedCount: row.casesLinkedCount ?? 0,
+    likesDisplayCount,
   };
 }

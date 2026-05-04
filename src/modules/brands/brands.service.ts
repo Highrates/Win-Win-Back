@@ -53,6 +53,8 @@ export class BrandsService {
         price: dv?.price ?? null,
         currency: dv?.currency ?? 'RUB',
         images,
+        casesLinkedCount: p.casesLinkedCount,
+        likesDisplayCount: Math.max(0, p.likesUserCount + p.likesAdminBoost),
       };
     });
 

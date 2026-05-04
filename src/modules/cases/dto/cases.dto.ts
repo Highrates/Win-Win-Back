@@ -126,3 +126,10 @@ export class UpdateMyCaseDto {
   productIds?: string[] | null;
 }
 
+/** Админ: задать «накрутку» лайков кейса (отдельно от реальных CaseLike). */
+export class AdminPatchCaseLikesBoostDto {
+  @IsInt()
+  @Min(0)
+  @Max(10_000_000)
+  likesAdminBoost!: number;
+}

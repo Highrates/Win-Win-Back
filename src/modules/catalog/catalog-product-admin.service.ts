@@ -580,6 +580,8 @@ export class CatalogProductAdminService {
       technicalSpecs: row.technicalSpecs,
       seoTitle: row.seoTitle,
       seoDescription: row.seoDescription,
+      likesUserCount: row.likesUserCount,
+      likesAdminBoost: row.likesAdminBoost,
       category: row.category,
       brand: row.brand,
       variants: row.variants.map((v) => this.mapVariantSummary(v, row.name)),
@@ -641,6 +643,11 @@ export class CatalogProductAdminService {
       seoDescription: dto.seoDescription?.trim() || null,
       isActive: dto.isActive ?? true,
     };
+
+    if (dto.likesAdminBoost !== undefined) {
+      const n = Math.floor(Number(dto.likesAdminBoost));
+      data.likesAdminBoost = Number.isFinite(n) ? Math.max(0, Math.min(10_000_000, n)) : 0;
+    }
 
     if (dto.categoryId !== existing.categoryId) {
       const agg = await this.prisma.product.aggregate({

@@ -317,6 +317,35 @@ export class CasesService {
     return this.uploadToUserFolder(userId, file);
   }
 
+  async updateCaseLikesAdminBoostForAdmin(
+    adminUserId: string,
+    role: UserRole,
+    id: string,
+    likesAdminBoost: number,
+  ) {
+    if (role !== UserRole.ADMIN && role !== UserRole.MODERATOR) {
+      throw new ForbiddenException('Forbidden');
+    }
+    const n = Math.floor(Number(likesAdminBoost));
+    const boost = Number.isFinite(n) ? Math.max(0, Math.min(10_000_000, n)) : 0;
+    const row = await this.prisma.case.findUnique({ where: { id }, select: { id: true, userId: true } });
+    if (!row) throw new NotFoundException('Кейс не найден');
+    const updated = await this.prisma.case.update({
+      where: { id },
+      data: { likesAdminBoost: boost },
+    });
+    await this.audit.log({
+      action: AuditAction.UPDATE,
+      entityType: 'Case',
+      entityId: id,
+      path: `/api/v1/cases/admin/${encodeURIComponent(id)}/likes-boost`,
+      httpMethod: 'PATCH',
+      actorUserId: adminUserId,
+      metadata: { ownerUserId: row.userId, likesAdminBoost: boost },
+    });
+    return updated;
+  }
+
   async getCaseForAdmin(adminUserId: string, role: UserRole, id: string) {
     if (role !== UserRole.ADMIN && role !== UserRole.MODERATOR) {
       throw new ForbiddenException('Forbidden');
