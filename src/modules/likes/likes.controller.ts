@@ -1,7 +1,24 @@
-import { Controller, Delete, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Controller, Delete, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { LikesService } from './likes.service';
+import { LikesService, type LikesCollectionQuery } from './likes.service';
+
+const COLLECTION_MAX_LIMIT = 100;
+const COLLECTION_DEFAULT_LIMIT = 40;
+
+function parseCollectionLimit(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw === '') return fallback;
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(Math.max(n, 0), COLLECTION_MAX_LIMIT);
+}
+
+function parseCollectionOffset(raw: string | undefined): number {
+  if (raw === undefined || raw === '') return 0;
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.min(n, 500_000);
+}
 
 @Controller('likes')
 @UseGuards(JwtAuthGuard)
@@ -9,8 +26,20 @@ export class LikesController {
   constructor(private readonly likes: LikesService) {}
 
   @Get('collection')
-  collection(@CurrentUser('sub') userId: string) {
-    return this.likes.getCollection(userId);
+  collection(
+    @CurrentUser('sub') userId: string,
+    @Query('productsLimit') productsLimit?: string,
+    @Query('productsOffset') productsOffset?: string,
+    @Query('casesLimit') casesLimit?: string,
+    @Query('casesOffset') casesOffset?: string,
+  ) {
+    const q: LikesCollectionQuery = {
+      productsLimit: parseCollectionLimit(productsLimit, COLLECTION_DEFAULT_LIMIT),
+      productsOffset: parseCollectionOffset(productsOffset),
+      casesLimit: parseCollectionLimit(casesLimit, COLLECTION_DEFAULT_LIMIT),
+      casesOffset: parseCollectionOffset(casesOffset),
+    };
+    return this.likes.getCollection(userId, q);
   }
 
   @Get('products/:productId/me')

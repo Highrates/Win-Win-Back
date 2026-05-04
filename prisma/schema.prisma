@@ -32,7 +32,6 @@ model User {
   referredAs    Referral?  @relation("referred") // не более одной записи: кто привёл текущего user
   referralRewards ReferralReward[]
   blogPosts       BlogPost[]
-  favorites     Favorite[]
   productLikes  ProductLike[]
   caseLikes     CaseLike[]
   cart          Cart?
@@ -182,7 +181,7 @@ model Case {
   caseProducts CaseProduct[]
   caseLikes    CaseLike[]
 
-  /// Лайки зарегистрированных пользователей (CaseLike).
+  /// Лайки зарегистрированных пользователей (CaseLike). В БД: CHECK >= 0.
   likesUserCount  Int @default(0)
   /// Админское «добавление» к публичному счётчику.
   likesAdminBoost Int @default(0)
@@ -409,7 +408,7 @@ model Product {
   sortOrder   Int      @default(0)
   /// Сколько кейсов партнёров ссылается на товар (инкрементально; не «личные коллекции»).
   casesLinkedCount Int @default(0)
-  /// Лайки зарегистрированных пользователей (по строкам ProductLike).
+  /// Лайки зарегистрированных пользователей (по строкам ProductLike). В БД: CHECK >= 0.
   likesUserCount   Int @default(0)
   /// Админское «добавление» к публичному счётчику (не строки лайков).
   likesAdminBoost  Int @default(0)
@@ -528,7 +527,6 @@ model ProductVariant {
 
   variantProductImages ProductVariantProductImage[]
   elementSelections    ProductVariantElementSelection[]
-  favorites  Favorite[]
   cartItems  CartItem[]
   orderItems OrderItem[]
 
@@ -728,18 +726,6 @@ model Designer {
   sortOrder   Int      @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
-}
-
-// --- Избранное: позиция = вариант SKU (одна звезда на вариант) ---
-model Favorite {
-  id               String         @id @default(cuid())
-  userId           String
-  user             User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  productVariantId String
-  productVariant   ProductVariant @relation(fields: [productVariantId], references: [id], onDelete: Cascade)
-  createdAt        DateTime       @default(now())
-
-  @@unique([userId, productVariantId])
 }
 
 // --- Корзина (Этап 4: страница корзины/заказа) ---

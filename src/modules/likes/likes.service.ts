@@ -2,54 +2,19 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CatalogService } from '../catalog/catalog.service';
-import { sanitizeProfileAboutHtml } from '../blog/blog-html.util';
 import { ProductSearchIndexService } from '../../meilisearch/product-search-index.service';
+import {
+  buildCasePublicDto,
+  buildProductSummaryMapForCases,
+  displayLikes,
+} from '../designers/case-public-dto.builder';
 
-function parseStringIds(raw: Prisma.JsonValue | null | undefined, max: number): string[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .filter((x): x is string => typeof x === 'string')
-    .map((x) => x.trim())
-    .filter((x) => x.length > 0)
-    .slice(0, max);
-}
-
-function parseCoverUrls(raw: Prisma.JsonValue): string[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .filter((x): x is string => typeof x === 'string')
-    .map((x) => x.trim())
-    .filter((x) => x.length > 0);
-}
-
-function servicesLineFromJson(raw: Prisma.JsonValue): string | null {
-  if (Array.isArray(raw)) {
-    const parts = raw
-      .filter((x): x is string => typeof x === 'string')
-      .map((x) => x.trim())
-      .filter((x) => x.length > 0);
-    return parts.length ? parts.join(', ') : null;
-  }
-  return null;
-}
-
-function roomTypesLabelsFromJson(raw: Prisma.JsonValue | null | undefined): string[] {
-  if (!Array.isArray(raw)) return [];
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const x of raw) {
-    if (typeof x !== 'string') continue;
-    const t = x.trim();
-    if (!t || seen.has(t)) continue;
-    seen.add(t);
-    out.push(t);
-  }
-  return out;
-}
-
-function displayLikes(user: number, admin: number): number {
-  return Math.max(0, user + admin);
-}
+export type LikesCollectionQuery = {
+  productsLimit: number;
+  productsOffset: number;
+  casesLimit: number;
+  casesOffset: number;
+};
 
 @Injectable()
 export class LikesService {
@@ -58,6 +23,43 @@ export class LikesService {
     private readonly catalog: CatalogService,
     private readonly productSearchIndex: ProductSearchIndexService,
   ) {}
+
+  /** Актуальное состояние лайка и публичный счётчик после POST/DELETE. */
+  async productLikeState(userId: string, productId: string): Promise<{ liked: boolean; likesDisplayCount: number }> {
+    const [row, like] = await Promise.all([
+      this.prisma.product.findUnique({
+        where: { id: productId },
+        select: { likesUserCount: true, likesAdminBoost: true },
+      }),
+      this.prisma.productLike.findUnique({
+        where: { userId_productId: { userId, productId } },
+        select: { id: true },
+      }),
+    ]);
+    if (!row) return { liked: !!like, likesDisplayCount: 0 };
+    return {
+      liked: !!like,
+      likesDisplayCount: displayLikes(row.likesUserCount, row.likesAdminBoost),
+    };
+  }
+
+  async caseLikeState(userId: string, caseId: string): Promise<{ liked: boolean; likesDisplayCount: number }> {
+    const [row, like] = await Promise.all([
+      this.prisma.case.findUnique({
+        where: { id: caseId },
+        select: { likesUserCount: true, likesAdminBoost: true },
+      }),
+      this.prisma.caseLike.findUnique({
+        where: { userId_caseId: { userId, caseId } },
+        select: { id: true },
+      }),
+    ]);
+    if (!row) return { liked: !!like, likesDisplayCount: 0 };
+    return {
+      liked: !!like,
+      likesDisplayCount: displayLikes(row.likesUserCount, row.likesAdminBoost),
+    };
+  }
 
   async isProductLiked(userId: string, productId: string): Promise<{ liked: boolean }> {
     const row = await this.prisma.productLike.findUnique({
@@ -91,27 +93,30 @@ export class LikesService {
       });
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
-        return { ok: true as const };
+        return { ok: true as const, ...(await this.productLikeState(userId, productId)) };
       }
       throw e;
     }
     void this.productSearchIndex.syncProduct(productId);
-    return { ok: true as const };
+    return { ok: true as const, ...(await this.productLikeState(userId, productId)) };
   }
 
   async unlikeProduct(userId: string, productId: string) {
     const del = await this.prisma.$transaction(async (tx) => {
       const removed = await tx.productLike.deleteMany({ where: { userId, productId } });
       if (removed.count > 0) {
-        await tx.product.update({
-          where: { id: productId },
-          data: { likesUserCount: { decrement: 1 } },
-        });
+        await tx.$executeRaw(
+          Prisma.sql`
+            UPDATE "Product"
+            SET "likesUserCount" = GREATEST(0, "likesUserCount" - 1)
+            WHERE "id" = ${productId}
+          `,
+        );
       }
       return removed.count;
     });
     if (del > 0) void this.productSearchIndex.syncProduct(productId);
-    return { ok: true as const };
+    return { ok: true as const, ...(await this.productLikeState(userId, productId)) };
   }
 
   async likeCase(userId: string, caseId: string) {
@@ -127,58 +132,71 @@ export class LikesService {
       });
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
-        return { ok: true as const };
+        return { ok: true as const, ...(await this.caseLikeState(userId, caseId)) };
       }
       throw e;
     }
-    return { ok: true as const };
+    return { ok: true as const, ...(await this.caseLikeState(userId, caseId)) };
   }
 
   async unlikeCase(userId: string, caseId: string) {
     await this.prisma.$transaction(async (tx) => {
       const removed = await tx.caseLike.deleteMany({ where: { userId, caseId } });
       if (removed.count > 0) {
-        await tx.case.update({
-          where: { id: caseId },
-          data: { likesUserCount: { decrement: 1 } },
-        });
+        await tx.$executeRaw(
+          Prisma.sql`
+            UPDATE "Case"
+            SET "likesUserCount" = GREATEST(0, "likesUserCount" - 1)
+            WHERE "id" = ${caseId}
+          `,
+        );
       }
     });
-    return { ok: true as const };
+    return { ok: true as const, ...(await this.caseLikeState(userId, caseId)) };
   }
 
-  async getCollection(userId: string) {
-    const [productLikeRows, caseLikeRows] = await Promise.all([
+  async getCollection(userId: string, q: LikesCollectionQuery) {
+    const { productsLimit, productsOffset, casesLimit, casesOffset } = q;
+
+    const caseLikeSelect = {
+      case: {
+        select: {
+          id: true,
+          title: true,
+          shortDescription: true,
+          descriptionHtml: true,
+          coverLayout: true,
+          coverImageUrls: true,
+          roomTypes: true,
+          productIds: true,
+          likesUserCount: true,
+          likesAdminBoost: true,
+          user: {
+            select: {
+              designer: { select: { slug: true, displayName: true, photoUrl: true } },
+              profile: { select: { avatarUrl: true } },
+            },
+          },
+        },
+      },
+    } as const;
+
+    const [productsTotal, casesTotal, productLikeRows, caseLikeRows] = await Promise.all([
+      this.prisma.productLike.count({ where: { userId } }),
+      this.prisma.caseLike.count({ where: { userId } }),
       this.prisma.productLike.findMany({
         where: { userId },
         orderBy: { createdAt: 'desc' },
+        skip: productsLimit > 0 ? productsOffset : 0,
+        take: productsLimit > 0 ? productsLimit : 0,
         select: { productId: true },
       }),
       this.prisma.caseLike.findMany({
         where: { userId },
         orderBy: { createdAt: 'desc' },
-        select: {
-          case: {
-            select: {
-              id: true,
-              title: true,
-              shortDescription: true,
-              descriptionHtml: true,
-              coverLayout: true,
-              coverImageUrls: true,
-              roomTypes: true,
-              productIds: true,
-              likesUserCount: true,
-              likesAdminBoost: true,
-              user: {
-                select: {
-                  designer: { select: { slug: true, displayName: true, photoUrl: true } },
-                  profile: { select: { avatarUrl: true } },
-                },
-              },
-            },
-          },
-        },
+        skip: casesLimit > 0 ? casesOffset : 0,
+        take: casesLimit > 0 ? casesLimit : 0,
+        select: caseLikeSelect,
       }),
     ]);
 
@@ -210,73 +228,28 @@ export class LikesService {
       };
     });
 
+    const caseRowsOnly = caseLikeRows.map((r) => r.case);
+    const caseProductById = await buildProductSummaryMapForCases(this.catalog, caseRowsOnly);
     const cases = caseLikeRows.map(({ case: c }) => {
-      const pids = parseStringIds(c.productIds, 80);
-      const coverUrls = parseCoverUrls(c.coverImageUrls ?? null);
-      const layoutCase = c.coverLayout === '16:9' ? ('16:9' as const) : ('4:3' as const);
-      const rawDesc = c.descriptionHtml?.trim() ? c.descriptionHtml.trim() : '';
-      const descriptionHtml = rawDesc ? sanitizeProfileAboutHtml(rawDesc) : null;
       const des = c.user.designer;
       const prof = c.user.profile;
       const designerPhoto = des?.photoUrl?.trim() || prof?.avatarUrl?.trim() || null;
-      return {
-        id: c.id,
-        title: c.title,
-        shortDescription: c.shortDescription?.trim() || null,
-        placesLine: servicesLineFromJson(c.roomTypes ?? null),
-        roomTypes: roomTypesLabelsFromJson(c.roomTypes ?? null),
-        descriptionHtml,
-        coverLayout: layoutCase,
-        coverImageUrls: coverUrls,
-        likesDisplayCount: displayLikes(c.likesUserCount, c.likesAdminBoost),
-        designerSlug: des?.slug?.trim() ?? '',
-        designerDisplayName: des?.displayName?.trim() ?? '',
-        designerPhotoUrl: designerPhoto,
-        products: pids.map((pid) => ({
-          id: pid,
-          slug: '',
-          name: 'Товар',
-          price: 0,
-          imageUrl: null as string | null,
-          imageUrls: [] as string[],
-          casesLinkedCount: 0,
-          likesDisplayCount: 0,
-        })),
-      };
+      return buildCasePublicDto(c, caseProductById, {
+        slug: des?.slug?.trim() ?? '',
+        displayName: des?.displayName?.trim() ?? '',
+        photoUrl: designerPhoto,
+      });
     });
 
-    const allCaseProductIds = [...new Set(cases.flatMap((row) => row.products.map((p) => p.id)))];
-    if (allCaseProductIds.length) {
-      const { items: caseProducts } = await this.catalog.resolveProductSummariesByIds(allCaseProductIds);
-      const pm = new Map(caseProducts.map((p) => [p.id, p]));
-      for (const row of cases) {
-        row.products = row.products.map((slot) => {
-          const p = pm.get(slot.id);
-          if (!p)
-            return {
-              id: slot.id,
-              slug: '',
-              name: 'Товар',
-              price: 0,
-              imageUrl: null,
-              imageUrls: [] as string[],
-              casesLinkedCount: 0,
-              likesDisplayCount: 0,
-            };
-          return {
-            id: p.id,
-            slug: p.slug,
-            name: p.name,
-            price: p.price,
-            imageUrl: p.imageUrl,
-            imageUrls: p.imageUrls ?? [],
-            casesLinkedCount: p.casesLinkedCount,
-            likesDisplayCount: p.likesDisplayCount,
-          };
-        });
-      }
-    }
-
-    return { products, cases };
+    return {
+      products,
+      cases,
+      productsTotal,
+      casesTotal,
+      productsLimit,
+      productsOffset,
+      casesLimit,
+      casesOffset,
+    };
   }
 }

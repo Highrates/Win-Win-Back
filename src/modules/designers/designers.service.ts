@@ -3,6 +3,13 @@ import { Prisma } from '@prisma/client';
 import { sanitizeProfileAboutHtml } from '../blog/blog-html.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CatalogService } from '../catalog/catalog.service';
+import {
+  buildCasePublicCore,
+  buildCasePublicDto,
+  buildProductSummaryMapForCases,
+  parseCoverUrls,
+  servicesLineFromJson,
+} from './case-public-dto.builder';
 
 const designerPartnerWhere = {
   isPublic: true,
@@ -24,143 +31,12 @@ const profilePublicSelect = {
   aboutHtml: true,
 } as const;
 
-function parseCoverUrls(raw: Prisma.JsonValue): string[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .filter((x): x is string => typeof x === 'string')
-    .map((x) => x.trim())
-    .filter((x) => x.length > 0);
-}
-
-function servicesLineFromJson(raw: Prisma.JsonValue): string | null {
-  if (Array.isArray(raw)) {
-    const parts = raw
-      .filter((x): x is string => typeof x === 'string')
-      .map((x) => x.trim())
-      .filter((x) => x.length > 0);
-    return parts.length ? parts.join(', ') : null;
-  }
-  return null;
-}
-
-function parseStringIds(raw: Prisma.JsonValue | null | undefined, max: number): string[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .filter((x): x is string => typeof x === 'string')
-    .map((x) => x.trim())
-    .filter((x) => x.length > 0)
-    .slice(0, max);
-}
-
-/** Порядок как в кейсе; без дублей по точному совпадению строки. */
-function roomTypesLabelsFromJson(raw: Prisma.JsonValue | null | undefined): string[] {
-  if (!Array.isArray(raw)) return [];
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const x of raw) {
-    if (typeof x !== 'string') continue;
-    const t = x.trim();
-    if (!t || seen.has(t)) continue;
-    seen.add(t);
-    out.push(t);
-  }
-  return out;
-}
-
-type ProductSummary = {
-  id: string;
-  slug: string;
-  name: string;
-  price: number;
-  imageUrl: string | null;
-  imageUrls: string[];
-  casesLinkedCount: number;
-  likesDisplayCount: number;
-};
-
-type CaseRowForPublicMap = {
-  id: string;
-  title: string;
-  shortDescription: string | null;
-  descriptionHtml: string | null;
-  coverLayout: string | null;
-  coverImageUrls: Prisma.JsonValue | null;
-  roomTypes: Prisma.JsonValue | null;
-  productIds: Prisma.JsonValue | null;
-  likesUserCount: number;
-  likesAdminBoost: number;
-};
-
 @Injectable()
 export class DesignersService {
   constructor(
     private prisma: PrismaService,
     private catalog: CatalogService,
   ) {}
-
-  private collectProductIdsFromCaseRows(rows: Array<{ productIds: Prisma.JsonValue | null }>): string[] {
-    const all = new Set<string>();
-    for (const c of rows) {
-      for (const id of parseStringIds(c.productIds, 80)) {
-        all.add(id);
-      }
-    }
-    return [...all];
-  }
-
-  private async buildProductByIdMap(
-    rows: Array<{ productIds: Prisma.JsonValue | null }>,
-  ): Promise<Map<string, ProductSummary>> {
-    const ids = this.collectProductIdsFromCaseRows(rows);
-    if (!ids.length) return new Map();
-    const { items } = await this.catalog.resolveProductSummariesByIds(ids);
-    return new Map(items.map((p) => [p.id, p]));
-  }
-
-  private mapCaseRowToPublicDto(c: CaseRowForPublicMap, productById: Map<string, ProductSummary>) {
-    const pids = parseStringIds(c.productIds, 80);
-    const coverUrls = parseCoverUrls(c.coverImageUrls ?? null);
-    const layoutCase = c.coverLayout === '16:9' ? ('16:9' as const) : ('4:3' as const);
-    const rawDesc = c.descriptionHtml?.trim() ? c.descriptionHtml.trim() : '';
-    const descriptionHtml = rawDesc ? sanitizeProfileAboutHtml(rawDesc) : null;
-    const products = pids.map((id) => {
-      const p = productById.get(id);
-      if (!p || !p.slug)
-        return {
-          id,
-          slug: '',
-          name: 'Товар',
-          price: 0,
-          imageUrl: null as string | null,
-          imageUrls: [] as string[],
-          casesLinkedCount: 0,
-          likesDisplayCount: 0,
-        };
-      return {
-        id: p.id,
-        slug: p.slug,
-        name: p.name,
-        price: p.price,
-        imageUrl: p.imageUrl,
-        imageUrls: p.imageUrls ?? [],
-        casesLinkedCount: p.casesLinkedCount,
-        likesDisplayCount: p.likesDisplayCount,
-      };
-    });
-    const likesDisplayCount = Math.max(0, c.likesUserCount + c.likesAdminBoost);
-    return {
-      id: c.id,
-      title: c.title,
-      shortDescription: c.shortDescription?.trim() || null,
-      placesLine: servicesLineFromJson(c.roomTypes ?? null),
-      roomTypes: roomTypesLabelsFromJson(c.roomTypes ?? null),
-      descriptionHtml,
-      coverLayout: layoutCase,
-      coverImageUrls: coverUrls,
-      products,
-      likesDisplayCount,
-    };
-  }
 
   async findAll(page = 1, limit = 20, qRaw?: string) {
     const q = qRaw?.trim();
@@ -253,8 +129,8 @@ export class DesignersService {
       },
     });
 
-    const productById = await this.buildProductByIdMap(caseRows);
-    const cases = caseRows.map((c) => this.mapCaseRowToPublicDto(c, productById));
+    const productById = await buildProductSummaryMapForCases(this.catalog, caseRows);
+    const cases = caseRows.map((c) => buildCasePublicCore(c, productById));
 
     return {
       slug: row.slug,
@@ -274,9 +150,7 @@ export class DesignersService {
     const productId = productIdRaw?.trim();
     const caseRows = await this.prisma.case.findMany({
       where: {
-        ...(productId
-          ? { caseProducts: { some: { productId } } }
-          : {}),
+        ...(productId ? { caseProducts: { some: { productId } } } : {}),
         user: {
           designer: { is: { isPublic: true } },
           profile: { is: { winWinPartnerApproved: true } },
@@ -305,7 +179,7 @@ export class DesignersService {
       },
     });
 
-    const productById = await this.buildProductByIdMap(caseRows);
+    const productById = await buildProductSummaryMapForCases(this.catalog, caseRows);
 
     const items = caseRows
       .filter((c) => c.user.designer != null)
@@ -313,13 +187,11 @@ export class DesignersService {
         const des = c.user.designer!;
         const prof = c.user.profile;
         const designerPhoto = des.photoUrl?.trim() || prof?.avatarUrl?.trim() || null;
-        const base = this.mapCaseRowToPublicDto(c, productById);
-        return {
-          designerSlug: des.slug,
-          designerDisplayName: des.displayName,
-          designerPhotoUrl: designerPhoto,
-          ...base,
-        };
+        return buildCasePublicDto(c, productById, {
+          slug: des.slug,
+          displayName: des.displayName,
+          photoUrl: designerPhoto,
+        });
       });
 
     return { items };
