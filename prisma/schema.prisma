@@ -177,10 +177,23 @@ model Case {
   /// ID товаров каталога, использованных в проекте (JSON-массив строк)
   productIds Json?
 
+  caseProducts CaseProduct[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([userId, createdAt(sort: Desc)])
+}
+
+/// Связь кейс ↔ товар (для счётчика «коллекции» и фильтра проектов по товару).
+model CaseProduct {
+  caseId    String
+  productId String
+  case      Case    @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@id([caseId, productId])
+  @@index([productId])
 }
 
 enum KycStatus {
@@ -362,9 +375,12 @@ model Product {
   seoDescription String? @db.Text
   isActive    Boolean  @default(true)
   sortOrder   Int      @default(0)
+  /// Сколько кейсов партнёров ссылается на товар (инкрементально; не «личные коллекции»).
+  casesLinkedCount Int @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  caseLinks        CaseProduct[]
   images           ProductImage[]
   videos           ProductVideo[]
   variants         ProductVariant[]

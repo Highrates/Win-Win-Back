@@ -4,8 +4,10 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { MediaLibraryService } from '../media-library/media-library.service';
 import { sanitizeProfileAboutHtml } from '../blog/blog-html.util';
 import { AuditService } from '../audit/audit.service';
+import { ProductSearchIndexService } from '../../meilisearch/product-search-index.service';
 
 function parseStringArray(v: unknown, max: number): string[] {
+  if (v === null || v === undefined) return [];
   if (!Array.isArray(v)) return [];
   return v
     .filter((x): x is string => typeof x === 'string')
@@ -52,7 +54,88 @@ export class CasesService {
     private readonly prisma: PrismaService,
     private readonly media: MediaLibraryService,
     private readonly audit: AuditService,
+    private readonly productSearchIndex: ProductSearchIndexService,
   ) {}
+
+  private async filterExistingProductIds(ids: string[]): Promise<string[]> {
+    const uq = [...new Set(ids.map((x) => x.trim()).filter(Boolean))].slice(0, 80);
+    if (!uq.length) return [];
+    const rows = await this.prisma.product.findMany({
+      where: { id: { in: uq }, isActive: true },
+      select: { id: true },
+    });
+    const ok = new Set(rows.map((r) => r.id));
+    return uq.filter((id) => ok.has(id));
+  }
+
+  /** Синхронизирует `CaseProduct` и `Product.casesLinkedCount` с массивом id из кейса. */
+  private async syncCaseProductLinks(caseId: string, desiredRaw: string[]): Promise<void> {
+    const validNew = await this.filterExistingProductIds(desiredRaw);
+    const newSet = new Set(validNew);
+
+    const existingRows = await this.prisma.caseProduct.findMany({
+      where: { caseId },
+      select: { productId: true },
+    });
+    const oldSet = new Set(existingRows.map((r) => r.productId));
+
+    const toRemove = [...oldSet].filter((id) => !newSet.has(id));
+    const toAdd = [...newSet].filter((id) => !oldSet.has(id));
+    if (!toRemove.length && !toAdd.length) return;
+
+    const affected = [...new Set([...toRemove, ...toAdd])];
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const pid of toRemove) {
+        await tx.caseProduct.delete({
+          where: { caseId_productId: { caseId, productId: pid } },
+        });
+        await tx.product.update({
+          where: { id: pid },
+          data: { casesLinkedCount: { decrement: 1 } },
+        });
+      }
+      for (const pid of toAdd) {
+        await tx.caseProduct.create({ data: { caseId, productId: pid } });
+        await tx.product.update({
+          where: { id: pid },
+          data: { casesLinkedCount: { increment: 1 } },
+        });
+      }
+    });
+
+    for (const pid of affected) {
+      await this.productSearchIndex.syncProduct(pid);
+    }
+  }
+
+  private parseProductIdsFromCaseJson(raw: Prisma.JsonValue | null | undefined): string[] {
+    return parseStringArray(raw, 80);
+  }
+
+  /** Перед удалением кейса снимаем связи и уменьшаем счётчики товаров. */
+  private async detachCaseProductsBeforeDelete(caseId: string): Promise<void> {
+    const links = await this.prisma.caseProduct.findMany({
+      where: { caseId },
+      select: { productId: true },
+    });
+    const pids = [...new Set(links.map((l) => l.productId))];
+    if (!pids.length) return;
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.caseProduct.deleteMany({ where: { caseId } });
+      for (const pid of pids) {
+        await tx.product.update({
+          where: { id: pid },
+          data: { casesLinkedCount: { decrement: 1 } },
+        });
+      }
+    });
+
+    for (const pid of pids) {
+      await this.productSearchIndex.syncProduct(pid);
+    }
+  }
 
   private async assertPartnerDesigner(userId: string): Promise<void> {
     const p = await this.prisma.userProfile.findUnique({
@@ -109,7 +192,7 @@ export class CasesService {
     const roomTypes = dto.roomTypes ? dto.roomTypes.map((x) => x.trim()).filter(Boolean) : null;
     const productIds = dto.productIds ? parseStringArray(dto.productIds, 80) : null;
 
-    return this.prisma.case.create({
+    const created = await this.prisma.case.create({
       data: {
         userId,
         title,
@@ -124,6 +207,8 @@ export class CasesService {
         productIds: productIds == null ? Prisma.JsonNull : productIds,
       },
     });
+    await this.syncCaseProductLinks(created.id, productIds ?? []);
+    return created;
   }
 
   async updateMyCase(
@@ -182,6 +267,8 @@ export class CasesService {
     }
 
     const updated = await this.prisma.case.update({ where: { id }, data: patch });
+    await this.syncCaseProductLinks(id, this.parseProductIdsFromCaseJson(updated.productIds));
+
     const afterUrls = referencedUrlsFromCase(updated);
 
     // best-effort: почистить медиа, которые больше не используются ни в кейсе, ни где-либо ещё.
@@ -203,6 +290,7 @@ export class CasesService {
     });
     if (!row) throw new NotFoundException('Кейс не найден');
     const urls = referencedUrlsFromCase(row);
+    await this.detachCaseProductsBeforeDelete(id);
     await this.prisma.case.delete({ where: { id } });
     for (const u of urls) {
       this.media.tryDeleteObjectByPublicUrlIfUnreferenced(u).catch(() => undefined);
@@ -273,6 +361,7 @@ export class CasesService {
     });
     if (!row) throw new NotFoundException('Кейс не найден');
     const urls = referencedUrlsFromCase(row);
+    await this.detachCaseProductsBeforeDelete(id);
     await this.prisma.case.delete({ where: { id } });
     await this.audit.log({
       action: AuditAction.DELETE,

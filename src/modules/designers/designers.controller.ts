@@ -19,8 +19,8 @@ export class DesignersController {
   /** Все публичные кейсы партнёров (витрина `/projects`). Должен быть выше `:slug`, иначе `cases` станет slug. */
   @Public()
   @Get('cases')
-  listPublicCases() {
-    return this.designersService.listAllPublicCases();
+  listPublicCases(@Query('product') product?: string) {
+    return this.designersService.listAllPublicCases(product);
   }
 
   @Public()

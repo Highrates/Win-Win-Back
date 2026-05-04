@@ -53,6 +53,7 @@ export class ProductSearchIndexService {
             where: { isActive: true },
             select: { price: true },
           },
+          casesLinkedCount: true,
         },
       });
       if (!row) return;
@@ -79,6 +80,7 @@ export class ProductSearchIndexService {
         priceMin,
         priceMax,
         images: shared,
+        casesLinkedCount: row.casesLinkedCount,
       };
       await index.addDocuments([buildProductSearchDocument(r)], { primaryKey: 'id' });
     } catch (e) {
@@ -134,6 +136,7 @@ export class ProductSearchIndexService {
           where: { isActive: true },
           select: { price: true },
         },
+        casesLinkedCount: true,
       },
     });
 
@@ -161,6 +164,7 @@ export class ProductSearchIndexService {
         priceMin,
         priceMax,
         images: shared,
+        casesLinkedCount: row.casesLinkedCount,
       };
       flat.push(buildProductSearchDocument(r));
     }

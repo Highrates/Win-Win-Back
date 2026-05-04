@@ -19,6 +19,8 @@ export type ProductVariantSearchIndexRow = {
   priceMax: number;
   /** Изображения товара (общая галерея) */
   images?: { url: string }[];
+  /** Кейсы партнёров с этим товаром (публичный счётчик). */
+  casesLinkedCount?: number;
 };
 
 /** @deprecated используйте ProductVariantSearchIndexRow */
@@ -81,5 +83,6 @@ export function buildProductSearchDocument(row: ProductVariantSearchIndexRow): R
     priceMax: row.priceMax,
     thumbUrl,
     imageUrls,
+    casesLinkedCount: row.casesLinkedCount ?? 0,
   };
 }

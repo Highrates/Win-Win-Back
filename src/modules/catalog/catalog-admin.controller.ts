@@ -243,6 +243,11 @@ export class CatalogAdminController {
     return this.catalogAdmin.getProductForAdmin(id);
   }
 
+  @Get('products/:id/cases')
+  listProductCases(@Param('id') id: string) {
+    return this.catalogAdmin.listCasesForProduct(id);
+  }
+
   @Patch('products/:id')
   updateProduct(@Param('id') id: string, @Body() dto: UpdateProductShellAdminDto) {
     return this.catalogAdmin.updateProduct(id, dto);

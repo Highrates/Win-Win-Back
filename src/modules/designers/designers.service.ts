@@ -73,6 +73,7 @@ type ProductSummary = {
   name: string;
   price: number;
   imageUrl: string | null;
+  casesLinkedCount: number;
 };
 
 type CaseRowForPublicMap = {
@@ -127,6 +128,7 @@ export class DesignersService {
           name: 'Товар',
           price: 0,
           imageUrl: null as string | null,
+          casesLinkedCount: 0,
         };
       return {
         id: p.id,
@@ -134,6 +136,7 @@ export class DesignersService {
         name: p.name,
         price: p.price,
         imageUrl: p.imageUrl,
+        casesLinkedCount: p.casesLinkedCount,
       };
     });
     return {
@@ -255,9 +258,13 @@ export class DesignersService {
   }
 
   /** Кейсы всех публичных партнёров-дизайнеров (новые сверху) для страницы «Проекты». */
-  async listAllPublicCases() {
+  async listAllPublicCases(productIdRaw?: string) {
+    const productId = productIdRaw?.trim();
     const caseRows = await this.prisma.case.findMany({
       where: {
+        ...(productId
+          ? { caseProducts: { some: { productId } } }
+          : {}),
         user: {
           designer: { is: { isPublic: true } },
           profile: { is: { winWinPartnerApproved: true } },

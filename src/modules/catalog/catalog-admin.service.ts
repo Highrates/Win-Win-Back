@@ -682,6 +682,46 @@ export class CatalogAdminService {
     return this.productAdmin.getProductForAdmin(id);
   }
 
+  /** Кейсы партнёров, в которых указан этот товар. */
+  async listCasesForProduct(productId: string) {
+    const product = await this.prisma.product.findUnique({
+      where: { id: productId },
+      select: { id: true },
+    });
+    if (!product) throw new NotFoundException('Товар не найден');
+
+    const links = await this.prisma.caseProduct.findMany({
+      where: { productId },
+      orderBy: { case: { createdAt: 'desc' } },
+      include: {
+        case: {
+          select: {
+            id: true,
+            title: true,
+            createdAt: true,
+            user: {
+              select: {
+                email: true,
+                designer: { select: { slug: true, displayName: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    return {
+      items: links.map((l) => ({
+        caseId: l.case.id,
+        title: l.case.title,
+        createdAt: l.case.createdAt,
+        designerSlug: l.case.user.designer?.slug ?? null,
+        designerDisplayName: l.case.user.designer?.displayName ?? null,
+        ownerEmail: l.case.user.email,
+      })),
+    };
+  }
+
   async updateProduct(id: string, dto: UpdateProductShellAdminDto) {
     return this.productAdmin.updateProduct(id, dto);
   }

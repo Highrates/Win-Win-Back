@@ -294,11 +294,13 @@ export class CatalogService {
       defaultVariant?.modificationId ?? row.modifications[0]?.id ?? null;
 
     return {
+      id: row.id,
       slug: row.slug,
       name: row.name,
       price: null,
       priceMin,
       priceMax,
+      casesLinkedCount: row.casesLinkedCount,
       shortDescription: row.shortDescription,
       description: row.description,
       seoTitle: row.seoTitle,
@@ -407,6 +409,7 @@ export class CatalogService {
           brandId: true,
           isActive: true,
           updatedAt: true,
+          casesLinkedCount: true,
           category: { select: { name: true } },
           productCategories: { select: { categoryId: true } },
           brand: { select: { name: true } },
@@ -446,6 +449,7 @@ export class CatalogService {
           priceMin,
           priceMax,
           images: shared,
+          casesLinkedCount: p.casesLinkedCount,
         }) as Record<string, unknown>;
       }),
     );
@@ -672,6 +676,7 @@ export class CatalogService {
       name: string;
       price: number;
       imageUrl: string | null;
+      casesLinkedCount: number;
     };
     if (!ids.length) return { items: [] as Item[] };
     const rows = await this.prisma.product.findMany({
@@ -680,6 +685,7 @@ export class CatalogService {
         id: true,
         slug: true,
         name: true,
+        casesLinkedCount: true,
         images: {
           take: 6,
           orderBy: { sortOrder: 'asc' },
@@ -692,11 +698,6 @@ export class CatalogService {
           select: {
             variantLabel: true,
             price: true,
-            variantProductImages: {
-              take: 6,
-              orderBy: { sortOrder: 'asc' },
-              include: { productImage: { select: { url: true, alt: true } } },
-            },
           },
         },
       },
@@ -704,23 +705,19 @@ export class CatalogService {
     const byId = new Map(rows.map((r) => [r.id, r]));
     const items: Item[] = ids.map((id) => {
       const r = byId.get(id);
-      if (!r) return { id, slug: '', name: 'Товар', price: 0, imageUrl: null };
+      if (!r)
+        return { id, slug: '', name: 'Товар', price: 0, imageUrl: null, casesLinkedCount: 0 };
       const dv = r.variants[0];
-      const shared = r.images.map((im) => ({ url: im.url, alt: im.alt }));
-      const effective = dv
-        ? resolveEffectiveVariantImages({
-            sharedProductImages: shared,
-            variantProductImagesFromJunction: dv.variantProductImages,
-          })
-        : shared;
-      const imageUrls = effective.map((im) => im.url.trim()).filter(Boolean);
+      /** Как на PDP (`product.images`) и в Meilisearch: общая галерея товара, не junction варианта. */
+      const galleryUrls = r.images.map((im) => im.url.trim()).filter(Boolean);
       const displayName = dv?.variantLabel?.trim() || r.name;
       return {
         id: r.id,
         slug: r.slug,
         name: displayName,
         price: priceToNumber(dv?.price ?? 0),
-        imageUrl: imageUrls[0] ?? null,
+        imageUrl: galleryUrls[0] ?? null,
+        casesLinkedCount: r.casesLinkedCount,
       };
     });
     return { items };
