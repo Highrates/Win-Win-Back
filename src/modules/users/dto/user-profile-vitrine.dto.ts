@@ -36,6 +36,10 @@ export type UserProfileVitrineDto = {
   referralInviteCodeExempt: boolean;
   designerSlug: string | null;
   designerSiteVisible: boolean;
+  /** Реальные лайки на дизайнера (если есть designer record). */
+  designerLikesUserCount: number | null;
+  /** Количество кейсов дизайнера (если есть designer record). */
+  designerCasesCount: number | null;
 };
 
 /** Select для чтения профиля ЛК без «тяжёлых» или внутренних JSON (напр. kycData). */
@@ -76,6 +80,8 @@ export function mapUserProfileToVitrineDto(
   referralInviteCodeExempt: boolean,
   designerSlug: string | null,
   designerSiteVisible: boolean,
+  designerLikesUserCount: number | null,
+  designerCasesCount: number | null,
 ): UserProfileVitrineDto {
   return {
     ...row,
@@ -83,5 +89,7 @@ export function mapUserProfileToVitrineDto(
     referralInviteCodeExempt,
     designerSlug,
     designerSiteVisible,
+    designerLikesUserCount,
+    designerCasesCount,
   };
 }

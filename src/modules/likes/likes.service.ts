@@ -7,6 +7,7 @@ import {
   buildCasePublicDto,
   buildProductSummaryMapForCases,
   displayLikes,
+  servicesLineFromJson,
 } from '../designers/case-public-dto.builder';
 
 export type LikesCollectionQuery = {
@@ -14,6 +15,8 @@ export type LikesCollectionQuery = {
   productsOffset: number;
   casesLimit: number;
   casesOffset: number;
+  designersLimit: number;
+  designersOffset: number;
 };
 
 @Injectable()
@@ -61,6 +64,21 @@ export class LikesService {
     };
   }
 
+  async designerLikeState(userId: string, designerId: string): Promise<{ liked: boolean; likesDisplayCount: number }> {
+    const [row, like] = await Promise.all([
+      this.prisma.designer.findUnique({
+        where: { id: designerId },
+        select: { likesUserCount: true },
+      }),
+      this.prisma.designerLike.findUnique({
+        where: { userId_designerId: { userId, designerId } },
+        select: { id: true },
+      }),
+    ]);
+    if (!row) return { liked: !!like, likesDisplayCount: 0 };
+    return { liked: !!like, likesDisplayCount: Math.max(0, row.likesUserCount) };
+  }
+
   async isProductLiked(userId: string, productId: string): Promise<{ liked: boolean }> {
     const row = await this.prisma.productLike.findUnique({
       where: { userId_productId: { userId, productId } },
@@ -75,6 +93,27 @@ export class LikesService {
       select: { id: true },
     });
     return { liked: !!row };
+  }
+
+  async isDesignerLiked(userId: string, designerId: string): Promise<{ liked: boolean }> {
+    const row = await this.prisma.designerLike.findUnique({
+      where: { userId_designerId: { userId, designerId } },
+      select: { id: true },
+    });
+    return { liked: !!row };
+  }
+
+  async designersMeBulk(userId: string, designerIds: string[]) {
+    const ids = [...new Set(designerIds.map((x) => String(x).trim()).filter(Boolean))].slice(0, 80);
+    if (!ids.length) return { byId: {} as Record<string, { liked: boolean }> };
+    const rows = await this.prisma.designerLike.findMany({
+      where: { userId, designerId: { in: ids } },
+      select: { designerId: true },
+    });
+    const likedSet = new Set(rows.map((r) => r.designerId));
+    const byId: Record<string, { liked: boolean }> = {};
+    for (const id of ids) byId[id] = { liked: likedSet.has(id) };
+    return { byId };
   }
 
   async likeProduct(userId: string, productId: string) {
@@ -155,8 +194,44 @@ export class LikesService {
     return { ok: true as const, ...(await this.caseLikeState(userId, caseId)) };
   }
 
+  async likeDesigner(userId: string, designerId: string) {
+    const d = await this.prisma.designer.findUnique({ where: { id: designerId }, select: { id: true } });
+    if (!d) throw new NotFoundException('Дизайнер не найден');
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.designerLike.create({ data: { userId, designerId } });
+        await tx.designer.update({
+          where: { id: designerId },
+          data: { likesUserCount: { increment: 1 } },
+        });
+      });
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        return { ok: true as const, ...(await this.designerLikeState(userId, designerId)) };
+      }
+      throw e;
+    }
+    return { ok: true as const, ...(await this.designerLikeState(userId, designerId)) };
+  }
+
+  async unlikeDesigner(userId: string, designerId: string) {
+    await this.prisma.$transaction(async (tx) => {
+      const removed = await tx.designerLike.deleteMany({ where: { userId, designerId } });
+      if (removed.count > 0) {
+        await tx.$executeRaw(
+          Prisma.sql`
+            UPDATE "Designer"
+            SET "likesUserCount" = GREATEST(0, "likesUserCount" - 1)
+            WHERE "id" = ${designerId}
+          `,
+        );
+      }
+    });
+    return { ok: true as const, ...(await this.designerLikeState(userId, designerId)) };
+  }
+
   async getCollection(userId: string, q: LikesCollectionQuery) {
-    const { productsLimit, productsOffset, casesLimit, casesOffset } = q;
+    const { productsLimit, productsOffset, casesLimit, casesOffset, designersLimit, designersOffset } = q;
 
     const caseLikeSelect = {
       case: {
@@ -181,9 +256,11 @@ export class LikesService {
       },
     } as const;
 
-    const [productsTotal, casesTotal, productLikeRows, caseLikeRows] = await Promise.all([
+    const [productsTotal, casesTotal, designersTotal, productLikeRows, caseLikeRows, designerLikeRows] =
+      await Promise.all([
       this.prisma.productLike.count({ where: { userId } }),
       this.prisma.caseLike.count({ where: { userId } }),
+      this.prisma.designerLike.count({ where: { userId } }),
       this.prisma.productLike.findMany({
         where: { userId },
         orderBy: { createdAt: 'desc' },
@@ -197,6 +274,24 @@ export class LikesService {
         skip: casesLimit > 0 ? casesOffset : 0,
         take: casesLimit > 0 ? casesLimit : 0,
         select: caseLikeSelect,
+      }),
+      this.prisma.designerLike.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+        skip: designersLimit > 0 ? designersOffset : 0,
+        take: designersLimit > 0 ? designersLimit : 0,
+        select: {
+          designer: {
+            select: {
+              id: true,
+              slug: true,
+              displayName: true,
+              photoUrl: true,
+              likesUserCount: true,
+              user: { select: { profile: { select: { city: true, services: true, avatarUrl: true } } } },
+            },
+          },
+        },
       }),
     ]);
 
@@ -246,10 +341,27 @@ export class LikesService {
       cases,
       productsTotal,
       casesTotal,
+      designers: designerLikeRows.map((r) => {
+        const d = r.designer;
+        const prof = d.user.profile;
+        const photo = d.photoUrl?.trim() || prof?.avatarUrl?.trim() || null;
+        return {
+          id: d.id,
+          slug: d.slug,
+          displayName: d.displayName,
+          photoUrl: photo,
+          city: prof?.city?.trim() || null,
+          servicesLine: servicesLineFromJson(prof?.services ?? null),
+          likesDisplayCount: Math.max(0, d.likesUserCount ?? 0),
+        };
+      }),
+      designersTotal,
       productsLimit,
       productsOffset,
       casesLimit,
       casesOffset,
+      designersLimit,
+      designersOffset,
     };
   }
 }

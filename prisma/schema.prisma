@@ -34,6 +34,7 @@ model User {
   blogPosts       BlogPost[]
   productLikes  ProductLike[]
   caseLikes     CaseLike[]
+  designerLikes DesignerLike[]
   cart          Cart?
   designer      Designer?         // публичная страница дизайнера (опционально)
   accountContactChallenges AccountContactChallenge[]
@@ -724,8 +725,24 @@ model Designer {
   photoUrl    String?
   isPublic    Boolean  @default(false)
   sortOrder   Int      @default(0)
+  /// Реальные лайки пользователей на дизайнера (без admin boost).
+  likesUserCount Int   @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  likes DesignerLike[]
+}
+
+model DesignerLike {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  designerId String
+  designer   Designer @relation(fields: [designerId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([userId, designerId])
+  @@index([designerId])
 }
 
 // --- Корзина (Этап 4: страница корзины/заказа) ---

@@ -386,13 +386,20 @@ export class UsersService {
 
     let designerSlug: string | null = null;
     let designerSiteVisible = false;
+    let designerLikesUserCount: number | null = null;
+    let designerCasesCount: number | null = null;
     if (p.winWinPartnerApproved) {
-      const designer = await this.prisma.designer.findUnique({
-        where: { userId },
-        select: { slug: true, isPublic: true },
-      });
+      const [designer, casesCount] = await Promise.all([
+        this.prisma.designer.findUnique({
+          where: { userId },
+          select: { slug: true, isPublic: true, likesUserCount: true },
+        }),
+        this.prisma.case.count({ where: { userId } }),
+      ]);
       designerSlug = designer?.slug ?? null;
       designerSiteVisible = designer?.isPublic ?? false;
+      designerLikesUserCount = typeof designer?.likesUserCount === 'number' ? designer.likesUserCount : null;
+      designerCasesCount = typeof casesCount === 'number' ? casesCount : null;
     }
 
     return mapUserProfileToVitrineDto(
@@ -401,6 +408,8 @@ export class UsersService {
       this.isReferralInviteCodeExempt(email),
       designerSlug,
       designerSiteVisible,
+      designerLikesUserCount,
+      designerCasesCount,
     );
   }
 
@@ -1171,7 +1180,7 @@ export class UsersService {
   async findRetailUserByIdForAdmin(id: string) {
     const adminUserInclude = {
       profile: true as const,
-      designer: { select: { slug: true, isPublic: true } },
+      designer: { select: { slug: true, isPublic: true, likesUserCount: true } },
     };
     let u = await this.prisma.user.findFirst({
       where: { id, role: UserRole.USER, isActive: true },

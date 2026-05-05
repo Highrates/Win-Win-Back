@@ -66,7 +66,13 @@ export class DesignersService {
         orderBy: { sortOrder: 'asc' },
         skip: (page - 1) * limit,
         take: limit,
-        include: {
+        select: {
+          id: true,
+          userId: true,
+          slug: true,
+          displayName: true,
+          photoUrl: true,
+          likesUserCount: true,
           user: {
             select: {
               profile: { select: profilePublicSelect },
@@ -77,15 +83,31 @@ export class DesignersService {
       this.prisma.designer.count({ where }),
     ]);
 
+    const caseCountsByUserId = new Map<string, number>();
+    const userIds = rows.map((r) => r.userId).filter(Boolean);
+    if (userIds.length) {
+      const grouped = await this.prisma.case.groupBy({
+        by: ['userId'],
+        where: { userId: { in: userIds } },
+        _count: { _all: true },
+      });
+      for (const g of grouped) {
+        caseCountsByUserId.set(g.userId, g._count._all);
+      }
+    }
+
     const items = rows.map((d) => {
       const prof = d.user.profile;
       const photo = d.photoUrl?.trim() || prof?.avatarUrl?.trim() || null;
       return {
+        id: d.id,
         slug: d.slug,
         displayName: d.displayName,
         photoUrl: photo,
         city: prof?.city?.trim() || null,
         servicesLine: servicesLineFromJson(prof?.services ?? null),
+        likesDisplayCount: Math.max(0, d.likesUserCount ?? 0),
+        casesCount: Math.max(0, caseCountsByUserId.get(d.userId) ?? 0),
       };
     });
 
@@ -95,7 +117,13 @@ export class DesignersService {
   async findBySlug(slug: string) {
     const row = await this.prisma.designer.findFirst({
       where: { slug, ...designerPartnerWhere },
-      include: {
+      select: {
+        id: true,
+        userId: true,
+        slug: true,
+        displayName: true,
+        photoUrl: true,
+        likesUserCount: true,
         user: {
           select: {
             profile: { select: profilePublicSelect },
@@ -133,11 +161,14 @@ export class DesignersService {
     const cases = caseRows.map((c) => buildCasePublicCore(c, productById));
 
     return {
+      id: row.id,
       slug: row.slug,
       displayName: row.displayName,
       photoUrl: photo,
       city: prof?.city?.trim() || null,
       servicesLine: servicesLineFromJson(prof?.services ?? null),
+      likesDisplayCount: Math.max(0, row.likesUserCount ?? 0),
+      casesCount: caseRows.length,
       coverLayout: layout,
       coverImageUrls: coverUrls,
       aboutHtml,

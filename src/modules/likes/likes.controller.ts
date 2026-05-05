@@ -1,4 +1,4 @@
-import { Controller, Delete, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { LikesService, type LikesCollectionQuery } from './likes.service';
@@ -32,12 +32,16 @@ export class LikesController {
     @Query('productsOffset') productsOffset?: string,
     @Query('casesLimit') casesLimit?: string,
     @Query('casesOffset') casesOffset?: string,
+    @Query('designersLimit') designersLimit?: string,
+    @Query('designersOffset') designersOffset?: string,
   ) {
     const q: LikesCollectionQuery = {
       productsLimit: parseCollectionLimit(productsLimit, COLLECTION_DEFAULT_LIMIT),
       productsOffset: parseCollectionOffset(productsOffset),
       casesLimit: parseCollectionLimit(casesLimit, COLLECTION_DEFAULT_LIMIT),
       casesOffset: parseCollectionOffset(casesOffset),
+      designersLimit: parseCollectionLimit(designersLimit, COLLECTION_DEFAULT_LIMIT),
+      designersOffset: parseCollectionOffset(designersOffset),
     };
     return this.likes.getCollection(userId, q);
   }
@@ -70,5 +74,32 @@ export class LikesController {
   @Delete('cases/:caseId')
   unlikeCase(@CurrentUser('sub') userId: string, @Param('caseId') caseId: string) {
     return this.likes.unlikeCase(userId, caseId);
+  }
+
+  @Get('designers/:designerId/me')
+  designerMe(@CurrentUser('sub') userId: string, @Param('designerId') designerId: string) {
+    return this.likes.isDesignerLiked(userId, designerId);
+  }
+
+  @Post('designers/:designerId')
+  likeDesigner(@CurrentUser('sub') userId: string, @Param('designerId') designerId: string) {
+    return this.likes.likeDesigner(userId, designerId);
+  }
+
+  @Delete('designers/:designerId')
+  unlikeDesigner(@CurrentUser('sub') userId: string, @Param('designerId') designerId: string) {
+    return this.likes.unlikeDesigner(userId, designerId);
+  }
+
+  @Post('designers/me/bulk')
+  designersMeBulk(
+    @CurrentUser('sub') userId: string,
+    @Body() body: { designerIds?: unknown },
+  ) {
+    const raw = body?.designerIds;
+    const ids = Array.isArray(raw)
+      ? raw.filter((x): x is string => typeof x === 'string').map((x) => x.trim()).filter(Boolean).slice(0, 80)
+      : [];
+    return this.likes.designersMeBulk(userId, ids);
   }
 }
