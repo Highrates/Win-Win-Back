@@ -284,6 +284,7 @@ export class LikesService {
           designer: {
             select: {
               id: true,
+              userId: true,
               slug: true,
               displayName: true,
               photoUrl: true,
@@ -336,6 +337,18 @@ export class LikesService {
       });
     });
 
+    const designers = designerLikeRows.map((r) => r.designer);
+    const designerUserIds = designers.map((d) => d.userId).filter(Boolean);
+    const caseCountsByUserId = new Map<string, number>();
+    if (designerUserIds.length) {
+      const grouped = await this.prisma.case.groupBy({
+        by: ['userId'],
+        where: { userId: { in: designerUserIds } },
+        _count: { _all: true },
+      });
+      for (const g of grouped) caseCountsByUserId.set(g.userId, g._count._all);
+    }
+
     return {
       products,
       cases,
@@ -353,6 +366,7 @@ export class LikesService {
           city: prof?.city?.trim() || null,
           servicesLine: servicesLineFromJson(prof?.services ?? null),
           likesDisplayCount: Math.max(0, d.likesUserCount ?? 0),
+          casesCount: Math.max(0, caseCountsByUserId.get(d.userId) ?? 0),
         };
       }),
       designersTotal,
