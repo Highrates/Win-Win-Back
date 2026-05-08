@@ -7,7 +7,7 @@ import { ResolveProductIdsDto } from './dto/resolve-product-ids.dto';
 export class CatalogController {
   constructor(private catalogService: CatalogService) {}
 
-  /** Компактное дерево (корни + дети), без дублирования узлов в плоском списке. */
+  /** Компактное дерево (корни и рекурсивные активные потомки), без дублирования узлов между ветками. */
   @Public()
   @Get('categories/tree')
   categoryTree() {
@@ -41,13 +41,15 @@ export class CatalogController {
     return this.catalogService.getCategoryBySlug(slug);
   }
 
-  /** Кураторская коллекция брендов по slug (`kind: BRAND`, активная). */
+  /** Кураторская коллекция по slug: бренды (`kind: BRAND`) или товары (`kind: PRODUCT`). */
   @Public()
   @Get('curated-collections/:slug')
-  async curatedBrandCollection(@Param('slug') slug: string) {
-    const data = await this.catalogService.getCuratedBrandCollectionBySlug(slug);
-    if (!data) throw new NotFoundException();
-    return data;
+  async curatedCollectionBySlug(@Param('slug') slug: string) {
+    const brands = await this.catalogService.getCuratedBrandCollectionBySlug(slug);
+    if (brands) return brands;
+    const products = await this.catalogService.getCuratedProductCollectionBySlug(slug);
+    if (!products) throw new NotFoundException();
+    return products;
   }
 
   @Public()

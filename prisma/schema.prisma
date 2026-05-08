@@ -41,6 +41,7 @@ model User {
   designerInvitesSent      DesignerInvite[]     @relation("DesignerInviteInviter")
 
   cases Case[]
+  designerProjects DesignerProject[]
 }
 
 /// Приглашение дизайнера по email: ссылка с подписанным токеном, ref-код на момент отправки.
@@ -421,6 +422,7 @@ model Product {
   images           ProductImage[]
   videos           ProductVideo[]
   variants         ProductVariant[]
+  designerProjectLines DesignerProjectLine[]
   orderItems       OrderItem[]
   collectionItems  CollectionItem[]
   cartItems        CartItem[]
@@ -530,10 +532,70 @@ model ProductVariant {
   elementSelections    ProductVariantElementSelection[]
   cartItems  CartItem[]
   orderItems OrderItem[]
+  designerProjectLines DesignerProjectLine[]
 
   @@index([productId])
   @@index([modificationId])
   @@unique([productId, variantSlug])
+}
+
+/// Проект комплектации дизайнера (ЛК /account/projects). Отдельно от публичных Case.
+model DesignerProject {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  address   String?  @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  rooms DesignerProjectRoom[]
+  lines DesignerProjectLine[]
+
+  @@index([userId, updatedAt(sort: Desc)])
+}
+
+model DesignerProjectRoom {
+  id        String   @id @default(cuid())
+  projectId String
+  project   DesignerProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  label     String
+  roomType  String
+  sortOrder Int      @default(0)
+
+  lines DesignerProjectLine[]
+
+  @@index([projectId])
+}
+
+model DesignerProjectLine {
+  id        String   @id @default(cuid())
+  projectId String
+  project   DesignerProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  roomId    String
+  room      DesignerProjectRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  productVariantId String?
+  productVariant     ProductVariant? @relation(fields: [productVariantId], references: [id], onDelete: SetNull)
+
+  /// Количество (напр. 2 шт, 1.5 м²)
+  quantity Decimal @db.Decimal(12, 3)
+  unit    String  @default("шт")
+
+  /// Подписи для списка (модификация, элементы); цена не хранится — пересчитывается из каталога.
+  snapshot Json?
+
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([roomId])
+  @@index([productId])
+  @@index([productVariantId])
 }
 
 /// Выбор «материал-цвет» для элемента внутри варианта.

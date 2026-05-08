@@ -24,6 +24,7 @@ import { PublicCollectionsModule } from './modules/public-collections/public-col
 import { MediaLibraryModule } from './modules/media-library/media-library.module';
 import { SiteSettingsModule } from './modules/site-settings/site-settings.module';
 import { CasesModule } from './modules/cases/cases.module';
+import { DesignerProjectsModule } from './modules/designer-projects/designer-projects.module';
 import { LikesModule } from './modules/likes/likes.module';
 
 @Module({
@@ -57,6 +58,7 @@ import { LikesModule } from './modules/likes/likes.module';
     SiteSettingsModule,
     CasesModule,
     LikesModule,
+    DesignerProjectsModule,
     AuditModule,
   ],
   providers: [

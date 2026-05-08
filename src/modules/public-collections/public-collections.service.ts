@@ -14,14 +14,35 @@ export class PublicCollectionsService {
   }
 
   async findBySlug(slug: string) {
-    return this.prisma.publicCollection.findUnique({
-      where: { slug, isActive: true },
+    const row = await this.prisma.publicCollection.findUnique({
+      where: { slug },
       include: {
         items: {
+          where: { product: { isActive: true } },
           orderBy: { sortOrder: 'asc' },
-          include: { product: { include: { images: true, brand: true } } },
+          include: {
+            product: {
+              include: {
+                brand: true,
+                images: { orderBy: { sortOrder: 'asc' } },
+                variants: {
+                  where: { isActive: true },
+                  orderBy: [{ isDefault: 'desc' }, { sortOrder: 'asc' }],
+                  take: 1,
+                  select: {
+                    id: true,
+                    variantLabel: true,
+                    price: true,
+                    currency: true,
+                  },
+                },
+              },
+            },
+          },
         },
       },
     });
+    if (!row || !row.isActive) return null;
+    return row;
   }
 }

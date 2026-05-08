@@ -25,13 +25,14 @@ function dedupeProductHitsById<T extends Record<string, unknown>>(hits: T[]): T[
   return out;
 }
 
-/** Публичное дерево каталога: только корни и их прямые дети (без дублирования плоского списка). */
+/** Публичное дерево каталога: корни и рекурсивные активные потомки (без дублирования узлов между ветками). */
 export type PublicCategoryTreeChild = {
   id: string;
   slug: string;
   name: string;
   sortOrder: number;
   backgroundImageUrl: string | null;
+  children?: PublicCategoryTreeChild[];
 };
 
 export type PublicCategoryTreeRoot = PublicCategoryTreeChild & {
@@ -76,41 +77,51 @@ export class CatalogService {
   }
 
   /**
-   * Дерево для витрины: активные корни и их активные дети (один объект на узел, без плоского дублирования).
+   * Дерево для витрины: активные корни и полное поддерево активных потомков (произвольная глубина).
    */
   async getCategoryTree(): Promise<{ roots: PublicCategoryTreeRoot[] }> {
-    const rows = await this.prisma.category.findMany({
+    const rootsRows = await this.prisma.category.findMany({
       where: { isActive: true, parentId: null },
       orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
-      include: {
-        children: {
-          where: { isActive: true },
-          orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
-          select: {
-            id: true,
-            slug: true,
-            name: true,
-            sortOrder: true,
-            backgroundImageUrl: true,
-          },
-        },
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        sortOrder: true,
+        backgroundImageUrl: true,
       },
     });
-    const roots: PublicCategoryTreeRoot[] = rows.map((r) => ({
-      id: r.id,
-      slug: r.slug,
-      name: r.name,
-      sortOrder: r.sortOrder,
-      backgroundImageUrl: r.backgroundImageUrl,
-      children: r.children.map((c) => ({
-        id: c.id,
-        slug: c.slug,
-        name: c.name,
-        sortOrder: c.sortOrder,
-        backgroundImageUrl: c.backgroundImageUrl,
-      })),
-    }));
+    const roots: PublicCategoryTreeRoot[] = [];
+    for (const r of rootsRows) {
+      roots.push({
+        ...r,
+        children: await this.buildPublicCategorySubtree(r.id),
+      });
+    }
     return { roots };
+  }
+
+  private async buildPublicCategorySubtree(parentId: string): Promise<PublicCategoryTreeChild[]> {
+    const rows = await this.prisma.category.findMany({
+      where: { parentId, isActive: true },
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        sortOrder: true,
+        backgroundImageUrl: true,
+      },
+    });
+    const out: PublicCategoryTreeChild[] = [];
+    for (const row of rows) {
+      const nested = await this.buildPublicCategorySubtree(row.id);
+      out.push({
+        ...row,
+        ...(nested.length > 0 ? { children: nested } : {}),
+      });
+    }
+    return out;
   }
 
   /** Дети активного корня по slug родителя (для ленивой подгрузки / API). */
@@ -588,6 +599,65 @@ export class CatalogService {
       name: col.name,
       kind: 'BRAND' as const,
       brands,
+    };
+  }
+
+  /**
+   * Публичная коллекция товаров по slug (`kind: PRODUCT`, активная), порядок как в админке.
+   */
+  async getCuratedProductCollectionBySlug(slug: string) {
+    const col = await this.prisma.curatedCollection.findFirst({
+      where: { slug, isActive: true, kind: CuratedCollectionKind.PRODUCT },
+      include: {
+        productItems: {
+          where: { product: { isActive: true } },
+          orderBy: { sortOrder: 'asc' },
+          include: {
+            product: {
+              include: {
+                images: { orderBy: { sortOrder: 'asc' } },
+                variants: {
+                  where: { isActive: true },
+                  orderBy: [{ isDefault: 'desc' }, { sortOrder: 'asc' }],
+                  take: 1,
+                  select: {
+                    id: true,
+                    variantLabel: true,
+                    price: true,
+                    currency: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!col) return null;
+
+    const products = col.productItems.map((pi) => {
+      const p = pi.product;
+      const dv = p.variants[0];
+      const images = p.images.map((im, i) => ({ url: im.url, sortOrder: i }));
+      return {
+        id: p.id,
+        slug: p.slug,
+        name: p.name,
+        displayName: dv?.variantLabel?.trim() || p.name,
+        variantId: dv?.id ?? null,
+        price: dv?.price ?? null,
+        currency: dv?.currency ?? 'RUB',
+        images,
+        casesLinkedCount: p.casesLinkedCount,
+        likesDisplayCount: Math.max(0, p.likesUserCount + p.likesAdminBoost),
+      };
+    });
+
+    return {
+      slug: col.slug,
+      name: col.name,
+      kind: 'PRODUCT' as const,
+      products,
     };
   }
 
