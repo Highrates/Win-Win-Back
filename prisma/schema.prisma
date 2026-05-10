@@ -632,6 +632,7 @@ model ProductVideo {
 }
 
 // --- Заказы (статусы вручную, оплаты оффлайн) ---
+// В БД: частичный уникальный индекс Order_userId_draft_unique на (userId) WHERE status = DRAFT — один черновик на пользователя.
 model Order {
   id          String    @id @default(cuid())
   userId      String
@@ -640,6 +641,10 @@ model Order {
   totalAmount Decimal   @db.Decimal(12, 2)
   currency    String    @default("RUB")
   comment     String?   @db.Text
+  /// ФИО заказчика (черновик / отправленный заказ)
+  customerName    String? @db.Text
+  /// Адрес доставки
+  deliveryAddress String? @db.Text
   // Документы загружаются вручную — ссылки на файлы
   documentUrls Json?    // { "invoice": "...", "act": "...", "waybill": "..." }
   createdAt   DateTime  @default(now())
@@ -649,9 +654,11 @@ model Order {
 }
 
 enum OrderStatus {
-  ORDERED   // Заказано
-  PAID      // Оплачено
-  RECEIVED  // Получено
+  DRAFT              // Черновик в ЛК (подготовка)
+  PENDING_APPROVAL   // Отправлен на согласование
+  ORDERED            // Заказано
+  PAID               // Оплачено
+  RECEIVED           // Получено
 }
 
 model OrderItem {
@@ -663,6 +670,10 @@ model OrderItem {
   productVariantId String?
   productVariant   ProductVariant? @relation(fields: [productVariantId], references: [id], onDelete: SetNull)
   quantity  Int     @default(1)
+  unit      String  @default("шт")
+  /// Снимок строки (как в проекте комплектации): название, модификация, материалы, картинка, диапазон цен
+  snapshot  Json?
+  sortOrder Int     @default(0)
   price     Decimal @db.Decimal(12, 2)
 }
 

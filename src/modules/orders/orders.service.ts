@@ -1,7 +1,18 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { AuditAction, OrderStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { priceToNumber } from '../../meilisearch/product-search-doc';
 import { AuditService } from '../audit/audit.service';
+import type {
+  AddOrderPreparationLineDto,
+  PatchOrderPreparationDto,
+  PatchOrderPreparationLineDto,
+  SubmitPreparationDraftDto,
+} from './dto/order-preparation.dto';
+
+const USER_ORDER_LIST_WHERE: Prisma.OrderWhereInput = {
+  status: { not: OrderStatus.DRAFT },
+};
 
 @Injectable()
 export class OrdersService {
@@ -43,15 +54,27 @@ export class OrdersService {
   }
 
   async findByUser(userId: string, page = 1, limit = 20) {
+    const where: Prisma.OrderWhereInput = { AND: [{ userId }, USER_ORDER_LIST_WHERE] };
     const [orders, total] = await Promise.all([
       this.prisma.order.findMany({
-        where: { userId },
+        where,
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * limit,
         take: limit,
-        include: { items: { include: { product: true } } },
+        include: {
+          items: {
+            orderBy: { sortOrder: 'asc' },
+            include: {
+              product: {
+                include: {
+                  images: { orderBy: { sortOrder: 'asc' }, take: 1, select: { url: true } },
+                },
+              },
+            },
+          },
+        },
       }),
-      this.prisma.order.count({ where: { userId } }),
+      this.prisma.order.count({ where }),
     ]);
     return { items: orders, total, page, limit };
   }
@@ -59,14 +82,19 @@ export class OrdersService {
   async findOne(userId: string, orderId: string) {
     return this.prisma.order.findFirst({
       where: { id: orderId, userId },
-      include: { items: { include: { product: { include: { images: true, brand: true } } } } },
+      include: {
+        items: {
+          orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+          include: { product: { include: { images: true, brand: true } } },
+        },
+      },
     });
   }
 
   async findManyForAdmin(page = 1, limit = 20, q?: string) {
     const take = Math.min(Math.max(limit, 1), 100);
     const skip = (Math.max(page, 1) - 1) * take;
-    const where: Prisma.OrderWhereInput | undefined = q
+    const search: Prisma.OrderWhereInput | undefined = q
       ? {
           OR: [
             { id: { contains: q, mode: 'insensitive' } },
@@ -75,6 +103,7 @@ export class OrdersService {
           ],
         }
       : undefined;
+    const where: Prisma.OrderWhereInput = search ? { AND: [USER_ORDER_LIST_WHERE, search] } : USER_ORDER_LIST_WHERE;
     const [items, total] = await Promise.all([
       this.prisma.order.findMany({
         where,
@@ -96,7 +125,10 @@ export class OrdersService {
       where: { id: orderId },
       include: {
         user: { select: { id: true, email: true, phone: true } },
-        items: { include: { product: { include: { images: true, brand: true } } } },
+        items: {
+          orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+          include: { product: { include: { images: true, brand: true } } },
+        },
       },
     });
   }
@@ -125,5 +157,351 @@ export class OrdersService {
       },
     });
     return order;
+  }
+
+  // --- Подготовка заказа (черновик в ЛК) ---
+
+  private draftInclude() {
+    return {
+      items: {
+        orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }] as const,
+        include: {
+          product: {
+            select: {
+              id: true,
+              slug: true,
+              name: true,
+              images: { take: 1, orderBy: { sortOrder: 'asc' as const }, select: { url: true } },
+            },
+          },
+          productVariant: { select: { id: true, price: true, productId: true } },
+        },
+      },
+    } satisfies Prisma.OrderInclude;
+  }
+
+  private async findOrCreateDraftOrder(userId: string) {
+    const existing = await this.prisma.order.findFirst({
+      where: { userId, status: OrderStatus.DRAFT },
+      orderBy: { updatedAt: 'desc' },
+      include: this.draftInclude(),
+    });
+    if (existing) return existing;
+    try {
+      return await this.prisma.order.create({
+        data: {
+          userId,
+          status: OrderStatus.DRAFT,
+          totalAmount: new Prisma.Decimal(0),
+          currency: 'RUB',
+        },
+        include: this.draftInclude(),
+      });
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        const again = await this.prisma.order.findFirst({
+          where: { userId, status: OrderStatus.DRAFT },
+          orderBy: { updatedAt: 'desc' },
+          include: this.draftInclude(),
+        });
+        if (again) return again;
+      }
+      throw e;
+    }
+  }
+
+  private async validateProductLine(productId: string, productVariantId: string | null | undefined) {
+    const product = await this.prisma.product.findFirst({
+      where: { id: productId, isActive: true },
+      select: { id: true },
+    });
+    if (!product) throw new BadRequestException('Товар не найден или отключён');
+    const vid = productVariantId?.trim();
+    if (vid) {
+      const v = await this.prisma.productVariant.findFirst({
+        where: { id: vid, isActive: true, productId },
+        select: { id: true },
+      });
+      if (!v) throw new BadRequestException('Несогласованный вариант SKU для товара');
+    }
+  }
+
+  private async resolveUnitPriceRub(
+    productId: string,
+    productVariantId: string | null,
+    snapshot: Record<string, unknown> | null,
+  ): Promise<number> {
+    if (productVariantId) {
+      const v = await this.prisma.productVariant.findFirst({
+        where: { id: productVariantId, productId, isActive: true },
+        select: { price: true },
+      });
+      if (v) {
+        const n = priceToNumber(v.price);
+        if (n > 0) return n;
+      }
+    }
+    const min = snapshot?.catalogPriceMinRub;
+    const max = snapshot?.catalogPriceMaxRub;
+    if (typeof min === 'number' && Number.isFinite(min) && min > 0) {
+      return min;
+    }
+    if (typeof max === 'number' && Number.isFinite(max) && max > 0) {
+      return max;
+    }
+    const def = await this.prisma.productVariant.findFirst({
+      where: { productId, isActive: true },
+      orderBy: [{ isDefault: 'desc' }, { sortOrder: 'asc' }],
+      select: { price: true },
+    });
+    const n = def ? priceToNumber(def.price) : 0;
+    return n > 0 ? n : 0;
+  }
+
+  private formatPriceLabel(unitRub: number, snapshot: Record<string, unknown> | null): string {
+    if (unitRub > 0) {
+      return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(unitRub) + ' ₽';
+    }
+    const min = snapshot?.catalogPriceMinRub;
+    const max = snapshot?.catalogPriceMaxRub;
+    if (
+      typeof min === 'number' &&
+      typeof max === 'number' &&
+      Number.isFinite(min) &&
+      Number.isFinite(max) &&
+      min > 0 &&
+      max >= min
+    ) {
+      const a = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(min);
+      const b = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(max);
+      return min === max ? `~ ${a} ₽` : `~ ${a} – ${b} ₽`;
+    }
+    return '—';
+  }
+
+  private buildMetaRowsFromSnapshot(snapshot: Record<string, unknown> | null): { label: string; value: string }[] {
+    const rows: { label: string; value: string }[] = [];
+    if (!snapshot) return rows;
+    const mod = snapshot.modificationLabel;
+    if (typeof mod === 'string' && mod.trim()) {
+      rows.push({ label: 'Модификация', value: mod.trim() });
+    }
+    const em = snapshot.elementMaterialRows;
+    if (Array.isArray(em)) {
+      for (const row of em) {
+        if (row && typeof row === 'object' && 'elementLabel' in row && 'materialColorLabel' in row) {
+          const el = (row as { elementLabel?: unknown; materialColorLabel?: unknown }).elementLabel;
+          const mat = (row as { materialColorLabel?: unknown }).materialColorLabel;
+          if (typeof el === 'string' && typeof mat === 'string') {
+            rows.push({ label: el.trim() || 'Элемент', value: mat.trim() || '—' });
+          }
+        }
+      }
+    }
+    return rows;
+  }
+
+  private async recalcDraftTotal(
+    orderId: string,
+    db: Pick<PrismaService, 'orderItem' | 'order'> = this.prisma,
+  ) {
+    const items = await db.orderItem.findMany({
+      where: { orderId },
+      select: { price: true, quantity: true },
+    });
+    let sum = 0;
+    for (const it of items) {
+      sum += Number(it.price) * it.quantity;
+    }
+    await db.order.update({
+      where: { id: orderId },
+      data: { totalAmount: new Prisma.Decimal(sum.toFixed(2)) },
+    });
+  }
+
+  async getPreparationDraft(userId: string) {
+    const order = await this.findOrCreateDraftOrder(userId);
+    return this.formatPreparationResponse(order);
+  }
+
+  private formatPreparationResponse(
+    order: Prisma.OrderGetPayload<{ include: ReturnType<OrdersService['draftInclude']> }>,
+  ) {
+    const snap = (row: { snapshot: unknown }) => (row.snapshot && typeof row.snapshot === 'object' ? row.snapshot as Record<string, unknown> : null);
+    const lines = order.items.map((it) => {
+      const s = snap(it);
+      const name =
+        (s?.productName && typeof s.productName === 'string' && s.productName.trim()) ||
+        it.product.name.trim() ||
+        'Товар';
+      const unitRub = Number(it.price);
+      const price = this.formatPriceLabel(unitRub, s);
+      const lineTotalRub = unitRub > 0 ? unitRub * it.quantity : null;
+      const imageUrl =
+        (s?.imageUrl && typeof s.imageUrl === 'string' && s.imageUrl.trim()) || it.product.images[0]?.url || null;
+      return {
+        id: it.id,
+        productId: it.productId,
+        productSlug: it.product.slug,
+        name,
+        price,
+        metaRows: this.buildMetaRowsFromSnapshot(s),
+        quantity: it.quantity,
+        unit: it.unit || 'шт',
+        productVariantId: it.productVariantId,
+        imageUrl,
+        priceRubPerUnit: unitRub > 0 ? unitRub : null,
+        lineTotalRub,
+      };
+    });
+    return {
+      orderId: order.id,
+      customerName: order.customerName ?? '',
+      deliveryAddress: order.deliveryAddress ?? '',
+      comment: order.comment ?? '',
+      totalRub: Number(order.totalAmount),
+      lines,
+    };
+  }
+
+  async patchPreparationDraft(userId: string, dto: PatchOrderPreparationDto) {
+    const order = await this.findOrCreateDraftOrder(userId);
+    if (order.userId !== userId) throw new NotFoundException();
+    await this.prisma.order.update({
+      where: { id: order.id },
+      data: {
+        customerName: dto.customerName !== undefined ? dto.customerName?.trim() || null : undefined,
+        deliveryAddress: dto.deliveryAddress !== undefined ? dto.deliveryAddress?.trim() || null : undefined,
+        comment: dto.comment !== undefined ? dto.comment?.trim() || null : undefined,
+      },
+    });
+    return this.getPreparationDraft(userId);
+  }
+
+  async addPreparationLine(userId: string, dto: AddOrderPreparationLineDto) {
+    const qty = dto.quantity != null && Number.isFinite(dto.quantity) ? Math.floor(dto.quantity) : 1;
+    if (qty < 1) throw new BadRequestException('Некорректное количество');
+    await this.validateProductLine(dto.productId, dto.productVariantId);
+    const snapshot = (dto.snapshot ?? {}) as Record<string, unknown>;
+    const variantId = dto.productVariantId?.trim() || null;
+    const unitRub = await this.resolveUnitPriceRub(dto.productId, variantId, snapshot);
+    const order = await this.findOrCreateDraftOrder(userId);
+    const maxSort = await this.prisma.orderItem.aggregate({
+      where: { orderId: order.id },
+      _max: { sortOrder: true },
+    });
+    const sortOrder = (maxSort._max.sortOrder ?? -1) + 1;
+    await this.prisma.orderItem.create({
+      data: {
+        orderId: order.id,
+        productId: dto.productId,
+        productVariantId: variantId,
+        quantity: qty,
+        unit: (dto.unit?.trim() || 'шт').slice(0, 32),
+        sortOrder,
+        snapshot: snapshot as Prisma.InputJsonValue,
+        price: new Prisma.Decimal(unitRub.toFixed(2)),
+      },
+    });
+    await this.recalcDraftTotal(order.id);
+    return this.getPreparationDraft(userId);
+  }
+
+  async patchPreparationLine(userId: string, lineId: string, dto: PatchOrderPreparationLineDto) {
+    const line = await this.prisma.orderItem.findFirst({
+      where: { id: lineId },
+      include: { order: true },
+    });
+    if (!line || line.order.userId !== userId || line.order.status !== OrderStatus.DRAFT) {
+      throw new NotFoundException();
+    }
+    await this.prisma.orderItem.update({
+      where: { id: lineId },
+      data: { quantity: dto.quantity },
+    });
+    await this.recalcDraftTotal(line.orderId);
+    return this.getPreparationDraft(userId);
+  }
+
+  async removePreparationLine(userId: string, lineId: string) {
+    const line = await this.prisma.orderItem.findFirst({
+      where: { id: lineId },
+      include: { order: true },
+    });
+    if (!line || line.order.userId !== userId || line.order.status !== OrderStatus.DRAFT) {
+      throw new NotFoundException();
+    }
+    await this.prisma.orderItem.delete({ where: { id: lineId } });
+    await this.recalcDraftTotal(line.orderId);
+    return this.getPreparationDraft(userId);
+  }
+
+  async submitPreparationDraft(userId: string, dto?: SubmitPreparationDraftDto) {
+    if (dto?.lineIds !== undefined && dto.lineIds.length === 0) {
+      throw new BadRequestException('Передайте id выбранных позиций или не указывайте lineIds');
+    }
+    const lineIdsFilter =
+      dto?.lineIds != null && dto.lineIds.length > 0 ? [...new Set(dto.lineIds.map((id) => id.trim()).filter(Boolean))] : null;
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const order = await tx.order.findFirst({
+        where: { userId, status: OrderStatus.DRAFT },
+        orderBy: { updatedAt: 'desc' },
+        include: { items: true },
+      });
+      if (!order) throw new NotFoundException();
+      if (order.items.length === 0) {
+        throw new BadRequestException('Добавьте хотя бы один товар в заказ');
+      }
+
+      if (lineIdsFilter) {
+        const allowed = new Set(order.items.map((i) => i.id));
+        for (const id of lineIdsFilter) {
+          if (!allowed.has(id)) {
+            throw new BadRequestException('Указана позиция, которой нет в текущем заказе');
+          }
+        }
+        const removeIds = order.items.filter((i) => !lineIdsFilter.includes(i.id)).map((i) => i.id);
+        if (removeIds.length) {
+          await tx.orderItem.deleteMany({ where: { id: { in: removeIds } } });
+        }
+      }
+
+      const orderAfter = await tx.order.findFirst({
+        where: { id: order.id },
+        include: { items: true },
+      });
+      if (!orderAfter || orderAfter.items.length === 0) {
+        throw new BadRequestException('Добавьте хотя бы один товар в заказ');
+      }
+
+      const name = orderAfter.customerName?.trim();
+      const addr = orderAfter.deliveryAddress?.trim();
+      if (!name) throw new BadRequestException('Укажите ФИО заказчика');
+      if (!addr) throw new BadRequestException('Укажите адрес доставки');
+
+      await this.recalcDraftTotal(orderAfter.id, tx);
+
+      const updated = await tx.order.update({
+        where: { id: order.id },
+        data: { status: OrderStatus.PENDING_APPROVAL },
+        include: this.draftInclude(),
+      });
+      return { updated, itemCount: orderAfter.items.length };
+    });
+
+    await this.audit.log({
+      action: AuditAction.UPDATE,
+      entityType: 'Order',
+      entityId: result.updated.id,
+      path: '/api/v1/orders/me/preparation/submit',
+      httpMethod: 'POST',
+      metadata: {
+        to: OrderStatus.PENDING_APPROVAL,
+        itemCount: result.itemCount,
+        partialSubmit: Boolean(lineIdsFilter),
+      },
+    });
+    return this.formatPreparationResponse(result.updated);
   }
 }
