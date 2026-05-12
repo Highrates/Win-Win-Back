@@ -37,13 +37,18 @@ const monoTarget = path.join(backendRoot, '..', 'packages', 'order-item-snapshot
 const target = exists(flatTarget) ? flatTarget : monoTarget;
 
 if (!exists(target)) {
-  console.warn(
-    '[link-order-item-snapshot] skip: neither ./packages/order-item-snapshot nor ../packages/order-item-snapshot found',
+  console.error(
+    '[link-order-item-snapshot] missing package dir: expected ./packages/order-item-snapshot (Win-Win-Back) or ../packages/order-item-snapshot (monorepo). Commit packages/order-item-snapshot into the back repo; see scripts/deploy-back.sh',
   );
-  process.exit(0);
+  process.exit(1);
 }
 
 fs.mkdirSync(path.dirname(linkPath), { recursive: true });
 const rel = path.relative(path.dirname(linkPath), target);
-fs.symlinkSync(rel, linkPath, 'dir');
-console.log('[link-order-item-snapshot] linked', linkPath, '->', rel);
+try {
+  fs.symlinkSync(rel, linkPath, 'dir');
+  console.log('[link-order-item-snapshot] linked', linkPath, '->', rel);
+} catch (e) {
+  console.error('[link-order-item-snapshot] symlink failed:', e && e.message ? e.message : e);
+  process.exit(1);
+}
