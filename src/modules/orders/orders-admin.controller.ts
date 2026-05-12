@@ -1,7 +1,9 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
   NotFoundException,
   Param,
   Patch,
@@ -14,18 +16,24 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { OrdersService } from './orders.service';
 import { UpdateOrderStatusAdminDto } from './dto/order-admin.dto';
+import { OrderChatService } from '../order-chat/order-chat.service';
 
 @Controller('orders/admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.ADMIN, UserRole.MODERATOR)
 export class OrdersAdminController {
-  constructor(private readonly orders: OrdersService) {}
+  constructor(
+    private readonly orders: OrdersService,
+    private readonly orderChat: OrderChatService,
+  ) {}
 
   @Get()
   list(
     @Query('page') pageRaw?: string,
     @Query('limit') limitRaw?: string,
     @Query('q') q?: string,
+    @Query('userId') userId?: string,
+    @Query('bucket') bucket?: string,
   ) {
     const page = pageRaw ? parseInt(pageRaw, 10) : 1;
     const limit = limitRaw ? parseInt(limitRaw, 10) : 20;
@@ -33,7 +41,14 @@ export class OrdersAdminController {
       Number.isFinite(page) ? page : 1,
       Number.isFinite(limit) ? limit : 20,
       q?.trim() || undefined,
+      userId?.trim() || undefined,
+      bucket?.trim() || undefined,
     );
+  }
+
+  @Get('pending-approval-count')
+  pendingApprovalCount() {
+    return this.orders.countPendingApprovalForAdmin();
   }
 
   @Get(':id')
@@ -43,9 +58,16 @@ export class OrdersAdminController {
     return order;
   }
 
+  @Delete(':id')
+  @HttpCode(204)
+  async deleteRejected(@Param('id') id: string) {
+    await this.orders.deleteRejectedOrderForAdmin(id);
+  }
+
   @Patch(':id/status')
   async patchStatus(@Param('id') id: string, @Body() dto: UpdateOrderStatusAdminDto) {
     const order = await this.orders.updateStatus(id, dto.status, dto.documentUrls);
+    await this.orderChat.onOrderStatusChanged(order.id, order.status);
     return order;
   }
 }

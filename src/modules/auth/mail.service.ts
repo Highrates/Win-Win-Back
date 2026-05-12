@@ -143,4 +143,119 @@ export class MailService {
     await transport.sendMail({ from, to, subject, text, html });
     this.logger.log(`WinWin partner approved email sent to ${to}`);
   }
+
+  async sendOrderChatNotifyCustomer(params: {
+    to: string;
+    customerName: string | null;
+    orderDisplayId: string;
+    snippet: string;
+    accountOrdersUrl: string;
+  }): Promise<void> {
+    const { to, customerName, orderDisplayId, snippet, accountOrdersUrl } = params;
+    const from = this.config.get<string>('MAIL_FROM')?.trim() || this.config.get<string>('SMTP_USER');
+    if (!from) throw new Error('MAIL_FROM или SMTP_USER нужен для отправки письма');
+    const configuredHost = this.config.get<string>('SMTP_HOST')?.trim();
+    if (!configuredHost) {
+      throw new Error('SMTP_HOST, SMTP_USER и SMTP_PASSWORD должны быть заданы для отправки почты');
+    }
+    const endpoint = await this.smtpConnectTarget(configuredHost);
+    const transport = this.transporter(endpoint);
+    const hello = customerName?.trim() ? `${customerName.trim()}, ` : '';
+    const subject = `Новое сообщение по заказу ${orderDisplayId} — Win-Win`;
+    const text = [
+      `${hello}вам ответили в чате по заказу ${orderDisplayId}.`,
+      ``,
+      snippet,
+      ``,
+      `Открыть заказы и чат: ${accountOrdersUrl}`,
+    ].join('\n');
+    const html = [
+      `<p>${hello}вам ответили в чате по заказу <strong>${orderDisplayId}</strong>.</p>`,
+      `<blockquote style="margin:12px 0;padding:8px 12px;border-left:3px solid #ccc">${snippet.replace(/</g, '&lt;')}</blockquote>`,
+      `<p><a href="${accountOrdersUrl}">Перейти в личный кабинет → заказы</a></p>`,
+    ].join('');
+    await transport.sendMail({ from, to, subject, text, html });
+    this.logger.log(`Order chat notify (customer) sent to ${to}`);
+  }
+
+  async sendOrderChatNotifyStaff(params: {
+    recipients: string[];
+    orderDisplayId: string;
+    orderId: string;
+    snippet: string;
+    adminOrderUrl: string;
+  }): Promise<void> {
+    const dedup = [...new Set(params.recipients.map((e) => e.trim()).filter(Boolean))];
+    if (!dedup.length) return;
+    const from = this.config.get<string>('MAIL_FROM')?.trim() || this.config.get<string>('SMTP_USER');
+    if (!from) throw new Error('MAIL_FROM или SMTP_USER нужен для отправки письма');
+    const configuredHost = this.config.get<string>('SMTP_HOST')?.trim();
+    if (!configuredHost) {
+      throw new Error('SMTP_HOST, SMTP_USER и SMTP_PASSWORD должны быть заданы для отправки почты');
+    }
+    const endpoint = await this.smtpConnectTarget(configuredHost);
+    const transport = this.transporter(endpoint);
+    const [primary, ...bcc] = dedup;
+    const subject = `Новое сообщение в чате заказа ${params.orderDisplayId} — Win-Win`;
+    const text = [
+      `Клиент написал в чат по заказу ${params.orderDisplayId}.`,
+      ``,
+      params.snippet,
+      ``,
+      `Открыть заказ: ${params.adminOrderUrl}`,
+    ].join('\n');
+    const html = [
+      `<p>Клиент написал в чат по заказу <strong>${params.orderDisplayId}</strong>.</p>`,
+      `<blockquote style="margin:12px 0;padding:8px 12px;border-left:3px solid #ccc">${params.snippet.replace(/</g, '&lt;')}</blockquote>`,
+      `<p><a href="${params.adminOrderUrl}">Открыть заказ в админке</a></p>`,
+    ].join('');
+    await transport.sendMail({
+      from,
+      to: primary,
+      ...(bcc.length ? { bcc } : {}),
+      subject,
+      text,
+      html,
+    });
+    this.logger.log(`Order chat notify (staff) sent to ${dedup.length} recipient(s)`);
+  }
+
+  /** Уведомление о новой заявке на заказ (отправка на согласование). Те же получатели, что и для чата: `ORDER_CHAT_STAFF_EMAIL`. */
+  async sendOrderSubmittedPendingApprovalStaff(params: {
+    recipients: string[];
+    orderDisplayId: string;
+    orderId: string;
+    adminOrderUrl: string;
+  }): Promise<void> {
+    const dedup = [...new Set(params.recipients.map((e) => e.trim()).filter(Boolean))];
+    if (!dedup.length) return;
+    const from = this.config.get<string>('MAIL_FROM')?.trim() || this.config.get<string>('SMTP_USER');
+    if (!from) throw new Error('MAIL_FROM или SMTP_USER нужен для отправки письма');
+    const configuredHost = this.config.get<string>('SMTP_HOST')?.trim();
+    if (!configuredHost) {
+      throw new Error('SMTP_HOST, SMTP_USER и SMTP_PASSWORD должны быть заданы для отправки почты');
+    }
+    const endpoint = await this.smtpConnectTarget(configuredHost);
+    const transport = this.transporter(endpoint);
+    const [primary, ...bcc] = dedup;
+    const subject = `Новая заявка на заказ ${params.orderDisplayId} — Win-Win`;
+    const text = [
+      `Клиент отправил заказ на согласование (заказ ${params.orderDisplayId}).`,
+      ``,
+      `Открыть в админке: ${params.adminOrderUrl}`,
+    ].join('\n');
+    const html = [
+      `<p>Клиент отправил заказ на согласование: <strong>${params.orderDisplayId}</strong>.</p>`,
+      `<p><a href="${params.adminOrderUrl}">Открыть заказ в админке</a></p>`,
+    ].join('');
+    await transport.sendMail({
+      from,
+      to: primary,
+      ...(bcc.length ? { bcc } : {}),
+      subject,
+      text,
+      html,
+    });
+    this.logger.log(`Order pending-approval notify (staff) sent to ${dedup.length} recipient(s)`);
+  }
 }

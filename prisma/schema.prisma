@@ -42,6 +42,77 @@ model User {
 
   cases Case[]
   designerProjects DesignerProject[]
+  chatMessagesAuthored ChatMessage[]
+  chatReadStates       ChatReadState[]
+}
+
+/// Чаты по заказу (приватный диалог клиент ↔ поддержка).
+enum ChatConversationKind {
+  ORDER
+}
+
+enum ChatMessageAuthorRole {
+  CUSTOMER
+  STAFF
+}
+
+enum ChatAttachmentKind {
+  FILE
+  IMAGE
+}
+
+model ChatConversation {
+  id                String               @id @default(cuid())
+  kind              ChatConversationKind @default(ORDER)
+  orderId           String               @unique
+  order             Order                @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  /// После этой даты переписку можно удалить (заказ завершён + retention).
+  retentionPurgesAt DateTime?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  messages   ChatMessage[]
+  readStates ChatReadState[]
+
+  @@index([retentionPurgesAt])
+}
+
+model ChatMessage {
+  id             String @id @default(cuid())
+  conversationId String
+  conversation   ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  authorUserId   String
+  author         User                 @relation(fields: [authorUserId], references: [id], onDelete: Cascade)
+  authorRole     ChatMessageAuthorRole
+  body           String               @default("") @db.Text
+  deletedAt      DateTime?
+  createdAt      DateTime             @default(now())
+
+  attachments ChatAttachment[]
+
+  @@index([conversationId, createdAt(sort: Desc)])
+}
+
+model ChatAttachment {
+  id        String             @id @default(cuid())
+  messageId String
+  message   ChatMessage        @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  fileUrl   String
+  filename  String
+  mimeType  String?
+  kind      ChatAttachmentKind @default(FILE)
+
+  @@index([messageId])
+}
+
+model ChatReadState {
+  conversationId String
+  conversation   ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lastReadAt     DateTime         @default(now())
+
+  @@id([conversationId, userId])
 }
 
 /// Приглашение дизайнера по email: ссылка с подписанным токеном, ref-код на момент отправки.
@@ -651,6 +722,7 @@ model Order {
   updatedAt   DateTime  @updatedAt
 
   items OrderItem[]
+  chatConversation ChatConversation?
 }
 
 enum OrderStatus {
@@ -659,6 +731,7 @@ enum OrderStatus {
   ORDERED            // Заказано
   PAID               // Оплачено
   RECEIVED           // Получено
+  REJECTED           // Отклонён (только из PENDING_APPROVAL; удаление из админки)
 }
 
 model OrderItem {

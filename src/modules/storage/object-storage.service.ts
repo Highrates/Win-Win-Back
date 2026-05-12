@@ -43,6 +43,8 @@ const MIME_EXT: Record<string, string> = {
   'image/png': '.png',
   'image/webp': '.webp',
   'image/gif': '.gif',
+  'image/heic': '.heic',
+  'image/heif': '.heif',
   'video/mp4': '.mp4',
   'video/webm': '.webm',
   'video/quicktime': '.mov',
@@ -172,6 +174,8 @@ export class ObjectStorageService {
     }
     const m = file.mimetype;
     if (ALLOWED.has(m)) return;
+    /** iPhone «Фото» часто отдаёт HEIC/HEIF — в медиатеку и чат заказа разрешаем */
+    if (m === 'image/heic' || m === 'image/heif') return;
     if (LIBRARY_DOC.has(m)) return;
     if (RICH_VIDEO_TYPES.has(m)) return;
     if (m === 'model/gltf-binary' || m === 'model/gltf+json') return;

@@ -12,6 +12,7 @@ import { MeilisearchModule } from './meilisearch/meilisearch.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { CatalogModule } from './modules/catalog/catalog.module';
+import { OrderChatModule } from './modules/order-chat/order-chat.module';
 import { OrdersModule } from './modules/orders/orders.module';
 import { CollectionsModule } from './modules/collections/collections.module';
 import { ReferralsModule } from './modules/referrals/referrals.module';
@@ -45,6 +46,7 @@ import { LikesModule } from './modules/likes/likes.module';
     AuthModule,
     UsersModule,
     CatalogModule,
+    OrderChatModule,
     OrdersModule,
     CollectionsModule,
     ReferralsModule,

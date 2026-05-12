@@ -26,6 +26,6 @@ import { DesignerInviteService } from './designer-invite.service';
   ],
   providers: [AuthService, JwtStrategy, MailService, UnimtxOtpService, RegistrationService, AccountContactService, DesignerInviteService],
   controllers: [AuthController],
-  exports: [AuthService, AccountContactService, DesignerInviteService, MailService],
+  exports: [AuthService, AccountContactService, DesignerInviteService, MailService, JwtModule],
 })
 export class AuthModule {}

@@ -1,8 +1,12 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { AuditAction, OrderStatus, Prisma } from '@prisma/client';
+import { orderItemSnapshotMetaRows } from '@win-win/order-item-snapshot';
 import { PrismaService } from '../../prisma/prisma.service';
 import { priceToNumber } from '../../meilisearch/product-search-doc';
 import { AuditService } from '../audit/audit.service';
+import { MailService } from '../auth/mail.service';
+import { OrderChatService } from '../order-chat/order-chat.service';
 import type {
   AddOrderPreparationLineDto,
   PatchOrderPreparationDto,
@@ -14,44 +18,28 @@ const USER_ORDER_LIST_WHERE: Prisma.OrderWhereInput = {
   status: { not: OrderStatus.DRAFT },
 };
 
+export type AdminOrdersListBucket = 'new' | 'active' | 'rejected';
+
+function adminListBucketWhere(bucketRaw?: string): Prisma.OrderWhereInput {
+  const b = (bucketRaw?.trim() || 'new').toLowerCase();
+  if (b === 'rejected') return { status: OrderStatus.REJECTED };
+  if (b === 'active') {
+    return { status: { in: [OrderStatus.ORDERED, OrderStatus.PAID, OrderStatus.RECEIVED] } };
+  }
+  return { status: OrderStatus.PENDING_APPROVAL };
+}
+
 @Injectable()
 export class OrdersService {
+  private readonly logger = new Logger(OrdersService.name);
+
   constructor(
     private prisma: PrismaService,
     private audit: AuditService,
+    private readonly mail: MailService,
+    private readonly orderChat: OrderChatService,
+    private readonly config: ConfigService,
   ) {}
-
-  async create(userId: string, dto: { items: { productId: string; quantity: number; price: number }[]; comment?: string }) {
-    const totalAmount = dto.items.reduce((sum, i) => sum + Number(i.price) * i.quantity, 0);
-    const order = await this.prisma.order.create({
-      data: {
-        userId,
-        status: OrderStatus.ORDERED,
-        totalAmount,
-        comment: dto.comment,
-        items: {
-          create: dto.items.map((i) => ({
-            productId: i.productId,
-            quantity: i.quantity,
-            price: i.price,
-          })),
-        },
-      },
-      include: { items: { include: { product: true } } },
-    });
-    await this.audit.log({
-      action: AuditAction.CREATE,
-      entityType: 'Order',
-      entityId: order.id,
-      path: '/api/v1/orders',
-      httpMethod: 'POST',
-      metadata: {
-        totalAmount: Number(order.totalAmount),
-        itemCount: order.items.length,
-      },
-    });
-    return order;
-  }
 
   async findByUser(userId: string, page = 1, limit = 20) {
     const where: Prisma.OrderWhereInput = { AND: [{ userId }, USER_ORDER_LIST_WHERE] };
@@ -91,7 +79,13 @@ export class OrdersService {
     });
   }
 
-  async findManyForAdmin(page = 1, limit = 20, q?: string) {
+  async findManyForAdmin(
+    page = 1,
+    limit = 20,
+    q?: string,
+    userIdFilter?: string,
+    bucketRaw?: string,
+  ) {
     const take = Math.min(Math.max(limit, 1), 100);
     const skip = (Math.max(page, 1) - 1) * take;
     const search: Prisma.OrderWhereInput | undefined = q
@@ -103,28 +97,56 @@ export class OrdersService {
           ],
         }
       : undefined;
-    const where: Prisma.OrderWhereInput = search ? { AND: [USER_ORDER_LIST_WHERE, search] } : USER_ORDER_LIST_WHERE;
-    const [items, total] = await Promise.all([
+    const uid = userIdFilter?.trim();
+    const userClause: Prisma.OrderWhereInput | undefined = uid ? { userId: uid } : undefined;
+    const clauses: Prisma.OrderWhereInput[] = [USER_ORDER_LIST_WHERE, adminListBucketWhere(bucketRaw)];
+    if (userClause) clauses.push(userClause);
+    if (search) clauses.push(search);
+    const where: Prisma.OrderWhereInput = { AND: clauses };
+    const [rows, total] = await Promise.all([
       this.prisma.order.findMany({
         where,
         orderBy: { createdAt: 'desc' },
         skip,
         take,
         include: {
-          user: { select: { id: true, email: true, phone: true } },
+          user: {
+            select: {
+              id: true,
+              email: true,
+              phone: true,
+              profile: { select: { firstName: true, lastName: true } },
+            },
+          },
           items: { include: { product: { select: { id: true, name: true, slug: true } } } },
         },
       }),
       this.prisma.order.count({ where }),
     ]);
+    /** Зарезервировано: поток сообщений по заказу (пока всегда false). */
+    const items = rows.map((o) => ({ ...o, hasChatMessages: false as boolean }));
     return { items, total, page: Math.max(page, 1), limit: take };
+  }
+
+  async countPendingApprovalForAdmin(): Promise<{ total: number }> {
+    const total = await this.prisma.order.count({
+      where: { status: OrderStatus.PENDING_APPROVAL },
+    });
+    return { total };
   }
 
   async findOneForAdmin(orderId: string) {
     return this.prisma.order.findFirst({
       where: { id: orderId },
       include: {
-        user: { select: { id: true, email: true, phone: true } },
+        user: {
+          select: {
+            id: true,
+            email: true,
+            phone: true,
+            profile: { select: { firstName: true, lastName: true } },
+          },
+        },
         items: {
           orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
           include: { product: { include: { images: true, brand: true } } },
@@ -139,6 +161,12 @@ export class OrdersService {
       select: { status: true },
     });
     if (!prev) throw new NotFoundException('Order not found');
+    if (prev.status === OrderStatus.REJECTED) {
+      throw new BadRequestException('Отклонённый заказ нельзя редактировать — удалите его во вкладке «Отклонённые»');
+    }
+    if (status === OrderStatus.REJECTED && prev.status !== OrderStatus.PENDING_APPROVAL) {
+      throw new BadRequestException('Отклонить можно только заказ на согласовании');
+    }
     const order = await this.prisma.order.update({
       where: { id: orderId },
       data: { status, documentUrls: documentUrls ?? undefined },
@@ -157,6 +185,26 @@ export class OrdersService {
       },
     });
     return order;
+  }
+
+  async deleteRejectedOrderForAdmin(orderId: string) {
+    const prev = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { id: true, status: true },
+    });
+    if (!prev) throw new NotFoundException('Order not found');
+    if (prev.status !== OrderStatus.REJECTED) {
+      throw new BadRequestException('Удалять можно только отклонённые заказы');
+    }
+    await this.prisma.order.delete({ where: { id: orderId } });
+    await this.audit.log({
+      action: AuditAction.DELETE,
+      entityType: 'Order',
+      entityId: orderId,
+      path: `/api/v1/orders/admin/${orderId}`,
+      httpMethod: 'DELETE',
+      metadata: { fromStatus: OrderStatus.REJECTED },
+    });
   }
 
   // --- Подготовка заказа (черновик в ЛК) ---
@@ -279,28 +327,6 @@ export class OrdersService {
     return '—';
   }
 
-  private buildMetaRowsFromSnapshot(snapshot: Record<string, unknown> | null): { label: string; value: string }[] {
-    const rows: { label: string; value: string }[] = [];
-    if (!snapshot) return rows;
-    const mod = snapshot.modificationLabel;
-    if (typeof mod === 'string' && mod.trim()) {
-      rows.push({ label: 'Модификация', value: mod.trim() });
-    }
-    const em = snapshot.elementMaterialRows;
-    if (Array.isArray(em)) {
-      for (const row of em) {
-        if (row && typeof row === 'object' && 'elementLabel' in row && 'materialColorLabel' in row) {
-          const el = (row as { elementLabel?: unknown; materialColorLabel?: unknown }).elementLabel;
-          const mat = (row as { materialColorLabel?: unknown }).materialColorLabel;
-          if (typeof el === 'string' && typeof mat === 'string') {
-            rows.push({ label: el.trim() || 'Элемент', value: mat.trim() || '—' });
-          }
-        }
-      }
-    }
-    return rows;
-  }
-
   private async recalcDraftTotal(
     orderId: string,
     db: Pick<PrismaService, 'orderItem' | 'order'> = this.prisma,
@@ -345,7 +371,7 @@ export class OrdersService {
         productSlug: it.product.slug,
         name,
         price,
-        metaRows: this.buildMetaRowsFromSnapshot(s),
+        metaRows: orderItemSnapshotMetaRows(s),
         quantity: it.quantity,
         unit: it.unit || 'шт',
         productVariantId: it.productVariantId,
@@ -502,6 +528,32 @@ export class OrdersService {
         partialSubmit: Boolean(lineIdsFilter),
       },
     });
+    void this.notifyStaffOrderSubmitted(result.updated.id).catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Order submit: staff email notify failed: ${msg}`);
+    });
     return this.formatPreparationResponse(result.updated);
+  }
+
+  private async notifyStaffOrderSubmitted(orderId: string): Promise<void> {
+    const recipients = await this.orderChat.getStaffNotifyEmailRecipients();
+    if (!recipients.length) {
+      this.logger.log(
+        'Order submit: no staff email recipients (set ORDER_CHAT_STAFF_EMAIL or add admin/moderator emails)',
+      );
+      return;
+    }
+    const frontBase =
+      this.config.get<string>('FRONTEND_PUBLIC_URL')?.replace(/\/+$/, '') ||
+      this.config.get<string>('NEXT_PUBLIC_SITE_URL')?.replace(/\/+$/, '') ||
+      'http://localhost:3000';
+    const shortId =
+      orderId.length >= 8 ? `${orderId.slice(0, 4)}…${orderId.slice(-4)}` : orderId;
+    await this.mail.sendOrderSubmittedPendingApprovalStaff({
+      recipients,
+      orderDisplayId: shortId,
+      orderId,
+      adminOrderUrl: `${frontBase}/admin/orders/${encodeURIComponent(orderId)}`,
+    });
   }
 }
