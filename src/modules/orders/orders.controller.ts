@@ -1,4 +1,5 @@
-import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, NotFoundException, Param, Patch, Query, UseGuards } from '@nestjs/common';
+import { CommercialProposalService } from './commercial-proposal.service';
 import { OrdersService } from './orders.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -7,7 +8,10 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 @Controller('orders')
 @UseGuards(JwtAuthGuard)
 export class OrdersController {
-  constructor(private ordersService: OrdersService) {}
+  constructor(
+    private readonly ordersService: OrdersService,
+    private readonly commercialProposals: CommercialProposalService,
+  ) {}
 
   @Get()
   myOrders(
@@ -19,7 +23,16 @@ export class OrdersController {
   }
 
   @Get(':id')
-  one(@CurrentUser('sub') userId: string, @Param('id') orderId: string) {
-    return this.ordersService.findOne(userId, orderId);
+  async one(@CurrentUser('sub') userId: string, @Param('id') orderId: string) {
+    const order = await this.ordersService.findOneDetailForUser(userId, orderId);
+    if (!order) throw new NotFoundException();
+    const latestCommercialProposal =
+      await this.commercialProposals.getLatestPublishedForOrder(orderId);
+    return { ...order, latestCommercialProposal };
+  }
+
+  @Patch(':id/commercial-proposal-seen')
+  ackCommercialProposalSeen(@CurrentUser('sub') userId: string, @Param('id') orderId: string) {
+    return this.ordersService.ackCommercialProposalSeenForCustomer(userId, orderId);
   }
 }

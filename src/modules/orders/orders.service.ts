@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { AuditAction, OrderStatus, Prisma } from '@prisma/client';
+import { AuditAction, CommercialProposalStatus, OrderStatus, Prisma, UserRole } from '@prisma/client';
 import { orderItemSnapshotMetaRows } from '@win-win/order-item-snapshot';
 import { PrismaService } from '../../prisma/prisma.service';
 import { priceToNumber } from '../../meilisearch/product-search-doc';
@@ -18,13 +18,54 @@ const USER_ORDER_LIST_WHERE: Prisma.OrderWhereInput = {
   status: { not: OrderStatus.DRAFT },
 };
 
-export type AdminOrdersListBucket = 'new' | 'active' | 'rejected';
+type CpLineForOfferAgg = {
+  quantity: number;
+  offerUnitPrice: unknown;
+  discountPercent: unknown | null;
+};
+
+/** Итоги последнего опубликованного КП для карточки списка заказов в ЛК. */
+function commercialProposalOfferFromLines(
+  lines: CpLineForOfferAgg[] | null | undefined,
+): { oldTotalRub: number; newTotalRub: number; avgDiscountPercent: number } | null {
+  if (!lines?.length) return null;
+  let oldTotal = 0;
+  let newTotal = 0;
+  let weightedDisc = 0;
+  for (const l of lines) {
+    const unit = priceToNumber(l.offerUnitPrice);
+    const qty = l.quantity;
+    const base = unit * qty;
+    oldTotal += base;
+    const discRaw = l.discountPercent;
+    const disc =
+      discRaw != null && discRaw !== ''
+        ? typeof discRaw === 'number'
+          ? discRaw
+          : parseFloat(String(discRaw))
+        : 0;
+    const d = Number.isFinite(disc) ? disc : 0;
+    const factor = 1 - Math.min(100, Math.max(0, d)) / 100;
+    newTotal += Math.round(unit * factor * qty * 100) / 100;
+    weightedDisc += base * d;
+  }
+  oldTotal = Math.round(oldTotal * 100) / 100;
+  newTotal = Math.round(newTotal * 100) / 100;
+  return {
+    oldTotalRub: oldTotal,
+    newTotalRub: newTotal,
+    avgDiscountPercent: oldTotal > 0 ? weightedDisc / oldTotal : 0,
+  };
+}
+
+export type AdminOrdersListBucket = 'new' | 'active' | 'completed' | 'rejected';
 
 function adminListBucketWhere(bucketRaw?: string): Prisma.OrderWhereInput {
   const b = (bucketRaw?.trim() || 'new').toLowerCase();
   if (b === 'rejected') return { status: OrderStatus.REJECTED };
+  if (b === 'completed') return { status: OrderStatus.RECEIVED };
   if (b === 'active') {
-    return { status: { in: [OrderStatus.ORDERED, OrderStatus.PAID, OrderStatus.RECEIVED] } };
+    return { status: { in: [OrderStatus.ORDERED, OrderStatus.PAID] } };
   }
   return { status: OrderStatus.PENDING_APPROVAL };
 }
@@ -46,7 +87,7 @@ export class OrdersService {
     const [orders, total] = await Promise.all([
       this.prisma.order.findMany({
         where,
-        orderBy: { createdAt: 'desc' },
+        orderBy: { updatedAt: 'desc' },
         skip: (page - 1) * limit,
         take: limit,
         include: {
@@ -60,11 +101,47 @@ export class OrdersService {
               },
             },
           },
+          commercialProposals: {
+            where: { status: CommercialProposalStatus.PUBLISHED },
+            orderBy: { versionNumber: 'desc' },
+            take: 1,
+            select: {
+              lines: {
+                orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+                select: { quantity: true, offerUnitPrice: true, discountPercent: true, deliveryEta: true },
+              },
+            },
+          },
         },
       }),
       this.prisma.order.count({ where }),
     ]);
-    return { items: orders, total, page, limit };
+    const unreadStaffByOrderId = await this.orderChat.unreadStaffCountsForCustomerOrders(
+      userId,
+      orders.map((o) => o.id),
+    );
+    return {
+      items: orders.map((o) => {
+        const { commercialProposals, ...rest } = o;
+        const latest = commercialProposals[0];
+        const commercialProposalOffer = latest?.lines?.length
+          ? commercialProposalOfferFromLines(latest.lines)
+          : null;
+        const deliveryEtas = (latest?.lines ?? [])
+          .map((l) => (typeof l.deliveryEta === 'string' ? l.deliveryEta.trim() : ''))
+          .filter(Boolean);
+        const commercialProposalDeliveryEta = deliveryEtas.length ? deliveryEtas.join(' · ') : null;
+        return {
+          ...rest,
+          commercialProposalOffer,
+          commercialProposalDeliveryEta,
+          unreadStaffChatCount: unreadStaffByOrderId[o.id] ?? 0,
+        };
+      }),
+      total,
+      page,
+      limit,
+    };
   }
 
   async findOne(userId: string, orderId: string) {
@@ -79,12 +156,41 @@ export class OrdersService {
     });
   }
 
+  /** Детали заказа для ЛК: как `findOne`, плюс счётчик непрочитанных сообщений от сотрудника в чате. */
+  async findOneDetailForUser(userId: string, orderId: string) {
+    const order = await this.findOne(userId, orderId);
+    if (!order) return null;
+    const unreadMap = await this.orderChat.unreadStaffCountsForCustomerOrders(userId, [order.id]);
+    return { ...order, unreadStaffChatCount: unreadMap[order.id] ?? 0 };
+  }
+
+  /** Клиент открыл карточку заказа — фиксируем просмотр последнего опубликованного КП (сброс «новой версии» в ЛК). */
+  async ackCommercialProposalSeenForCustomer(userId: string, orderId: string) {
+    const row = await this.prisma.order.findFirst({
+      where: { id: orderId, userId },
+      select: { id: true },
+    });
+    if (!row) throw new NotFoundException();
+    const latest = await this.prisma.commercialProposal.findFirst({
+      where: { orderId, status: CommercialProposalStatus.PUBLISHED },
+      orderBy: { versionNumber: 'desc' },
+      select: { versionNumber: true },
+    });
+    const v = latest?.versionNumber ?? 0;
+    await this.prisma.order.update({
+      where: { id: orderId },
+      data: { customerLastSeenCommercialProposalVersion: v },
+    });
+    return { ok: true as const, customerLastSeenCommercialProposalVersion: v };
+  }
+
   async findManyForAdmin(
     page = 1,
     limit = 20,
     q?: string,
     userIdFilter?: string,
     bucketRaw?: string,
+    staffUserId?: string,
   ) {
     const take = Math.min(Math.max(limit, 1), 100);
     const skip = (Math.max(page, 1) - 1) * take;
@@ -123,8 +229,18 @@ export class OrdersService {
       }),
       this.prisma.order.count({ where }),
     ]);
-    /** Зарезервировано: поток сообщений по заказу (пока всегда false). */
-    const items = rows.map((o) => ({ ...o, hasChatMessages: false as boolean }));
+    const unreadByOrder =
+      staffUserId?.trim() && rows.length
+        ? await this.orderChat.unreadCustomerCountsForStaffOrders(
+            staffUserId.trim(),
+            rows.map((r) => r.id),
+          )
+        : null;
+    const items = rows.map((o) => ({
+      ...o,
+      hasChatMessages: false as boolean,
+      unreadCustomerChatCount: unreadByOrder ? (unreadByOrder[o.id] ?? 0) : 0,
+    }));
     return { items, total, page: Math.max(page, 1), limit: take };
   }
 
@@ -196,6 +312,7 @@ export class OrdersService {
     if (prev.status !== OrderStatus.REJECTED) {
       throw new BadRequestException('Удалять можно только отклонённые заказы');
     }
+    await this.orderChat.purgeOrderChatMediaForOrder(orderId);
     await this.prisma.order.delete({ where: { id: orderId } });
     await this.audit.log({
       action: AuditAction.DELETE,
@@ -532,6 +649,20 @@ export class OrdersService {
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.warn(`Order submit: staff email notify failed: ${msg}`);
     });
+
+    const comment = result.updated.comment?.trim();
+    if (comment) {
+      try {
+        await this.orderChat.postMessage(result.updated.id, userId, UserRole.USER, {
+          body: comment,
+          attachments: [],
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.warn(`Order submit: chat comment failed: ${msg}`);
+      }
+    }
+
     return this.formatPreparationResponse(result.updated);
   }
 

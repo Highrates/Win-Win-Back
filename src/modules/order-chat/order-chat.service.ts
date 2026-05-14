@@ -9,7 +9,9 @@ import { ConfigService } from '@nestjs/config';
 import {
   ChatAttachmentKind,
   ChatMessageAuthorRole,
+  CommercialProposalStatus,
   OrderStatus,
+  Prisma,
   UserRole,
 } from '@prisma/client';
 import { randomBytes } from 'crypto';
@@ -23,6 +25,19 @@ import type {
 } from './order-chat.types';
 
 const MAX_MESSAGES_PAGE = 300;
+
+/** Имена из multipart (Multer) иногда приходят как UTF-8, прочитанный как latin1 («Ð...»). */
+function decodeUploadOriginalName(original: string | undefined | null): string {
+  const raw = (original ?? 'file').trim() || 'file';
+  if (!/[ÐÑÂâ€]/.test(raw)) return raw.slice(0, 512);
+  try {
+    const fixed = Buffer.from(raw, 'latin1').toString('utf8');
+    if (fixed && !fixed.includes('\ufffd')) return fixed.slice(0, 512);
+  } catch {
+    /* ignore */
+  }
+  return raw.slice(0, 512);
+}
 
 @Injectable()
 export class OrderChatService {
@@ -98,7 +113,7 @@ export class OrderChatService {
         .filter((x): x is string => typeof x === 'string' && Boolean(x.trim()))
         .join(' ')
         .trim();
-      return n || 'Поддержка Win-Win';
+      return n || 'Менеджер Win-Win';
     }
     const n = [profile?.firstName, profile?.lastName]
       .filter((x): x is string => typeof x === 'string' && Boolean(x.trim()))
@@ -237,7 +252,7 @@ export class OrderChatService {
         attachments: {
           create: att.map((a) => ({
             fileUrl: a.fileUrl,
-            filename: a.filename.slice(0, 512),
+            filename: decodeUploadOriginalName(a.filename).slice(0, 512),
             mimeType: a.mimeType?.slice(0, 128) ?? null,
             kind: a.kind,
           })),
@@ -335,19 +350,20 @@ export class OrderChatService {
       await this.assertStaffCanAccess(orderId);
     }
 
+    const safeName = decodeUploadOriginalName(file.originalname);
     this.storage.assertLibraryFile({
       size: file.size,
       mimetype: file.mimetype,
-      originalname: file.originalname,
+      originalname: safeName,
     });
 
-    const ext = this.storage.libraryFileExtension(file.mimetype, file.originalname || 'file');
+    const ext = this.storage.libraryFileExtension(file.mimetype, safeName || 'file');
     const objectKey = `objects/chat/orders/${orderId}/${randomBytes(16).toString('hex')}${ext}`;
     const { url } = await this.storage.uploadMediaLibraryObject(
       file.buffer,
       file.mimetype,
       objectKey,
-      file.originalname || 'file',
+      safeName,
     );
 
     const kind: ChatAttachmentKind =
@@ -357,16 +373,58 @@ export class OrderChatService {
 
     return {
       url,
-      filename: (file.originalname || 'file').slice(0, 512),
+      filename: safeName.slice(0, 512),
       mimeType: file.mimetype,
       kind,
     };
   }
 
-  async unreadCountForCustomer(userId: string): Promise<number> {
+  /** Заказы, у которых опубликованная версия КП новее, чем отметка «просмотрено» в ЛК. */
+  private async countOrdersWithUnseenPublishedCommercialProposal(
+    userId: string,
+    orderStatuses?: OrderStatus[],
+  ): Promise<number> {
+    const where: Prisma.OrderWhereInput = {
+      userId,
+      ...(orderStatuses?.length
+        ? { status: { in: orderStatuses } }
+        : { status: { not: OrderStatus.DRAFT } }),
+    };
+    const orders = await this.prisma.order.findMany({
+      where,
+      select: {
+        customerLastSeenCommercialProposalVersion: true,
+        commercialProposals: {
+          where: { status: CommercialProposalStatus.PUBLISHED },
+          orderBy: { versionNumber: 'desc' },
+          take: 1,
+          select: { versionNumber: true },
+        },
+      },
+    });
+    let n = 0;
+    for (const o of orders) {
+      const latest = o.commercialProposals[0]?.versionNumber;
+      if (latest == null) continue;
+      const seen = o.customerLastSeenCommercialProposalVersion ?? 0;
+      if (latest > seen) n++;
+    }
+    return n;
+  }
+
+  async unreadCountForCustomer(
+    userId: string,
+    opts?: { orderStatuses?: OrderStatus[] },
+  ): Promise<number> {
+    const orderWhere: Prisma.OrderWhereInput = {
+      userId,
+      ...(opts?.orderStatuses?.length
+        ? { status: { in: opts.orderStatuses } }
+        : { status: { not: OrderStatus.DRAFT } }),
+    };
     const convs = await this.prisma.chatConversation.findMany({
       where: {
-        order: { userId, status: { not: OrderStatus.DRAFT } },
+        order: orderWhere,
         OR: [{ retentionPurgesAt: null }, { retentionPurgesAt: { gt: new Date() } }],
       },
       select: {
@@ -392,7 +450,52 @@ export class OrderChatService {
       });
       total += n;
     }
+    total += await this.countOrdersWithUnseenPublishedCommercialProposal(userId, opts?.orderStatuses);
     return total;
+  }
+
+  /** Непрочитанные сообщения сотрудника по каждому заказу (для списка заказов в ЛК). */
+  async unreadStaffCountsForCustomerOrders(
+    userId: string,
+    orderIds: string[],
+  ): Promise<Record<string, number>> {
+    const out: Record<string, number> = {};
+    for (const id of orderIds) out[id] = 0;
+    if (!orderIds.length) return out;
+
+    const convs = await this.prisma.chatConversation.findMany({
+      where: {
+        orderId: { in: orderIds },
+        order: { userId },
+        OR: [{ retentionPurgesAt: null }, { retentionPurgesAt: { gt: new Date() } }],
+      },
+      select: {
+        id: true,
+        orderId: true,
+        readStates: {
+          where: { userId },
+          select: { lastReadAt: true },
+          take: 1,
+        },
+      },
+    });
+
+    await Promise.all(
+      convs.map(async (c) => {
+        const lastRead = c.readStates[0]?.lastReadAt ?? new Date(0);
+        const n = await this.prisma.chatMessage.count({
+          where: {
+            conversationId: c.id,
+            authorRole: ChatMessageAuthorRole.STAFF,
+            deletedAt: null,
+            createdAt: { gt: lastRead },
+          },
+        });
+        out[c.orderId] = n;
+      }),
+    );
+
+    return out;
   }
 
   async unreadCountForStaff(staffUserId: string): Promise<number> {
@@ -501,6 +604,120 @@ export class OrderChatService {
       select: { email: true },
     });
     return [...new Set(rows.map((r) => r.email!.trim()).filter(Boolean))];
+  }
+
+  /** Перед удалением заказа: файлы вложений чата из S3 (БД удалит сообщения каскадом). */
+  async purgeOrderChatMediaForOrder(orderId: string): Promise<void> {
+    const conv = await this.prisma.chatConversation.findUnique({
+      where: { orderId },
+      select: {
+        messages: { select: { attachments: { select: { fileUrl: true } } } },
+      },
+    });
+    if (!conv?.messages?.length) return;
+    for (const m of conv.messages) {
+      for (const a of m.attachments) {
+        const key = this.storage.tryPublicUrlToKey(a.fileUrl);
+        if (key) await this.storage.removeObjectKey(key).catch(() => undefined);
+      }
+    }
+  }
+
+  /** Непрочитанные сообщения клиента по заказам (для админки). */
+  async unreadCustomerCountsForStaffOrders(
+    staffUserId: string,
+    orderIds: string[],
+  ): Promise<Record<string, number>> {
+    const out: Record<string, number> = {};
+    for (const id of orderIds) out[id] = 0;
+    if (!orderIds.length) return out;
+
+    const convs = await this.prisma.chatConversation.findMany({
+      where: {
+        orderId: { in: orderIds },
+        OR: [{ retentionPurgesAt: null }, { retentionPurgesAt: { gt: new Date() } }],
+      },
+      select: {
+        id: true,
+        orderId: true,
+        readStates: {
+          where: { userId: staffUserId },
+          select: { lastReadAt: true },
+          take: 1,
+        },
+      },
+    });
+
+    await Promise.all(
+      convs.map(async (c) => {
+        const lastRead = c.readStates[0]?.lastReadAt ?? new Date(0);
+        const n = await this.prisma.chatMessage.count({
+          where: {
+            conversationId: c.id,
+            authorRole: ChatMessageAuthorRole.CUSTOMER,
+            deletedAt: null,
+            createdAt: { gt: lastRead },
+          },
+        });
+        out[c.orderId] = n;
+      }),
+    );
+
+    return out;
+  }
+
+  /** Сводка непрочитанных от клиента по вкладкам списка заказов в админке. */
+  async unreadCustomerChatSummaryForAdminBuckets(staffUserId: string): Promise<{
+    total: number;
+    new: number;
+    active: number;
+    completed: number;
+    rejected: number;
+  }> {
+    const countBucket = async (bucketWhere: Prisma.OrderWhereInput): Promise<number> => {
+      const convs = await this.prisma.chatConversation.findMany({
+        where: {
+          order: { AND: [{ status: { not: OrderStatus.DRAFT } }, bucketWhere] },
+          OR: [{ retentionPurgesAt: null }, { retentionPurgesAt: { gt: new Date() } }],
+        },
+        select: {
+          id: true,
+          readStates: {
+            where: { userId: staffUserId },
+            select: { lastReadAt: true },
+            take: 1,
+          },
+        },
+      });
+      const parts = await Promise.all(
+        convs.map(async (c) => {
+          const lastRead = c.readStates[0]?.lastReadAt ?? new Date(0);
+          return this.prisma.chatMessage.count({
+            where: {
+              conversationId: c.id,
+              authorRole: ChatMessageAuthorRole.CUSTOMER,
+              deletedAt: null,
+              createdAt: { gt: lastRead },
+            },
+          });
+        }),
+      );
+      return parts.reduce((a, b) => a + b, 0);
+    };
+
+    const newN = await countBucket({ status: OrderStatus.PENDING_APPROVAL });
+    const activeN = await countBucket({
+      status: { in: [OrderStatus.ORDERED, OrderStatus.PAID] },
+    });
+    const completedN = await countBucket({ status: OrderStatus.RECEIVED });
+    const rejectedN = await countBucket({ status: OrderStatus.REJECTED });
+    return {
+      total: newN + activeN + completedN + rejectedN,
+      new: newN,
+      active: activeN,
+      completed: completedN,
+      rejected: rejectedN,
+    };
   }
 
   async verifyJoinRoom(userId: string, role: string, orderId: string): Promise<void> {

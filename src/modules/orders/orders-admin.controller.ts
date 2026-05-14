@@ -14,6 +14,8 @@ import { UserRole } from '@prisma/client';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import type { JwtPayload } from '../../common/decorators/current-user.decorator';
 import { OrdersService } from './orders.service';
 import { UpdateOrderStatusAdminDto } from './dto/order-admin.dto';
 import { OrderChatService } from '../order-chat/order-chat.service';
@@ -29,6 +31,7 @@ export class OrdersAdminController {
 
   @Get()
   list(
+    @CurrentUser() user: JwtPayload,
     @Query('page') pageRaw?: string,
     @Query('limit') limitRaw?: string,
     @Query('q') q?: string,
@@ -43,12 +46,18 @@ export class OrdersAdminController {
       q?.trim() || undefined,
       userId?.trim() || undefined,
       bucket?.trim() || undefined,
+      user.sub,
     );
   }
 
   @Get('pending-approval-count')
   pendingApprovalCount() {
     return this.orders.countPendingApprovalForAdmin();
+  }
+
+  @Get('chat-unread-summary')
+  chatUnreadSummary(@CurrentUser() user: JwtPayload) {
+    return this.orderChat.unreadCustomerChatSummaryForAdminBuckets(user.sub);
   }
 
   @Get(':id')

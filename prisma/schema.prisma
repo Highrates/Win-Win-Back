@@ -44,6 +44,7 @@ model User {
   designerProjects DesignerProject[]
   chatMessagesAuthored ChatMessage[]
   chatReadStates       ChatReadState[]
+  commercialProposalsPublished CommercialProposal[] @relation("CommercialProposalPublishedBy")
 }
 
 /// Чаты по заказу (приватный диалог клиент ↔ поддержка).
@@ -503,6 +504,7 @@ model Product {
   curatedProductSetItems      CuratedProductSetItem[]
   modifications    ProductModification[]
   elements         ProductElement[]
+  commercialProposalLines CommercialProposalLine[]
 }
 
 /// Модификация товара (размер/конфигурация). Простой товар может иметь одну модификацию без элементов.
@@ -604,6 +606,7 @@ model ProductVariant {
   cartItems  CartItem[]
   orderItems OrderItem[]
   designerProjectLines DesignerProjectLine[]
+  commercialProposalLines CommercialProposalLine[]
 
   @@index([productId])
   @@index([modificationId])
@@ -720,9 +723,12 @@ model Order {
   documentUrls Json?    // { "invoice": "...", "act": "...", "waybill": "..." }
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+  /// Последняя просмотренная клиентом версия опубликованного КП (1+). Новая публикация выше этого номера даёт «непрочитано» в ЛК.
+  customerLastSeenCommercialProposalVersion Int?
 
   items OrderItem[]
   chatConversation ChatConversation?
+  commercialProposals CommercialProposal[]
 }
 
 enum OrderStatus {
@@ -748,6 +754,54 @@ model OrderItem {
   snapshot  Json?
   sortOrder Int     @default(0)
   price     Decimal @db.Decimal(12, 2)
+}
+
+/// Коммерческое предложение по заказу: черновик (versionNumber = 0) и опубликованные версии (1, 2, …).
+enum CommercialProposalStatus {
+  DRAFT
+  PUBLISHED
+}
+
+model CommercialProposal {
+  id                  String                   @id @default(cuid())
+  orderId             String
+  order               Order                    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  /// 0 — текущий черновик; 1+ — опубликованные версии (монотонно по заказу).
+  versionNumber       Int
+  status              CommercialProposalStatus
+  publishedAt         DateTime?
+  publishedByUserId   String?
+  publishedBy         User?                    @relation("CommercialProposalPublishedBy", fields: [publishedByUserId], references: [id], onDelete: SetNull)
+  createdAt           DateTime                 @default(now())
+  updatedAt           DateTime                 @updatedAt
+
+  lines CommercialProposalLine[]
+
+  @@unique([orderId, versionNumber])
+  @@index([orderId, status])
+}
+
+model CommercialProposalLine {
+  id                  String             @id @default(cuid())
+  proposalId          String
+  proposal            CommercialProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  /// Строка заказа, с которой связана позиция КП (null — добавлена только в КП).
+  sourceOrderItemId   String?
+  sortOrder           Int                @default(0)
+  productId           String
+  product             Product            @relation(fields: [productId], references: [id], onDelete: Restrict)
+  productVariantId    String?
+  productVariant      ProductVariant?    @relation(fields: [productVariantId], references: [id], onDelete: SetNull)
+  quantity            Int                @default(1)
+  unit                String             @default("шт")
+  snapshot            Json?
+  /// Цена за единицу в оффере (после скидки считается на клиенте; discountPercent — отдельно).
+  offerUnitPrice      Decimal            @db.Decimal(12, 2)
+  discountPercent     Decimal?           @db.Decimal(5, 2)
+  deliveryEta         String?            @db.Text
+  lineNote            String?            @db.Text
+
+  @@index([proposalId])
 }
 
 // --- Коллекции (личные, шаринг по ссылке) ---
@@ -1115,6 +1169,9 @@ model SiteSettings {
 
   /// Типы помещений для кейсов дизайнера (массив строк).
   caseRoomTypeOptions Json?
+
+  /// Подписи статусов заказа: объект { "PENDING_APPROVAL": "…", … }. Пустой/null — дефолты из i18n.
+  orderStatusLabels Json?
 
   updatedAt DateTime @updatedAt
 }

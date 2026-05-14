@@ -1,4 +1,4 @@
-import { ArrayMaxSize, IsArray, IsOptional, IsString, MinLength } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsObject, IsOptional, IsString, MinLength } from 'class-validator';
 
 export class UpdateSiteSettingsAdminDto {
   @IsOptional()
@@ -20,5 +20,9 @@ export class UpdateSiteSettingsAdminDto {
   @IsString({ each: true })
   @MinLength(1, { each: true })
   caseRoomTypeOptions?: string[];
+
+  @IsOptional()
+  @IsObject()
+  orderStatusLabels?: Record<string, string>;
 }
 
