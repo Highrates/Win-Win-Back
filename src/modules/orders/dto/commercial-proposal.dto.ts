@@ -68,9 +68,22 @@ export class InitCommercialProposalDraftDto {
   fromPublishedProposalId?: string;
 }
 
-/** После «На согласовании» допустимые статусы при публикации КП. */
+/** После «На согласовании» — следующий статус при публикации КП (этапы после согласования). */
+const KP_PUBLISH_NEXT_STATUSES = [
+  'PROPOSAL_FORMED',
+  'APPROVED',
+  'PENDING_SIGNATURE',
+  'PENDING_PAYMENT',
+  'PAID',
+  'PENDING_SHIPMENT',
+  'IN_TRANSIT',
+  'DELIVERED_TO_RU_WAREHOUSE',
+  'RECEIVED',
+  'COMPLETED',
+] as const;
+
 export class PublishCommercialProposalDto {
   @IsOptional()
-  @IsIn(['ORDERED', 'PAID', 'RECEIVED'])
-  nextOrderStatus?: 'ORDERED' | 'PAID' | 'RECEIVED';
+  @IsIn(KP_PUBLISH_NEXT_STATUSES)
+  nextOrderStatus?: (typeof KP_PUBLISH_NEXT_STATUSES)[number];
 }

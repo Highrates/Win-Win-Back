@@ -231,6 +231,71 @@ export class CommercialProposalService {
     });
   }
 
+  private snapshotRecord(snapshot: Prisma.JsonValue | null): Record<string, unknown> {
+    if (snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot)) {
+      return { ...(snapshot as Record<string, unknown>) };
+    }
+    return {};
+  }
+
+  private mergeVariantGrossIntoSnapshot(
+    snapshot: Prisma.JsonValue | null,
+    variant: {
+      lengthMm: number | null;
+      widthMm: number | null;
+      heightMm: number | null;
+      volumeLiters: Prisma.Decimal | null;
+      weightKg: Prisma.Decimal | null;
+    },
+  ): Prisma.InputJsonValue {
+    const out = this.snapshotRecord(snapshot);
+    const num = (v: Prisma.Decimal | null) => (v != null ? Number(v) : null);
+    const vol = num(variant.volumeLiters);
+    const w = num(variant.weightKg);
+    if (out.lengthMm == null && variant.lengthMm != null) out.lengthMm = variant.lengthMm;
+    if (out.widthMm == null && variant.widthMm != null) out.widthMm = variant.widthMm;
+    if (out.heightMm == null && variant.heightMm != null) out.heightMm = variant.heightMm;
+    if (out.volumeLiters == null && vol != null && Number.isFinite(vol)) out.volumeLiters = vol;
+    if (out.weightKg == null && w != null && Number.isFinite(w)) out.weightKg = w;
+    return out as Prisma.InputJsonValue;
+  }
+
+  private async enrichLinesWithVariantGross<
+    T extends { productVariantId: string | null; snapshot: Prisma.InputJsonValue | typeof Prisma.JsonNull },
+  >(lines: T[]): Promise<T[]> {
+    const variantIds = [
+      ...new Set(
+        lines.map((l) => l.productVariantId?.trim()).filter((id): id is string => Boolean(id)),
+      ),
+    ];
+    if (variantIds.length === 0) return lines;
+    const variants = await this.prisma.productVariant.findMany({
+      where: { id: { in: variantIds } },
+      select: {
+        id: true,
+        lengthMm: true,
+        widthMm: true,
+        heightMm: true,
+        volumeLiters: true,
+        weightKg: true,
+      },
+    });
+    const byId = new Map(variants.map((v) => [v.id, v]));
+    return lines.map((line) => {
+      const vid = line.productVariantId?.trim();
+      if (!vid) return line;
+      const v = byId.get(vid);
+      if (!v) return line;
+      return {
+        ...line,
+        snapshot: this.mergeVariantGrossIntoSnapshot(
+          line.snapshot === Prisma.JsonNull ? null : (line.snapshot as Prisma.JsonValue),
+          v,
+        ),
+      };
+    });
+  }
+
   /** Черновик из строк заказа (после удаления старого черновика, если был). */
   private buildLinesFromOrderItems(
     items: {
@@ -325,7 +390,7 @@ export class CommercialProposalService {
       throw new BadRequestException('В заказе нет позиций для КП');
     }
 
-    const lineData = this.buildLinesFromOrderItems(order.items);
+    const lineData = await this.enrichLinesWithVariantGross(this.buildLinesFromOrderItems(order.items));
     const created = await this.createDraftWithLines(orderId, lineData);
     return this.serializeProposal(created);
   }
@@ -436,15 +501,15 @@ export class CommercialProposalService {
       });
     });
 
-    if (dto?.nextOrderStatus) {
-      const cur = await this.prisma.order.findUnique({
-        where: { id: orderId },
-        select: { status: true },
-      });
-      if (cur?.status === OrderStatus.PENDING_APPROVAL) {
-        const updated = await this.orders.updateStatus(orderId, dto.nextOrderStatus as OrderStatus);
-        await this.orderChat.onOrderStatusChanged(updated.id, updated.status);
-      }
+    const cur = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { status: true },
+    });
+    if (cur?.status === OrderStatus.PENDING_APPROVAL) {
+      const next =
+        (dto?.nextOrderStatus as OrderStatus | undefined) ?? OrderStatus.PROPOSAL_FORMED;
+      const updated = await this.orders.updateStatus(orderId, next);
+      await this.orderChat.onOrderStatusChanged(updated.id, updated.status);
     }
 
     const summary = await this.getSummary(orderId);

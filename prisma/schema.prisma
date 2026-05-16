@@ -711,7 +711,7 @@ model Order {
   id          String    @id @default(cuid())
   userId      String
   user        User      @relation(fields: [userId], references: [id])
-  status      OrderStatus @default(ORDERED)
+  status      OrderStatus @default(PENDING_APPROVAL)
   totalAmount Decimal   @db.Decimal(12, 2)
   currency    String    @default("RUB")
   comment     String?   @db.Text
@@ -732,12 +732,18 @@ model Order {
 }
 
 enum OrderStatus {
-  DRAFT              // Черновик в ЛК (подготовка)
-  PENDING_APPROVAL   // Отправлен на согласование
-  ORDERED            // Заказано
-  PAID               // Оплачено
-  RECEIVED           // Получено
-  REJECTED           // Отклонён (только из PENDING_APPROVAL; удаление из админки)
+  DRAFT                      // Черновик в ЛК (подготовка)
+  PENDING_APPROVAL           // На согласовании
+  PROPOSAL_FORMED            // Предложение сформировано
+  APPROVED                   // Согласовано
+  PENDING_SIGNATURE          // Ожидает подписи
+  PENDING_PAYMENT            // Ожидает оплаты
+  PAID                       // Оплачено
+  PENDING_SHIPMENT           // Ожидает отгрузки
+  IN_TRANSIT                 // В пути
+  DELIVERED_TO_RU_WAREHOUSE  // Доставлен на склад в РФ
+  RECEIVED                   // Получено
+  COMPLETED                  // Завершен
 }
 
 model OrderItem {
@@ -1169,9 +1175,6 @@ model SiteSettings {
 
   /// Типы помещений для кейсов дизайнера (массив строк).
   caseRoomTypeOptions Json?
-
-  /// Подписи статусов заказа: объект { "PENDING_APPROVAL": "…", … }. Пустой/null — дефолты из i18n.
-  orderStatusLabels Json?
 
   updatedAt DateTime @updatedAt
 }

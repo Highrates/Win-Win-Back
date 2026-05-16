@@ -23,6 +23,10 @@ import type {
   OrderChatMessageOut,
   OrderChatRealtimeEmitter,
 } from './order-chat.types';
+import {
+  ADMIN_ACTIVE_STATUSES,
+  ADMIN_COMPLETED_STATUSES,
+} from '../orders/order-status.constants';
 
 const MAX_MESSAGES_PAGE = 300;
 
@@ -531,7 +535,7 @@ export class OrderChatService {
   }
 
   async onOrderStatusChanged(orderId: string, status: OrderStatus): Promise<void> {
-    if (status !== OrderStatus.RECEIVED) return;
+    if (status !== OrderStatus.RECEIVED && status !== OrderStatus.COMPLETED) return;
     const exists = await this.prisma.chatConversation.findUnique({
       where: { orderId },
       select: { id: true },
@@ -672,7 +676,6 @@ export class OrderChatService {
     new: number;
     active: number;
     completed: number;
-    rejected: number;
   }> {
     const countBucket = async (bucketWhere: Prisma.OrderWhereInput): Promise<number> => {
       const convs = await this.prisma.chatConversation.findMany({
@@ -706,17 +709,13 @@ export class OrderChatService {
     };
 
     const newN = await countBucket({ status: OrderStatus.PENDING_APPROVAL });
-    const activeN = await countBucket({
-      status: { in: [OrderStatus.ORDERED, OrderStatus.PAID] },
-    });
-    const completedN = await countBucket({ status: OrderStatus.RECEIVED });
-    const rejectedN = await countBucket({ status: OrderStatus.REJECTED });
+    const activeN = await countBucket({ status: { in: [...ADMIN_ACTIVE_STATUSES] } });
+    const completedN = await countBucket({ status: { in: [...ADMIN_COMPLETED_STATUSES] } });
     return {
-      total: newN + activeN + completedN + rejectedN,
+      total: newN + activeN + completedN,
       new: newN,
       active: activeN,
       completed: completedN,
-      rejected: rejectedN,
     };
   }
 

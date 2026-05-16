@@ -69,8 +69,8 @@ export class OrdersAdminController {
 
   @Delete(':id')
   @HttpCode(204)
-  async deleteRejected(@Param('id') id: string) {
-    await this.orders.deleteRejectedOrderForAdmin(id);
+  async deletePendingApproval(@Param('id') id: string) {
+    await this.orders.deletePendingApprovalOrderForAdmin(id);
   }
 
   @Patch(':id/status')

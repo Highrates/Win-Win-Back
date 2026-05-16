@@ -13,6 +13,10 @@ import type {
   PatchOrderPreparationLineDto,
   SubmitPreparationDraftDto,
 } from './dto/order-preparation.dto';
+import {
+  ADMIN_ACTIVE_STATUSES,
+  ADMIN_COMPLETED_STATUSES,
+} from './order-status.constants';
 
 const USER_ORDER_LIST_WHERE: Prisma.OrderWhereInput = {
   status: { not: OrderStatus.DRAFT },
@@ -58,15 +62,12 @@ function commercialProposalOfferFromLines(
   };
 }
 
-export type AdminOrdersListBucket = 'new' | 'active' | 'completed' | 'rejected';
+export type AdminOrdersListBucket = 'new' | 'active' | 'completed';
 
 function adminListBucketWhere(bucketRaw?: string): Prisma.OrderWhereInput {
   const b = (bucketRaw?.trim() || 'new').toLowerCase();
-  if (b === 'rejected') return { status: OrderStatus.REJECTED };
-  if (b === 'completed') return { status: OrderStatus.RECEIVED };
-  if (b === 'active') {
-    return { status: { in: [OrderStatus.ORDERED, OrderStatus.PAID] } };
-  }
+  if (b === 'completed') return { status: { in: [...ADMIN_COMPLETED_STATUSES] } };
+  if (b === 'active') return { status: { in: [...ADMIN_ACTIVE_STATUSES] } };
   return { status: OrderStatus.PENDING_APPROVAL };
 }
 
@@ -277,11 +278,8 @@ export class OrdersService {
       select: { status: true },
     });
     if (!prev) throw new NotFoundException('Order not found');
-    if (prev.status === OrderStatus.REJECTED) {
-      throw new BadRequestException('Отклонённый заказ нельзя редактировать — удалите его во вкладке «Отклонённые»');
-    }
-    if (status === OrderStatus.REJECTED && prev.status !== OrderStatus.PENDING_APPROVAL) {
-      throw new BadRequestException('Отклонить можно только заказ на согласовании');
+    if (prev.status === OrderStatus.DRAFT) {
+      throw new BadRequestException('Черновик заказа редактируется только в личном кабинете клиента');
     }
     const order = await this.prisma.order.update({
       where: { id: orderId },
@@ -303,14 +301,15 @@ export class OrdersService {
     return order;
   }
 
-  async deleteRejectedOrderForAdmin(orderId: string) {
+  /** Удаление заказа на согласовании (отмена заявки до начала работы). */
+  async deletePendingApprovalOrderForAdmin(orderId: string) {
     const prev = await this.prisma.order.findUnique({
       where: { id: orderId },
       select: { id: true, status: true },
     });
     if (!prev) throw new NotFoundException('Order not found');
-    if (prev.status !== OrderStatus.REJECTED) {
-      throw new BadRequestException('Удалять можно только отклонённые заказы');
+    if (prev.status !== OrderStatus.PENDING_APPROVAL) {
+      throw new BadRequestException('Удалять можно только заказ на согласовании');
     }
     await this.orderChat.purgeOrderChatMediaForOrder(orderId);
     await this.prisma.order.delete({ where: { id: orderId } });
@@ -320,7 +319,7 @@ export class OrdersService {
       entityId: orderId,
       path: `/api/v1/orders/admin/${orderId}`,
       httpMethod: 'DELETE',
-      metadata: { fromStatus: OrderStatus.REJECTED },
+      metadata: { fromStatus: OrderStatus.PENDING_APPROVAL },
     });
   }
 
