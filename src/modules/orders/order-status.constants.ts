@@ -1,32 +1,19 @@
 import { OrderStatus } from '@prisma/client';
+import {
+  ADMIN_ACTIVE_STATUSES as ADMIN_ACTIVE_FLOW,
+  ADMIN_COMPLETED_STATUSES as ADMIN_COMPLETED_FLOW,
+  CUSTOMER_IN_WORK_STATUSES_LIST,
+  ORDER_STATUS_FLOW as ORDER_STATUS_FLOW_SHARED,
+} from '@win-win/order-status';
 
 /** Жизненный цикл заказа после отправки из ЛК (порядок в UI). */
-export const ORDER_STATUS_FLOW: readonly OrderStatus[] = [
-  OrderStatus.PENDING_APPROVAL,
-  OrderStatus.PROPOSAL_FORMED,
-  OrderStatus.APPROVED,
-  OrderStatus.PENDING_SIGNATURE,
-  OrderStatus.PENDING_PAYMENT,
-  OrderStatus.PAID,
-  OrderStatus.PENDING_SHIPMENT,
-  OrderStatus.IN_TRANSIT,
-  OrderStatus.DELIVERED_TO_RU_WAREHOUSE,
-  OrderStatus.RECEIVED,
-  OrderStatus.COMPLETED,
-];
+export const ORDER_STATUS_FLOW = ORDER_STATUS_FLOW_SHARED as readonly OrderStatus[];
 
-export const CUSTOMER_IN_WORK_STATUSES: readonly OrderStatus[] = ORDER_STATUS_FLOW.filter(
-  (s) => s !== OrderStatus.COMPLETED,
-);
+export const CUSTOMER_IN_WORK_STATUSES: readonly OrderStatus[] =
+  CUSTOMER_IN_WORK_STATUSES_LIST as readonly OrderStatus[];
 
-export const ADMIN_ACTIVE_STATUSES: readonly OrderStatus[] = ORDER_STATUS_FLOW.filter(
-  (s) =>
-    s !== OrderStatus.PENDING_APPROVAL &&
-    s !== OrderStatus.COMPLETED &&
-    s !== OrderStatus.RECEIVED,
-);
+export const ADMIN_ACTIVE_STATUSES: readonly OrderStatus[] =
+  ADMIN_ACTIVE_FLOW as readonly OrderStatus[];
 
-export const ADMIN_COMPLETED_STATUSES: readonly OrderStatus[] = [
-  OrderStatus.RECEIVED,
-  OrderStatus.COMPLETED,
-];
+export const ADMIN_COMPLETED_STATUSES: readonly OrderStatus[] =
+  ADMIN_COMPLETED_FLOW as readonly OrderStatus[];

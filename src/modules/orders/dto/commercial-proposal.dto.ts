@@ -1,3 +1,4 @@
+import { KP_PUBLISH_NEXT_STATUSES } from '@win-win/order-status';
 import { Type } from 'class-transformer';
 import {
   IsArray,
@@ -67,20 +68,6 @@ export class InitCommercialProposalDraftDto {
   @IsString()
   fromPublishedProposalId?: string;
 }
-
-/** После «На согласовании» — следующий статус при публикации КП (этапы после согласования). */
-const KP_PUBLISH_NEXT_STATUSES = [
-  'PROPOSAL_FORMED',
-  'APPROVED',
-  'PENDING_SIGNATURE',
-  'PENDING_PAYMENT',
-  'PAID',
-  'PENDING_SHIPMENT',
-  'IN_TRANSIT',
-  'DELIVERED_TO_RU_WAREHOUSE',
-  'RECEIVED',
-  'COMPLETED',
-] as const;
 
 export class PublishCommercialProposalDto {
   @IsOptional()

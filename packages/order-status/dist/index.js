@@ -1,0 +1,14 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.orderStatusLabel = exports.ORDER_STATUS_CODES_WITH_LABELS = exports.ORDER_STATUS_FLOW = exports.ORDER_STATUS_DRAFT = exports.KP_PUBLISH_NEXT_STATUSES = exports.CUSTOMER_IN_WORK_STATUSES_LIST = exports.CUSTOMER_IN_WORK_STATUSES = exports.ADMIN_COMPLETED_STATUSES = exports.ADMIN_ACTIVE_STATUSES = void 0;
+var constants_1 = require("./constants");
+Object.defineProperty(exports, "ADMIN_ACTIVE_STATUSES", { enumerable: true, get: function () { return constants_1.ADMIN_ACTIVE_STATUSES; } });
+Object.defineProperty(exports, "ADMIN_COMPLETED_STATUSES", { enumerable: true, get: function () { return constants_1.ADMIN_COMPLETED_STATUSES; } });
+Object.defineProperty(exports, "CUSTOMER_IN_WORK_STATUSES", { enumerable: true, get: function () { return constants_1.CUSTOMER_IN_WORK_STATUSES; } });
+Object.defineProperty(exports, "CUSTOMER_IN_WORK_STATUSES_LIST", { enumerable: true, get: function () { return constants_1.CUSTOMER_IN_WORK_STATUSES_LIST; } });
+Object.defineProperty(exports, "KP_PUBLISH_NEXT_STATUSES", { enumerable: true, get: function () { return constants_1.KP_PUBLISH_NEXT_STATUSES; } });
+Object.defineProperty(exports, "ORDER_STATUS_DRAFT", { enumerable: true, get: function () { return constants_1.ORDER_STATUS_DRAFT; } });
+Object.defineProperty(exports, "ORDER_STATUS_FLOW", { enumerable: true, get: function () { return constants_1.ORDER_STATUS_FLOW; } });
+var labels_1 = require("./labels");
+Object.defineProperty(exports, "ORDER_STATUS_CODES_WITH_LABELS", { enumerable: true, get: function () { return labels_1.ORDER_STATUS_CODES_WITH_LABELS; } });
+Object.defineProperty(exports, "orderStatusLabel", { enumerable: true, get: function () { return labels_1.orderStatusLabel; } });

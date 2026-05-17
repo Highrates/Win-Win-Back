@@ -281,6 +281,9 @@ export class OrdersService {
     if (prev.status === OrderStatus.DRAFT) {
       throw new BadRequestException('Черновик заказа редактируется только в личном кабинете клиента');
     }
+    if (status === OrderStatus.DRAFT) {
+      throw new BadRequestException('Нельзя перевести заказ в статус «Черновик»');
+    }
     const order = await this.prisma.order.update({
       where: { id: orderId },
       data: { status, documentUrls: documentUrls ?? undefined },
