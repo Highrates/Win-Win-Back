@@ -10,6 +10,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { OrderChatService } from '../order-chat/order-chat.service';
+import { OrderSettingsService } from '../order-settings/order-settings.service';
 import type { CommercialProposalLineInputDto, PublishCommercialProposalDto } from './dto/commercial-proposal.dto';
 import { OrdersService } from './orders.service';
 
@@ -28,6 +29,7 @@ export class CommercialProposalService {
     private readonly prisma: PrismaService,
     private readonly orders: OrdersService,
     private readonly orderChat: OrderChatService,
+    private readonly orderSettings: OrderSettingsService,
   ) {}
 
   private async assertOrderForKp(orderId: string) {
@@ -338,6 +340,9 @@ export class CommercialProposalService {
       });
       if (!pub) throw new NotFoundException('Опубликованное КП не найдено');
 
+      const kpCfg = await this.orderSettings.getResolved();
+      const kpCap = Math.min(100, Math.max(0, kpCfg.kpMaxLineDiscountPercent));
+
       return this.prisma.$transaction(async (tx) => {
         await this.deleteDraftTx(tx, orderId);
         const lines = pub.lines.map((l) => ({
@@ -349,7 +354,10 @@ export class CommercialProposalService {
           unit: l.unit,
           snapshot: (l.snapshot ?? Prisma.JsonNull) as Prisma.InputJsonValue,
           offerUnitPrice: l.offerUnitPrice,
-          discountPercent: l.discountPercent,
+          discountPercent:
+            l.discountPercent != null
+              ? dec(Math.min(kpCap, Math.max(0, numFromDecimal(l.discountPercent))))
+              : null,
           deliveryEta: l.deliveryEta,
           lineNote: l.lineNote,
         }));
@@ -406,14 +414,29 @@ export class CommercialProposalService {
       await this.validateProductLine(l.productId, l.productVariantId ?? null);
     }
 
+    const kpCfg = await this.orderSettings.getResolved();
+    const kpCap = Math.min(100, Math.max(0, kpCfg.kpMaxLineDiscountPercent));
+
     const sorted = [...lines].sort((a, b) => a.sortOrder - b.sortOrder);
+
+    for (const l of sorted) {
+      if (
+        l.discountPercent != null &&
+        Number.isFinite(l.discountPercent) &&
+        l.discountPercent > kpCap + 1e-9
+      ) {
+        throw new BadRequestException(
+          `Черновик КП не сохранён: есть строки со скидкой выше допустимого лимита ${kpCap}% (задаётся в «Настройки сайта» → вкладка «Заказы» → «Макс. скидка по строке…»). Уменьшите скидки в таблице или повысьте лимит.`,
+        );
+      }
+    }
 
     await this.prisma.$transaction(async (tx) => {
       await tx.commercialProposalLine.deleteMany({ where: { proposalId: draft.id } });
       for (const l of sorted) {
         const disc =
           l.discountPercent != null && Number.isFinite(l.discountPercent)
-            ? dec(Math.min(100, Math.max(0, l.discountPercent)))
+            ? dec(Math.min(kpCap, Math.max(0, l.discountPercent)))
             : null;
         await tx.commercialProposalLine.create({
           data: {

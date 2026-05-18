@@ -1,7 +1,8 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
-import { ReferralsService } from './referrals.service';
+import { Body, Controller, Get, HttpCode, Post, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { ReferralsService } from './referrals.service';
+import { Throttle } from '@nestjs/throttler';
 
 @Controller('referrals')
 @UseGuards(JwtAuthGuard)
@@ -11,6 +12,20 @@ export class ReferralsController {
   @Get('config')
   config() {
     return this.referralsService.getConfig();
+  }
+
+  @Throttle({ default: { ttl: 60_000, limit: 60 } })
+  @Get('partner-program/summary')
+  partnerProgramSummary(@CurrentUser('sub') userId: string) {
+    return this.referralsService.getPartnerProgramSummary(userId);
+  }
+
+  @Post('partner-program/payout-request')
+  @HttpCode(200)
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  partnerPayoutRequest(@CurrentUser('sub') userId: string, @Body() _body: Record<string, unknown>) {
+    void _body;
+    return this.referralsService.requestPartnerPayout(userId);
   }
 
   @Get('my')

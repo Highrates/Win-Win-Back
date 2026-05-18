@@ -18,8 +18,14 @@ export class OrdersController {
     @CurrentUser('sub') userId: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('scope') scope?: string,
   ) {
-    return this.ordersService.findByUser(userId, page ? parseInt(page, 10) : 1, limit ? parseInt(limit, 10) : 20);
+    return this.ordersService.findByUser(
+      userId,
+      page ? parseInt(page, 10) : 1,
+      limit ? parseInt(limit, 10) : 20,
+      scope,
+    );
   }
 
   @Get(':id')

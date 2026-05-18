@@ -1051,6 +1051,8 @@ model ReferralReward {
   status       RewardStatus @default(PENDING)
   paidAt       DateTime?
   createdAt    DateTime @default(now())
+
+  @@unique([userId, orderId, level])
 }
 
 enum RewardStatus {

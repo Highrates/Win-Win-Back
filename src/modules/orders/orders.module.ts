@@ -7,9 +7,11 @@ import { OrdersAdminController } from './orders-admin.controller';
 import { OrdersMeController } from './orders-me.controller';
 import { OrderChatModule } from '../order-chat/order-chat.module';
 import { AuthModule } from '../auth/auth.module';
+import { ReferralsModule } from '../referrals/referrals.module';
+import { OrderSettingsModule } from '../order-settings/order-settings.module';
 
 @Module({
-  imports: [OrderChatModule, AuthModule],
+  imports: [OrderChatModule, AuthModule, ReferralsModule, OrderSettingsModule],
   providers: [OrdersService, CommercialProposalService],
   /**
    * Порядок: `me` и `admin` до `OrdersController`, иначе `GET orders/:id` съедает `GET orders/admin` (`:id` = admin).

@@ -7,6 +7,7 @@ import { priceToNumber } from '../../meilisearch/product-search-doc';
 import { AuditService } from '../audit/audit.service';
 import { MailService } from '../auth/mail.service';
 import { OrderChatService } from '../order-chat/order-chat.service';
+import { ReferralsService } from '../referrals/referrals.service';
 import type {
   AddOrderPreparationLineDto,
   PatchOrderPreparationDto,
@@ -16,6 +17,7 @@ import type {
 import {
   ADMIN_ACTIVE_STATUSES,
   ADMIN_COMPLETED_STATUSES,
+  CUSTOMER_IN_WORK_STATUSES,
 } from './order-status.constants';
 
 const USER_ORDER_LIST_WHERE: Prisma.OrderWhereInput = {
@@ -71,6 +73,14 @@ function adminListBucketWhere(bucketRaw?: string): Prisma.OrderWhereInput {
   return { status: OrderStatus.PENDING_APPROVAL };
 }
 
+/** ЛК: `work` — не завершённые; `completed` — только «Завершен». */
+function userOrdersScopeWhere(scopeRaw?: string): Prisma.OrderWhereInput | undefined {
+  const s = (scopeRaw || '').trim().toLowerCase();
+  if (s === 'work' || s === 'in_work') return { status: { in: [...CUSTOMER_IN_WORK_STATUSES] } };
+  if (s === 'completed') return { status: OrderStatus.COMPLETED };
+  return undefined;
+}
+
 @Injectable()
 export class OrdersService {
   private readonly logger = new Logger(OrdersService.name);
@@ -81,10 +91,14 @@ export class OrdersService {
     private readonly mail: MailService,
     private readonly orderChat: OrderChatService,
     private readonly config: ConfigService,
+    private readonly referrals: ReferralsService,
   ) {}
 
-  async findByUser(userId: string, page = 1, limit = 20) {
-    const where: Prisma.OrderWhereInput = { AND: [{ userId }, USER_ORDER_LIST_WHERE] };
+  async findByUser(userId: string, page = 1, limit = 20, scopeRaw?: string) {
+    const scopeWhere = userOrdersScopeWhere(scopeRaw);
+    const where: Prisma.OrderWhereInput = {
+      AND: [{ userId }, USER_ORDER_LIST_WHERE, ...(scopeWhere ? [scopeWhere] : [])],
+    };
     const [orders, total] = await Promise.all([
       this.prisma.order.findMany({
         where,
@@ -301,6 +315,15 @@ export class OrdersService {
         hasDocumentUrls: !!documentUrls && Object.keys(documentUrls).length > 0,
       },
     });
+    if (status === OrderStatus.COMPLETED) {
+      try {
+        await this.referrals.ensureRewardsForCompletedOrder(orderId);
+      } catch (e) {
+        this.logger.error(
+          `Referral rewards sync failed for order ${orderId}: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
     return order;
   }
 
