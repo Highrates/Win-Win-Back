@@ -6,6 +6,7 @@ import {
   Get,
   Param,
   Post,
+  Query,
   UploadedFile,
   UseGuards,
   UseInterceptors,
@@ -19,6 +20,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../../common/decorators/current-user.decorator';
 import { OrderChatService } from './order-chat.service';
+import { ORDER_CHAT_UPLOAD_MAX_FILE_BYTES } from './order-chat.constants';
 import { PostOrderChatMessageDto } from './dto/order-chat.dto';
 
 const uploadMem = memoryStorage();
@@ -36,9 +38,31 @@ export class OrderChatAdminController {
   }
 
   @Get(':orderId/chat/messages')
-  async messages(@CurrentUser() user: JwtPayload, @Param('orderId') orderId: string) {
+  async messages(
+    @CurrentUser() user: JwtPayload,
+    @Param('orderId') orderId: string,
+    @Query('limit') limitRaw?: string,
+    @Query('before') beforeMessageIdRaw?: string,
+    @Query('cursor') cursorMessageIdRaw?: string,
+  ) {
     await this.chat.assertStaffCanAccess(orderId);
-    return this.chat.listMessages(orderId);
+    let limitParsed: number | undefined;
+    if (limitRaw != null && limitRaw.trim() !== '') {
+      const n = parseInt(limitRaw, 10);
+      if (!Number.isFinite(n)) throw new BadRequestException('limit');
+      limitParsed = n;
+    }
+    const beforeTrim = beforeMessageIdRaw?.trim();
+    const cursorTrim = cursorMessageIdRaw?.trim();
+    if (
+      beforeTrim &&
+      cursorTrim &&
+      beforeTrim !== cursorTrim
+    ) {
+      throw new BadRequestException('Не используйте разные значения параметров before и cursor');
+    }
+    const beforeMessageId = beforeTrim || cursorTrim || undefined;
+    return this.chat.listMessages(orderId, { limit: limitParsed, beforeMessageId });
   }
 
   @Post(':orderId/chat/messages')
@@ -62,7 +86,7 @@ export class OrderChatAdminController {
   @UseInterceptors(
     FileInterceptor('file', {
       storage: uploadMem,
-      limits: { fileSize: 100 * 1024 * 1024 },
+      limits: { fileSize: ORDER_CHAT_UPLOAD_MAX_FILE_BYTES },
     }),
   )
   async upload(

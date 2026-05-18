@@ -27,8 +27,14 @@ import {
   ADMIN_ACTIVE_STATUSES,
   ADMIN_COMPLETED_STATUSES,
 } from '../orders/order-status.constants';
-
-const MAX_MESSAGES_PAGE = 300;
+import {
+  CHAT_MESSAGES_PAGE_DEFAULT,
+  CHAT_MESSAGES_PAGE_MAX,
+  ORDER_CHAT_ATTACHMENT_REFS_PAYLOAD_MAX_CHARS,
+  ORDER_CHAT_ATTACHMENTS_MAX,
+  ORDER_CHAT_DELETE_WITHIN_MS,
+  ORDER_CHAT_POST_BODY_MAX_CHARS,
+} from './order-chat.constants';
 
 /** Имена из multipart (Multer) иногда приходят как UTF-8, прочитанный как latin1 («Ð...»). */
 function decodeUploadOriginalName(original: string | undefined | null): string {
@@ -171,33 +177,74 @@ export class OrderChatService {
     };
   }
 
+  /** Ограничение одной порции сообщений («хвост» или блок «старее»). */
+  private normalizeMessagesPageLimit(limitRaw?: number): number {
+    if (limitRaw != null && Number.isFinite(limitRaw)) {
+      const n = Math.floor(limitRaw);
+      return Math.min(CHAT_MESSAGES_PAGE_MAX, Math.max(1, n));
+    }
+    return CHAT_MESSAGES_PAGE_DEFAULT;
+  }
+
+  /** Курсор по **`before`** (id сообщения): порция сообщений **строже старее** указанной точки по порядку (createdAt ↑, id ↑). Без курсора — **последние** сообщения («хвост»). Совпадающий `createdAt` разводится вторичным ключом **`id`** (совместимо с порядком `orderBy`). */
   async listMessages(
     orderId: string,
-  ): Promise<{ conversationId: string | null; messages: OrderChatMessageOut[] }> {
+    opts?: { limit?: number; beforeMessageId?: string | null },
+  ): Promise<{ conversationId: string | null; messages: OrderChatMessageOut[]; hasOlder: boolean }> {
+    const limit = this.normalizeMessagesPageLimit(opts?.limit);
+
     const conv = await this.prisma.chatConversation.findUnique({
       where: { orderId },
       select: { id: true, retentionPurgesAt: true },
     });
-    if (!conv) return { conversationId: null, messages: [] };
+    if (!conv) {
+      return { conversationId: null, messages: [], hasOlder: false };
+    }
     if (conv.retentionPurgesAt && conv.retentionPurgesAt <= new Date()) {
-      return { conversationId: conv.id, messages: [] };
+      return { conversationId: conv.id, messages: [], hasOlder: false };
     }
 
-    const rows = await this.prisma.chatMessage.findMany({
-      where: { conversationId: conv.id },
-      orderBy: { createdAt: 'asc' },
-      take: MAX_MESSAGES_PAGE,
-      include: {
-        attachments: true,
-        author: {
-          select: { email: true, profile: { select: { firstName: true, lastName: true, avatarUrl: true } } },
-        },
+    const includePayload = {
+      attachments: true,
+      author: {
+        select: { email: true, profile: { select: { firstName: true, lastName: true, avatarUrl: true } } },
       },
+    } as const;
+
+    let messageWhere: Prisma.ChatMessageWhereInput = { conversationId: conv.id };
+    const beforeId = opts?.beforeMessageId?.trim();
+    if (beforeId) {
+      const anchor = await this.prisma.chatMessage.findFirst({
+        where: { id: beforeId, conversationId: conv.id },
+        select: { id: true, createdAt: true },
+      });
+      if (!anchor) throw new BadRequestException('Неизвестная граница истории сообщений');
+      messageWhere = {
+        conversationId: conv.id,
+        OR: [
+          { createdAt: { lt: anchor.createdAt } },
+          {
+            AND: [{ createdAt: anchor.createdAt }, { id: { lt: anchor.id } }],
+          },
+        ],
+      };
+    }
+
+    const takePeek = limit + 1;
+    const rowsDesc = await this.prisma.chatMessage.findMany({
+      where: messageWhere,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: takePeek,
+      include: includePayload,
     });
+
+    const hasOlder = rowsDesc.length > limit;
+    const chronological = rowsDesc.slice(0, limit).reverse();
 
     return {
       conversationId: conv.id,
-      messages: rows.map((r) => this.mapMessage(r)),
+      messages: chronological.map((r) => this.mapMessage(r)),
+      hasOlder,
     };
   }
 
@@ -208,6 +255,23 @@ export class OrderChatService {
       if (!key || !key.startsWith(prefix)) {
         throw new BadRequestException('Недопустимый URL вложения');
       }
+    }
+  }
+
+  private assertAttachmentRefsPayloadLimits(
+    att: NonNullable<PostOrderChatMessageDto['attachments']>,
+  ): void {
+    if (att.length > ORDER_CHAT_ATTACHMENTS_MAX) {
+      throw new BadRequestException(
+        `Не более ${ORDER_CHAT_ATTACHMENTS_MAX} вложений в одном сообщении`,
+      );
+    }
+    let sum = 0;
+    for (const a of att) {
+      sum += a.fileUrl.length + a.filename.length + (a.mimeType?.length ?? 0);
+    }
+    if (sum > ORDER_CHAT_ATTACHMENT_REFS_PAYLOAD_MAX_CHARS) {
+      throw new BadRequestException('Слишком большой объём ссылок на вложения в сообщении');
     }
   }
 
@@ -229,6 +293,12 @@ export class OrderChatService {
     const att = dto.attachments ?? [];
     if (!body && att.length === 0) {
       throw new BadRequestException('Пустое сообщение');
+    }
+    if (body.length > ORDER_CHAT_POST_BODY_MAX_CHARS) {
+      throw new BadRequestException('Слишком длинное сообщение');
+    }
+    if (att.length > 0) {
+      this.assertAttachmentRefsPayloadLimits(att);
     }
 
     this.validateAttachmentKeys(
@@ -297,9 +367,14 @@ export class OrderChatService {
 
     const msg = await this.prisma.chatMessage.findFirst({
       where: { id: messageId, conversationId: conv.id, deletedAt: null },
-      select: { id: true, authorUserId: true, authorRole: true },
+      select: { id: true, authorUserId: true, authorRole: true, createdAt: true },
     });
     if (!msg) throw new NotFoundException();
+
+    const expiresAtMs = msg.createdAt.getTime() + ORDER_CHAT_DELETE_WITHIN_MS;
+    if (Date.now() > expiresAtMs) {
+      throw new ForbiddenException('Удалить сообщение можно только в течение 24 часов после отправки');
+    }
 
     const isStaff = authorRole === ChatMessageAuthorRole.STAFF;
     if (!isStaff) {

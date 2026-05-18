@@ -9,6 +9,10 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ChatAttachmentKind } from '@prisma/client';
+import {
+  ORDER_CHAT_ATTACHMENTS_MAX,
+  ORDER_CHAT_POST_BODY_MAX_CHARS,
+} from '../order-chat.constants';
 
 export class OrderChatAttachmentRefDto {
   @IsString()
@@ -31,12 +35,12 @@ export class OrderChatAttachmentRefDto {
 export class PostOrderChatMessageDto {
   @IsOptional()
   @IsString()
-  @MaxLength(12000)
+  @MaxLength(ORDER_CHAT_POST_BODY_MAX_CHARS)
   body?: string;
 
   @IsOptional()
   @IsArray()
-  @ArrayMaxSize(12)
+  @ArrayMaxSize(ORDER_CHAT_ATTACHMENTS_MAX)
   @ValidateNested({ each: true })
   @Type(() => OrderChatAttachmentRefDto)
   attachments?: OrderChatAttachmentRefDto[];

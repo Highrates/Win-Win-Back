@@ -20,10 +20,13 @@ import {
   ROOM_STAFF_ORDER_CHAT,
   roomOrderChat,
 } from './order-chat.constants';
+import { getOrderChatWebSocketCorsOptions } from './order-chat-ws-cors';
+
+const ORDER_CHAT_WS_CORS = getOrderChatWebSocketCorsOptions();
 
 @WebSocketGateway({
   namespace: ORDER_CHAT_SOCKET_NAMESPACE,
-  cors: { origin: true, credentials: true },
+  cors: ORDER_CHAT_WS_CORS,
 })
 export class OrderChatGateway implements OnGatewayInit, OnGatewayConnection {
   private readonly logger = new Logger(OrderChatGateway.name);
