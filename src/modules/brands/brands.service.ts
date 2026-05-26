@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { enrichProductsWithLikedByMe } from '../../common/utils/enrich-products-liked-by-me';
 
 @Injectable()
 export class BrandsService {
@@ -13,7 +14,7 @@ export class BrandsService {
     });
   }
 
-  async findBySlug(slug: string) {
+  async findBySlug(slug: string, userId?: string) {
     const row = await this.prisma.brand.findUnique({
       where: { slug, isActive: true },
       include: {
@@ -58,6 +59,7 @@ export class BrandsService {
       };
     });
 
-    return { ...brandRest, products };
+    const productsWithLikes = await enrichProductsWithLikedByMe(this.prisma, products, userId);
+    return { ...brandRest, products: productsWithLikes };
   }
 }

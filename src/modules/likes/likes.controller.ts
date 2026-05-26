@@ -1,4 +1,5 @@
 import { Body, Controller, Delete, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { LikesService, type LikesCollectionQuery } from './likes.service';
@@ -91,6 +92,8 @@ export class LikesController {
     return this.likes.unlikeDesigner(userId, designerId);
   }
 
+  /** Read-only batch (один SQL); не считаем в общий 100 req/min — иначе 429 на «тяжёлых» страницах. */
+  @SkipThrottle()
   @Post('designers/me/bulk')
   designersMeBulk(
     @CurrentUser('sub') userId: string,
@@ -101,5 +104,28 @@ export class LikesController {
       ? raw.filter((x): x is string => typeof x === 'string').map((x) => x.trim()).filter(Boolean).slice(0, 80)
       : [];
     return this.likes.designersMeBulk(userId, ids);
+  }
+
+  @SkipThrottle()
+  @Post('products/me/bulk')
+  productsMeBulk(
+    @CurrentUser('sub') userId: string,
+    @Body() body: { productIds?: unknown },
+  ) {
+    const raw = body?.productIds;
+    const ids = Array.isArray(raw)
+      ? raw.filter((x): x is string => typeof x === 'string').map((x) => x.trim()).filter(Boolean).slice(0, 80)
+      : [];
+    return this.likes.productsMeBulk(userId, ids);
+  }
+
+  @SkipThrottle()
+  @Post('cases/me/bulk')
+  casesMeBulk(@CurrentUser('sub') userId: string, @Body() body: { caseIds?: unknown }) {
+    const raw = body?.caseIds;
+    const ids = Array.isArray(raw)
+      ? raw.filter((x): x is string => typeof x === 'string').map((x) => x.trim()).filter(Boolean).slice(0, 80)
+      : [];
+    return this.likes.casesMeBulk(userId, ids);
   }
 }

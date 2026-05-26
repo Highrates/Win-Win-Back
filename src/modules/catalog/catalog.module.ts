@@ -13,9 +13,10 @@ import { BrandMaterialsAdminService } from './brand-materials-admin.service';
 import { ProductStructureAdminService } from './product-structure-admin.service';
 import { StorageModule } from '../storage/storage.module';
 import { MediaLibraryModule } from '../media-library/media-library.module';
+import { AuthModule } from '../auth/auth.module';
 
 @Module({
-  imports: [StorageModule, MediaLibraryModule],
+  imports: [AuthModule, StorageModule, MediaLibraryModule],
   providers: [
     CatalogService,
     CatalogVariantPricingService,

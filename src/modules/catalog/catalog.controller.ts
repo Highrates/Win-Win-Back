@@ -1,11 +1,16 @@
-import { Body, Controller, Get, NotFoundException, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Headers, NotFoundException, Param, Post, Query } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
 import { CatalogService } from './catalog.service';
 import { Public } from '../../common/decorators/public.decorator';
+import { userIdFromBearerHeader } from '../../common/utils/optional-bearer-user-id';
 import { ResolveProductIdsDto } from './dto/resolve-product-ids.dto';
 
 @Controller('catalog')
 export class CatalogController {
-  constructor(private catalogService: CatalogService) {}
+  constructor(
+    private catalogService: CatalogService,
+    private jwtService: JwtService,
+  ) {}
 
   /** Компактное дерево (корни и рекурсивные активные потомки), без дублирования узлов между ветками. */
   @Public()
@@ -44,10 +49,14 @@ export class CatalogController {
   /** Кураторская коллекция по slug: бренды (`kind: BRAND`) или товары (`kind: PRODUCT`). */
   @Public()
   @Get('curated-collections/:slug')
-  async curatedCollectionBySlug(@Param('slug') slug: string) {
+  async curatedCollectionBySlug(
+    @Headers('authorization') authorization: string | undefined,
+    @Param('slug') slug: string,
+  ) {
+    const userId = userIdFromBearerHeader(this.jwtService, authorization);
     const brands = await this.catalogService.getCuratedBrandCollectionBySlug(slug);
     if (brands) return brands;
-    const products = await this.catalogService.getCuratedProductCollectionBySlug(slug);
+    const products = await this.catalogService.getCuratedProductCollectionBySlug(slug, userId);
     if (!products) throw new NotFoundException();
     return products;
   }
@@ -61,26 +70,33 @@ export class CatalogController {
   @Public()
   @Get('products/search')
   search(
+    @Headers('authorization') authorization: string | undefined,
     @Query('q') q?: string,
     @Query('categoryId') categoryId?: string,
     @Query('brandId') brandId?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
+    const userId = userIdFromBearerHeader(this.jwtService, authorization);
     return this.catalogService.searchProducts({
       q,
       categoryId,
       brandId,
       page: page ? parseInt(page, 10) : undefined,
       limit: limit ? parseInt(limit, 10) : undefined,
+      userId,
     });
   }
 
   /** Товары из тех же активных кураторских наборов (без текущего товара). */
   @Public()
   @Get('products/:slug/set-siblings')
-  productSetSiblings(@Param('slug') slug: string) {
-    return this.catalogService.getProductSiblingsFromCuratedSets(slug);
+  productSetSiblings(
+    @Headers('authorization') authorization: string | undefined,
+    @Param('slug') slug: string,
+  ) {
+    const userId = userIdFromBearerHeader(this.jwtService, authorization);
+    return this.catalogService.getProductSiblingsFromCuratedSets(slug, userId);
   }
 
   @Public()

@@ -116,6 +116,32 @@ export class LikesService {
     return { byId };
   }
 
+  async productsMeBulk(userId: string, productIds: string[]) {
+    const ids = [...new Set(productIds.map((x) => String(x).trim()).filter(Boolean))].slice(0, 80);
+    if (!ids.length) return { byId: {} as Record<string, { liked: boolean }> };
+    const rows = await this.prisma.productLike.findMany({
+      where: { userId, productId: { in: ids } },
+      select: { productId: true },
+    });
+    const likedSet = new Set(rows.map((r) => r.productId));
+    const byId: Record<string, { liked: boolean }> = {};
+    for (const id of ids) byId[id] = { liked: likedSet.has(id) };
+    return { byId };
+  }
+
+  async casesMeBulk(userId: string, caseIds: string[]) {
+    const ids = [...new Set(caseIds.map((x) => String(x).trim()).filter(Boolean))].slice(0, 80);
+    if (!ids.length) return { byId: {} as Record<string, { liked: boolean }> };
+    const rows = await this.prisma.caseLike.findMany({
+      where: { userId, caseId: { in: ids } },
+      select: { caseId: true },
+    });
+    const likedSet = new Set(rows.map((r) => r.caseId));
+    const byId: Record<string, { liked: boolean }> = {};
+    for (const id of ids) byId[id] = { liked: likedSet.has(id) };
+    return { byId };
+  }
+
   async likeProduct(userId: string, productId: string) {
     const product = await this.prisma.product.findUnique({
       where: { id: productId },

@@ -8,6 +8,11 @@ import {
   priceToNumber,
 } from '../../meilisearch/product-search-doc';
 import { resolveEffectiveVariantImages } from './variant-effective-gallery';
+import { enrichProductsWithLikedByMe } from '../../common/utils/enrich-products-liked-by-me';
+import {
+  collectCategoryAndDescendantIds,
+  meilisearchCategoryScopeFilter,
+} from './category-scope';
 
 /**
  * Убирает повторы одного товара в выдаче (например, при склейке «свои + по доп. категории» или сбое индекса).
@@ -333,24 +338,42 @@ export class CatalogService {
     };
   }
 
+  /** Категория + все потомки — товары подкатегорий видны в родительской выдаче. */
+  private async categoryScopeIds(categoryId: string): Promise<string[]> {
+    const trimmed = categoryId.trim();
+    if (!trimmed) return [];
+    const rows = await this.prisma.category.findMany({
+      where: { isActive: true },
+      select: { id: true, parentId: true },
+    });
+    return collectCategoryAndDescendantIds(trimmed, rows);
+  }
+
   async searchProducts(params: {
     q?: string;
     categoryId?: string;
     brandId?: string;
     page?: number;
     limit?: number;
+    userId?: string;
   }) {
     const page = params.page ?? 1;
     const limit = Math.min(params.limit ?? 20, 100);
+    const categoryScope = params.categoryId?.trim()
+      ? await this.categoryScopeIds(params.categoryId)
+      : null;
 
     if (!this.meilisearch.isEnabled()) {
-      return this.searchProductsViaPrisma(params, page, limit);
+      return this.searchProductsViaPrisma(params, page, limit, params.userId, categoryScope);
     }
 
     try {
       const index = this.meilisearch.getIndex(PRODUCTS_INDEX);
       const filters: string[] = ['isActive = true'];
-      if (params.categoryId) filters.push(`categoryIds = "${params.categoryId}"`);
+      if (categoryScope?.length) {
+        const catFilter = meilisearchCategoryScopeFilter(categoryScope);
+        if (catFilter) filters.push(catFilter);
+      }
       if (params.brandId) filters.push(`brandId = "${params.brandId}"`);
       const filter = filters.join(' AND ');
       const result = await index.search(params.q ?? '', {
@@ -359,7 +382,10 @@ export class CatalogService {
         offset: (page - 1) * limit,
       });
       const rawHits = result.hits as Record<string, unknown>[];
-      const hits = dedupeProductHitsById(rawHits);
+      const deduped = dedupeProductHitsById(rawHits).filter(
+        (h): h is Record<string, unknown> & { id: string } => typeof h.id === 'string' && !!h.id,
+      );
+      const hits = await enrichProductsWithLikedByMe(this.prisma, deduped, params.userId);
       return {
         hits,
         total: result.estimatedTotalHits ?? hits.length,
@@ -370,7 +396,7 @@ export class CatalogService {
       this.log.warn(
         `Meilisearch недоступен, поиск через БД: ${e instanceof Error ? e.message : String(e)}`,
       );
-      return this.searchProductsViaPrisma(params, page, limit);
+      return this.searchProductsViaPrisma(params, page, limit, params.userId, categoryScope);
     }
   }
 
@@ -382,13 +408,18 @@ export class CatalogService {
     },
     page: number,
     limit: number,
+    userId?: string,
+    categoryScope?: string[] | null,
   ) {
     const and: Prisma.ProductWhereInput[] = [{ isActive: true }];
-    if (params.categoryId) {
+    const scope =
+      categoryScope ??
+      (params.categoryId?.trim() ? await this.categoryScopeIds(params.categoryId) : null);
+    if (scope?.length) {
       and.push({
         OR: [
-          { categoryId: params.categoryId },
-          { productCategories: { some: { categoryId: params.categoryId } } },
+          { categoryId: { in: scope } },
+          { productCategories: { some: { categoryId: { in: scope } } } },
         ],
       });
     }
@@ -441,7 +472,7 @@ export class CatalogService {
       }),
       this.prisma.product.count({ where: productWhere }),
     ]);
-    const hits = dedupeProductHitsById(
+    const rawHits = dedupeProductHitsById(
       products.map((p) => {
         const prices = p.variants.map((v) => priceToNumber(v.price)).filter((n) => n > 0);
         const priceMin = prices.length ? Math.min(...prices) : 0;
@@ -467,9 +498,10 @@ export class CatalogService {
           casesLinkedCount: p.casesLinkedCount,
           likesUserCount: p.likesUserCount,
           likesAdminBoost: p.likesAdminBoost,
-        }) as Record<string, unknown>;
+        }) as Record<string, unknown> & { id: string };
       }),
     );
+    const hits = await enrichProductsWithLikedByMe(this.prisma, rawHits, userId);
     return { hits, total, page, limit };
   }
 
@@ -605,7 +637,7 @@ export class CatalogService {
   /**
    * Публичная коллекция товаров по slug (`kind: PRODUCT`, активная), порядок как в админке.
    */
-  async getCuratedProductCollectionBySlug(slug: string) {
+  async getCuratedProductCollectionBySlug(slug: string, userId?: string) {
     const col = await this.prisma.curatedCollection.findFirst({
       where: { slug, isActive: true, kind: CuratedCollectionKind.PRODUCT },
       include: {
@@ -653,18 +685,20 @@ export class CatalogService {
       };
     });
 
+    const productsWithLikes = await enrichProductsWithLikedByMe(this.prisma, products, userId);
+
     return {
       slug: col.slug,
       name: col.name,
       kind: 'PRODUCT' as const,
-      products,
+      products: productsWithLikes,
     };
   }
 
   /**
    * Товары из тех же кураторских наборов, что и данный товар (без самого товара), без дублей.
    */
-  async getProductSiblingsFromCuratedSets(productSlug: string) {
+  async getProductSiblingsFromCuratedSets(productSlug: string, userId?: string) {
     const p = await this.prisma.product.findUnique({
       where: { slug: productSlug, isActive: true },
       select: { id: true },
@@ -732,6 +766,7 @@ export class CatalogService {
       const imageUrls = effective.map((im) => im.url.trim()).filter(Boolean);
       const displayName = dv?.variantLabel?.trim() || pr.name;
       items.push({
+        productId: pr.id,
         id: dv?.id ?? pr.id,
         slug: pr.slug,
         name: displayName,
@@ -740,7 +775,18 @@ export class CatalogService {
         imageUrls,
       });
     }
-    return { items };
+    const likedRows = await enrichProductsWithLikedByMe(
+      this.prisma,
+      items.map((it) => ({ id: it.productId })),
+      userId,
+    );
+    const likedByProductId = new Map(likedRows.map((r) => [r.id, r.likedByMe]));
+    return {
+      items: items.map((it) => ({
+        ...it,
+        likedByMe: likedByProductId.get(it.productId),
+      })),
+    };
   }
 
   /** Короткие данные товара по id (для ЛК кейсов, витрины дизайнера и т.п.). Только активные; неизвестные id — плейсхолдер. */
@@ -817,10 +863,13 @@ export class CatalogService {
 }
 
 export type PublicSetSiblingProduct = {
+  productId: string;
+  /** id варианта по умолчанию (для `?v=` на карточке) */
   id: string;
   slug: string;
   name: string;
   price: unknown;
   thumbUrl: string | null;
   imageUrls: string[];
+  likedByMe?: boolean;
 };
