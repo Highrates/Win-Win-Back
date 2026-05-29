@@ -83,6 +83,34 @@ export class MailService {
     this.logger.log(`Registration OTP email sent to ${to}`);
   }
 
+  async sendPasswordResetLink(params: { to: string; resetLink: string }): Promise<void> {
+    const { to, resetLink } = params;
+    const from = this.config.get<string>('MAIL_FROM')?.trim() || this.config.get<string>('SMTP_USER');
+    if (!from) throw new Error('MAIL_FROM или SMTP_USER нужен для отправки письма');
+    const configuredHost = this.config.get<string>('SMTP_HOST')?.trim();
+    if (!configuredHost) {
+      throw new Error('SMTP_HOST, SMTP_USER и SMTP_PASSWORD должны быть заданы для отправки почты');
+    }
+    const endpoint = await this.smtpConnectTarget(configuredHost);
+    const transport = this.transporter(endpoint);
+    const subject = 'Сброс пароля Win-Win';
+    const text = [
+      `Вы запросили сброс пароля на Win-Win.`,
+      ``,
+      `Перейдите по ссылке (действительна 1 час):`,
+      resetLink,
+      ``,
+      `Если вы не запрашивали сброс, проигнорируйте письмо.`,
+    ].join('\n');
+    const html = [
+      `<p>Вы запросили сброс пароля на Win-Win.</p>`,
+      `<p><a href="${resetLink}">Задать новый пароль</a> (ссылка действительна 1 час)</p>`,
+      `<p style="color:#666;font-size:12px">Если вы не запрашивали сброс, проигнорируйте письмо.</p>`,
+    ].join('');
+    await transport.sendMail({ from, to, subject, text, html });
+    this.logger.log(`Password reset email sent to ${to}`);
+  }
+
   async sendDesignerInvite(params: { to: string; inviteLink: string; inviterLabel: string; refCode: string }): Promise<void> {
     const { to, inviteLink, inviterLabel, refCode } = params;
     const from = this.config.get<string>('MAIL_FROM')?.trim() || this.config.get<string>('SMTP_USER');

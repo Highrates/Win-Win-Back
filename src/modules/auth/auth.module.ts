@@ -11,6 +11,7 @@ import { UnimtxOtpService } from './unimtx-otp.service';
 import { RegistrationService } from './registration.service';
 import { AccountContactService } from './account-contact.service';
 import { DesignerInviteService } from './designer-invite.service';
+import { PasswordResetService } from './password-reset.service';
 @Module({
   imports: [
     forwardRef(() => UsersModule),
@@ -24,7 +25,7 @@ import { DesignerInviteService } from './designer-invite.service';
       inject: [ConfigService],
     }),
   ],
-  providers: [AuthService, JwtStrategy, MailService, UnimtxOtpService, RegistrationService, AccountContactService, DesignerInviteService],
+  providers: [AuthService, JwtStrategy, MailService, UnimtxOtpService, RegistrationService, AccountContactService, DesignerInviteService, PasswordResetService],
   controllers: [AuthController],
   exports: [AuthService, AccountContactService, DesignerInviteService, MailService, JwtModule],
 })

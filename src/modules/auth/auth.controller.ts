@@ -33,6 +33,12 @@ import {
 import { RegistrationService } from './registration.service';
 import { DesignerInviteService } from './designer-invite.service';
 import { DesignerInviteTokenBodyDto } from './dto/designer-invite.dto';
+import { PasswordResetService } from './password-reset.service';
+import {
+  PasswordResetConfirmDto,
+  PasswordResetRequestDto,
+  PasswordResetTokenBodyDto,
+} from './dto/password-reset.dto';
 import { Throttle } from '@nestjs/throttler';
 
 @Controller('auth')
@@ -44,6 +50,7 @@ export class AuthController {
     private registration: RegistrationService,
     private accountContact: AccountContactService,
     private designerInvites: DesignerInviteService,
+    private passwordReset: PasswordResetService,
   ) {}
 
   @Public()
@@ -207,5 +214,26 @@ export class AuthController {
   @Post('designer-invite/verify')
   async verifyDesignerInvite(@Body() dto: DesignerInviteTokenBodyDto) {
     return this.designerInvites.verifyToken(dto.token);
+  }
+
+  @Public()
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
+  @Post('password-reset/request')
+  async passwordResetRequest(@Body() dto: PasswordResetRequestDto) {
+    return this.passwordReset.requestReset(dto.email);
+  }
+
+  @Public()
+  @Throttle({ default: { ttl: 60_000, limit: 30 } })
+  @Post('password-reset/verify')
+  async passwordResetVerify(@Body() dto: PasswordResetTokenBodyDto) {
+    return this.passwordReset.verifyToken(dto.token);
+  }
+
+  @Public()
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  @Post('password-reset/confirm')
+  async passwordResetConfirm(@Body() dto: PasswordResetConfirmDto) {
+    return this.passwordReset.confirmReset(dto.token, dto.password);
   }
 }

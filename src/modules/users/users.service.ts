@@ -103,6 +103,26 @@ export class UsersService {
     return { ok: true as const };
   }
 
+  /** Сброс пароля по ссылке из письма (без текущего пароля). */
+  async setPasswordWithoutCurrent(userId: string, newPassword: string) {
+    if (newPassword.length < 8) {
+      throw new BadRequestException('Пароль — не менее 8 символов');
+    }
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, isActive: true },
+      select: { id: true, passwordHash: true },
+    });
+    if (!user?.passwordHash) {
+      throw new BadRequestException('Ссылка недействительна или истекла');
+    }
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash },
+    });
+    return { ok: true as const };
+  }
+
   async updateAccountConsents(
     userId: string,
     body: { consentPersonalData: boolean; consentSmsMarketing: boolean },
