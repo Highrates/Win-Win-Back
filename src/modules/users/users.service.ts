@@ -19,6 +19,7 @@ import {
   USER_PROFILE_VITRINE_SELECT,
   type UserProfileVitrineDto,
 } from './dto/user-profile-vitrine.dto';
+import { normalizeEmailOrPhoneForLookup } from '../../common/utils/phone-normalize';
 
 /** Символы для публичного кода (без 0/O, I, L). */
 const WinWinCrockford = '0123456789ABCDEFGHJKMNPQRSTVWXYZ' as const;
@@ -199,30 +200,31 @@ export class UsersService {
     tx: Prisma.TransactionClient,
     newUserId: string,
     refRaw: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const t = (refRaw ?? '').trim();
-    if (t.length < 3) return;
+    if (t.length < 3) return false;
     const inv = await this.findActivePartnerByPublicReferralCode(t);
-    if (!inv || inv.userId === newUserId) return;
+    if (!inv || inv.userId === newUserId) return false;
     const level = await this.winWinReferralLevelInTx(tx, inv.userId);
     const clash = await tx.referral.findUnique({ where: { referredId: newUserId } });
-    if (clash) return;
+    if (clash) return false;
     try {
       await this.assertNoWinWinReferralCycleInTx(tx, inv.userId, newUserId);
       await tx.referral.create({
         data: { referrerId: inv.userId, referredId: newUserId, level },
       });
+      return true;
     } catch (e) {
       // Игнорируем только конфликт уникальности `Referral.referredId` (гонка).
       const code = typeof e === 'object' && e && 'code' in e ? (e as { code?: unknown }).code : undefined;
-      if (code === 'P2002') return;
+      if (code === 'P2002') return false;
       throw e;
     }
   }
 
   /** Существующий USER: проставить реф-дерево по коду, если ещё нет записи Referred. */
-  async tryAttachWinWinReferralByCodeForExistingUser(userId: string, refRaw: string): Promise<void> {
-    await this.prisma.$transaction((tx) => this.tryAttachWinWinReferralInTx(tx, userId, refRaw));
+  async tryAttachWinWinReferralByCodeForExistingUser(userId: string, refRaw: string): Promise<boolean> {
+    return this.prisma.$transaction((tx) => this.tryAttachWinWinReferralInTx(tx, userId, refRaw));
   }
 
   async createRetailUser(dto: {
@@ -257,6 +259,13 @@ export class UsersService {
     const refRaw = (dto.referralCode ?? '').trim();
     const designerInviteId = (dto.designerInviteId ?? '').trim() || null;
 
+    /** Код спонсора для заявки «Стать партнёром» (invite / ?ref= при регистрации). */
+    let sponsorRefForProfile: string | null = null;
+    if (refRaw.length >= 3) {
+      const inv = await this.findActivePartnerByPublicReferralCode(refRaw);
+      if (inv) sponsorRefForProfile = inv.winWinReferralCode;
+    }
+
     return this.prisma.$transaction(async (tx) => {
       const user = await tx.user.create({
         data: {
@@ -266,12 +275,22 @@ export class UsersService {
           role: UserRole.USER,
           consentPersonalDataAcceptedAt: dto.consentPersonalData ? now : null,
           consentSmsMarketingAcceptedAt: dto.consentSms ? now : null,
-          profile: { create: {} },
+          profile: {
+            create: sponsorRefForProfile
+              ? { partnerApplicationReferralCode: sponsorRefForProfile }
+              : {},
+          },
         },
       });
 
-      if (refRaw.length >= 3) {
-        await this.tryAttachWinWinReferralInTx(tx, user.id, refRaw);
+      let referralWarning: string | undefined;
+      const refAttempted = refRaw.length >= 3;
+      if (refAttempted) {
+        const attached = await this.tryAttachWinWinReferralInTx(tx, user.id, refRaw);
+        if (!attached) {
+          referralWarning =
+            'Реферальный номер не найден или недействителен. Аккаунт создан без привязки к партнёру.';
+        }
       }
 
       if (designerInviteId && email) {
@@ -292,7 +311,7 @@ export class UsersService {
       }
 
       const { passwordHash: _pw, ...safe } = user;
-      return safe;
+      return { user: safe, referralWarning };
     });
   }
 
@@ -341,14 +360,18 @@ export class UsersService {
   }
 
   async findByEmailOrPhone(emailOrPhone: string) {
-    const raw = emailOrPhone.trim();
-    if (!raw) return null;
-    const emailLookup = raw.includes('@') ? raw.toLowerCase() : raw;
+    const lookup = normalizeEmailOrPhoneForLookup(emailOrPhone);
+    if (!lookup) return null;
+
+    if (lookup.kind === 'email') {
+      return this.prisma.user.findFirst({
+        where: { email: lookup.value, isActive: true },
+        include: { profile: true },
+      });
+    }
+
     return this.prisma.user.findFirst({
-      where: {
-        OR: [{ email: emailLookup }, { phone: raw }],
-        isActive: true,
-      },
+      where: { phone: lookup.value, isActive: true },
       include: { profile: true },
     });
   }
@@ -1000,13 +1023,22 @@ export class UsersService {
       throw new BadRequestException('Прикрепите файл CV');
     }
 
+    const before = await this.prisma.userProfile.findUnique({ where: { userId } });
+    if (before?.winWinPartnerApproved) {
+      throw new BadRequestException('Вы уже партнёр Win-Win');
+    }
+    if (before?.partnerApplicationSubmittedAt && !before?.partnerApplicationRejectedAt) {
+      throw new BadRequestException('Заявка уже подана');
+    }
+
     const u = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { email: true },
     });
     const email = u?.email?.trim() ? u.email.trim() : null;
     const exempt = this.isReferralInviteCodeExempt(email);
-    const code = (referralCode ?? '').trim();
+    const code =
+      (referralCode ?? '').trim() || (before?.partnerApplicationReferralCode ?? '').trim();
     let storedRef: string | null = null;
     if (!exempt) {
       // Анти-перебор: одинаковая задержка и недифференцированная ошибка.
@@ -1018,14 +1050,6 @@ export class UsersService {
         throw new BadRequestException('Некорректные данные');
       }
       storedRef = inv.winWinReferralCode;
-    }
-
-    const before = await this.prisma.userProfile.findUnique({ where: { userId } });
-    if (before?.winWinPartnerApproved) {
-      throw new BadRequestException('Вы уже партнёр Win-Win');
-    }
-    if (before?.partnerApplicationSubmittedAt && !before?.partnerApplicationRejectedAt) {
-      throw new BadRequestException('Заявка уже подана');
     }
 
     this.media.assertLkProfileRichFile(file);

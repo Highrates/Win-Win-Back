@@ -5,6 +5,7 @@ import { AuditAction, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { getRequestContextStore } from '../../common/request-context/request-context.storage';
 import { parseAdminMutationPath } from './admin-mutation-path';
+import { AuthSecurityMonitorService } from './auth-security-monitor.service';
 
 export interface AuditLogInput {
   action: AuditAction;
@@ -84,6 +85,7 @@ export class AuditService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly authSecurityMonitor: AuthSecurityMonitorService,
   ) {}
 
   onModuleInit() {
@@ -160,6 +162,19 @@ export class AuditService implements OnModuleInit, OnModuleDestroy {
       });
     } catch (e) {
       this.logger.warn(`audit write failed: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+
+  /** LOGIN_FAILED / REGISTER_FAILED / AUTH_RATE_LIMITED — пишем в журнал и считаем всплески для pm2-алертов. */
+  async logAuthSecurityEvent(input: AuditLogInput): Promise<void> {
+    await this.log(input);
+    const { action } = input;
+    if (
+      action === AuditAction.LOGIN_FAILED ||
+      action === AuditAction.REGISTER_FAILED ||
+      action === AuditAction.AUTH_RATE_LIMITED
+    ) {
+      this.authSecurityMonitor.record(action);
     }
   }
 

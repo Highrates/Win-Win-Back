@@ -56,10 +56,10 @@ describe('UsersService (referrals)', () => {
     svc.assertNoWinWinReferralCycleInTx = vi.fn().mockRejectedValue(new BadRequestException('cycle'));
     await expect(svc.tryAttachWinWinReferralInTx(tx, 'NEW', 'REF')).rejects.toBeInstanceOf(BadRequestException);
 
-    // 2) P2002 должен игнорироваться
+    // 2) P2002 должен вернуть false
     svc.assertNoWinWinReferralCycleInTx = vi.fn().mockResolvedValue(undefined);
     tx.referral.create = vi.fn().mockRejectedValue({ code: 'P2002' });
-    await expect(svc.tryAttachWinWinReferralInTx(tx, 'NEW', 'REF')).resolves.toBeUndefined();
+    await expect(svc.tryAttachWinWinReferralInTx(tx, 'NEW', 'REF')).resolves.toBe(false);
   });
 });
 

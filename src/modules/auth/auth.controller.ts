@@ -5,6 +5,7 @@ import {
   Body,
   UseGuards,
   UnauthorizedException,
+  HttpException,
   Req,
 } from '@nestjs/common';
 import { AccountContactService } from './account-contact.service';
@@ -41,6 +42,12 @@ import {
 } from './dto/password-reset.dto';
 import { Throttle } from '@nestjs/throttler';
 
+/** Per-IP лимиты на чувствительных auth-ручках (перекрывают глобальные 100 req/min). */
+const AUTH_LOGIN_THROTTLE = { default: { ttl: 60_000, limit: 15 } };
+const AUTH_REGISTER_START_THROTTLE = { default: { ttl: 60_000, limit: 5 } };
+const AUTH_REGISTER_VERIFY_THROTTLE = { default: { ttl: 60_000, limit: 10 } };
+const AUTH_REGISTER_COMPLETE_THROTTLE = { default: { ttl: 60_000, limit: 10 } };
+
 @Controller('auth')
 export class AuthController {
   constructor(
@@ -53,54 +60,141 @@ export class AuthController {
     private passwordReset: PasswordResetService,
   ) {}
 
-  @Public()
-  @Post('register/phone/start')
-  async registerPhoneStart(@Body() dto: RegisterPhoneStartDto) {
-    return this.registration.startPhone(dto);
+  private authPath(req: Request, fallback: string): string {
+    return (req.originalUrl || req.url || fallback).split('?')[0];
   }
 
-  @Public()
-  @Post('register/phone/verify')
-  async registerPhoneVerify(@Body() dto: RegisterPhoneVerifyDto) {
-    return this.registration.verifyPhone(dto);
+  private httpExceptionMeta(e: unknown): Record<string, unknown> {
+    if (!(e instanceof HttpException)) return {};
+    const meta: Record<string, unknown> = { httpStatus: e.getStatus() };
+    const r = e.getResponse();
+    if (typeof r === 'string') {
+      meta.error = r.slice(0, 240);
+    } else if (typeof r === 'object' && r !== null && 'message' in r) {
+      const m = (r as { message: unknown }).message;
+      const text = Array.isArray(m) ? m.join(', ') : String(m);
+      meta.error = text.slice(0, 240);
+    }
+    return meta;
   }
 
-  @Public()
-  @Post('register/email/start')
-  async registerEmailStart(@Body() dto: RegisterEmailStartDto) {
-    return this.registration.startEmail(dto);
-  }
-
-  @Public()
-  @Post('register/email/verify')
-  async registerEmailVerify(@Body() dto: RegisterEmailVerifyDto) {
-    return this.registration.verifyEmail(dto);
-  }
-
-  @Public()
-  @Post('register/complete')
-  async registerComplete(@Body() dto: RegisterCompleteDto) {
-    const user = await this.registration.complete(dto);
-    const token = await this.authService.login({
-      id: user.id,
-      email: user.email,
-      phone: user.phone,
-      role: user.role,
+  private async logRegisterFailed(
+    path: string,
+    step: string,
+    e: unknown,
+    extra?: Record<string, unknown>,
+  ): Promise<void> {
+    await this.audit.logAuthSecurityEvent({
+      action: AuditAction.REGISTER_FAILED,
+      path,
+      httpMethod: 'POST',
+      metadata: { step, ...extra, ...this.httpExceptionMeta(e) },
     });
-    const full = await this.usersService.findByIdPublic(user.id);
-    return { ...token, user: full ?? user };
   }
 
   @Public()
+  @Throttle(AUTH_REGISTER_START_THROTTLE)
+  @Post('register/phone/start')
+  async registerPhoneStart(@Body() dto: RegisterPhoneStartDto, @Req() req: Request) {
+    const path = this.authPath(req, '/auth/register/phone/start');
+    try {
+      return await this.registration.startPhone(dto);
+    } catch (e) {
+      await this.logRegisterFailed(path, 'phone/start', e, { channel: 'phone' });
+      throw e;
+    }
+  }
+
+  @Public()
+  @Throttle(AUTH_REGISTER_VERIFY_THROTTLE)
+  @Post('register/phone/verify')
+  async registerPhoneVerify(@Body() dto: RegisterPhoneVerifyDto, @Req() req: Request) {
+    const path = this.authPath(req, '/auth/register/phone/verify');
+    try {
+      return await this.registration.verifyPhone(dto);
+    } catch (e) {
+      await this.logRegisterFailed(path, 'phone/verify', e, { channel: 'phone' });
+      throw e;
+    }
+  }
+
+  @Public()
+  @Throttle(AUTH_REGISTER_START_THROTTLE)
+  @Post('register/email/start')
+  async registerEmailStart(@Body() dto: RegisterEmailStartDto, @Req() req: Request) {
+    const path = this.authPath(req, '/auth/register/email/start');
+    try {
+      return await this.registration.startEmail(dto);
+    } catch (e) {
+      await this.logRegisterFailed(path, 'email/start', e, { channel: 'email' });
+      throw e;
+    }
+  }
+
+  @Public()
+  @Throttle(AUTH_REGISTER_VERIFY_THROTTLE)
+  @Post('register/email/verify')
+  async registerEmailVerify(@Body() dto: RegisterEmailVerifyDto, @Req() req: Request) {
+    const path = this.authPath(req, '/auth/register/email/verify');
+    try {
+      return await this.registration.verifyEmail(dto);
+    } catch (e) {
+      await this.logRegisterFailed(path, 'email/verify', e, { channel: 'email' });
+      throw e;
+    }
+  }
+
+  @Public()
+  @Throttle(AUTH_REGISTER_COMPLETE_THROTTLE)
+  @Post('register/complete')
+  async registerComplete(@Body() dto: RegisterCompleteDto, @Req() req: Request) {
+    const path = this.authPath(req, '/auth/register/complete');
+    try {
+      const { user, referralWarning } = await this.registration.complete(dto);
+      const token = await this.authService.login({
+        id: user.id,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+      });
+      const full = await this.usersService.findByIdPublic(user.id);
+      await this.audit.log({
+        action: AuditAction.REGISTER,
+        path,
+        httpMethod: 'POST',
+        entityType: 'User',
+        entityId: user.id,
+        actorUserId: user.id,
+        actorEmail: user.email ?? undefined,
+        actorRole: user.role,
+        metadata: {
+          channel: user.phone ? 'phone' : 'email',
+          ...(referralWarning ? { referralWarning } : {}),
+        },
+      });
+      return {
+        ...token,
+        user: full ?? user,
+        ...(referralWarning ? { referralWarning } : {}),
+      };
+    } catch (e) {
+      await this.logRegisterFailed(path, 'complete', e);
+      throw e;
+    }
+  }
+
+  @Public()
+  @Throttle(AUTH_LOGIN_THROTTLE)
   @Post('login')
   async login(@Body() dto: LoginDto, @Req() req: Request) {
-    const path = (req.originalUrl || req.url || '/auth/login').split('?')[0];
+    const path = this.authPath(req, '/auth/login');
     const user = await this.authService.validateUser(dto.emailOrPhone, dto.password);
     if (!user) {
-      await this.audit.log({
+      await this.audit.logAuthSecurityEvent({
         action: AuditAction.LOGIN_FAILED,
         path,
-        metadata: { channel: 'account' },
+        httpMethod: 'POST',
+        metadata: { channel: 'account', httpStatus: 401 },
       });
       throw new UnauthorizedException('Invalid credentials');
     }
@@ -119,15 +213,17 @@ export class AuthController {
 
   /** Вход только для ролей ADMIN / MODERATOR (админ-панель) */
   @Public()
+  @Throttle(AUTH_LOGIN_THROTTLE)
   @Post('admin/login')
   async adminLogin(@Body() dto: LoginDto, @Req() req: Request) {
-    const path = (req.originalUrl || req.url || '/auth/admin/login').split('?')[0];
+    const path = this.authPath(req, '/auth/admin/login');
     const user = await this.authService.validateStaffUser(dto.emailOrPhone, dto.password);
     if (!user) {
-      await this.audit.log({
+      await this.audit.logAuthSecurityEvent({
         action: AuditAction.LOGIN_FAILED,
         path,
-        metadata: { channel: 'admin' },
+        httpMethod: 'POST',
+        metadata: { channel: 'admin', httpStatus: 401 },
       });
       throw new UnauthorizedException('Invalid credentials');
     }

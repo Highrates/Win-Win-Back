@@ -1,11 +1,12 @@
 import { join } from 'path';
 import { MiddlewareConsumer, Module, NestModule, RequestMethod } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { APP_GUARD, APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { RequestContextMiddleware } from './common/middleware/request-context.middleware';
 import { AuditHttpInterceptor } from './modules/audit/audit-http.interceptor';
 import { AuditModule } from './modules/audit/audit.module';
+import { AuthSecurityExceptionFilter } from './modules/audit/auth-security.exception-filter';
 import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './redis/redis.module';
 import { MeilisearchModule } from './meilisearch/meilisearch.module';
@@ -69,6 +70,10 @@ import { LikesModule } from './modules/likes/likes.module';
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,
+    },
+    {
+      provide: APP_FILTER,
+      useClass: AuthSecurityExceptionFilter,
     },
     {
       provide: APP_INTERCEPTOR,
