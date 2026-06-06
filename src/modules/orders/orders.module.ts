@@ -9,9 +9,10 @@ import { OrderChatModule } from '../order-chat/order-chat.module';
 import { AuthModule } from '../auth/auth.module';
 import { ReferralsModule } from '../referrals/referrals.module';
 import { OrderSettingsModule } from '../order-settings/order-settings.module';
+import { UserGroupsModule } from '../user-groups/user-groups.module';
 
 @Module({
-  imports: [OrderChatModule, AuthModule, ReferralsModule, OrderSettingsModule],
+  imports: [OrderChatModule, AuthModule, ReferralsModule, OrderSettingsModule, UserGroupsModule],
   providers: [OrdersService, CommercialProposalService],
   /**
    * Порядок: `me` и `admin` до `OrdersController`, иначе `GET orders/:id` съедает `GET orders/admin` (`:id` = admin).

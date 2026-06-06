@@ -45,6 +45,7 @@ model User {
   chatMessagesAuthored ChatMessage[]
   chatReadStates       ChatReadState[]
   commercialProposalsPublished CommercialProposal[] @relation("CommercialProposalPublishedBy")
+  userGroupMember UserGroupMember?
 }
 
 /// Чаты по заказу (приватный диалог клиент ↔ поддержка).
@@ -431,6 +432,7 @@ model PricingProfile {
   updatedAt DateTime @updatedAt
 
   categories PricingProfileCategory[]
+  userGroups UserGroup[]
 }
 
 model PricingProfileCategory {
@@ -725,6 +727,13 @@ model Order {
   updatedAt   DateTime  @updatedAt
   /// Последняя просмотренная клиентом версия опубликованного КП (1+). Новая публикация выше этого номера даёт «непрочитано» в ЛК.
   customerLastSeenCommercialProposalVersion Int?
+  /// Снимок профиля рефералов покупателя на момент отправки заказа (enabled, min сумма).
+  buyerReferralProgramProfileIdSnapshot String?
+  /// Снимок профиля бонуса дизайнера покупателя на момент отправки заказа.
+  buyerDesignerBonusProfileIdSnapshot String?
+  programSnapshotsCapturedAt DateTime?
+  buyerReferralProgramProfileSnapshot ReferralProgramProfile? @relation("OrderBuyerReferralProgramSnapshot", fields: [buyerReferralProgramProfileIdSnapshot], references: [id], onDelete: SetNull)
+  buyerDesignerBonusProfileSnapshot   DesignerBonusProfile?   @relation("OrderBuyerDesignerBonusSnapshot", fields: [buyerDesignerBonusProfileIdSnapshot], references: [id], onDelete: SetNull)
 
   items OrderItem[]
   chatConversation ChatConversation?
@@ -1198,6 +1207,9 @@ model ReferralProgramProfile {
   minimumOrderSiteTotalRub  Int      @default(0)
   createdAt                 DateTime @default(now())
   updatedAt                 DateTime @updatedAt
+
+  userGroupsReferral UserGroup[] @relation("UserGroupReferralProgram")
+  orderSnapshotsReferral Order[]   @relation("OrderBuyerReferralProgramSnapshot")
 }
 
 /// Профиль бонуса дизайнера со своего заказа (для групп пользователей).
@@ -1210,4 +1222,41 @@ model DesignerBonusProfile {
   designerOwnMinimumCatalogSiteTotalRub Int    @default(0)
   createdAt                           DateTime @default(now())
   updatedAt                           DateTime @updatedAt
+
+  userGroupsBonus UserGroup[] @relation("UserGroupDesignerBonus")
+  orderSnapshotsBonus Order[] @relation("OrderBuyerDesignerBonusSnapshot")
+}
+
+/// Группа пользователей с общими условиями (рефералы, бонус; цены — фаза 3).
+model UserGroup {
+  id                       String   @id @default(cuid())
+  name                     String   @default("")
+  /// Бейдж в ЛК (публичный лейбл).
+  label                    String   @default("")
+  slug                     String?  @unique
+  sortOrder                Int      @default(0)
+  referralProgramProfileId String
+  referralProgramProfile   ReferralProgramProfile @relation("UserGroupReferralProgram", fields: [referralProgramProfileId], references: [id], onDelete: Restrict)
+  designerBonusProfileId   String
+  designerBonusProfile     DesignerBonusProfile @relation("UserGroupDesignerBonus", fields: [designerBonusProfileId], references: [id], onDelete: Restrict)
+  /// Фаза 3: ценообразование на витрине.
+  pricingProfileId         String?
+  pricingProfile           PricingProfile? @relation(fields: [pricingProfileId], references: [id], onDelete: SetNull)
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  members UserGroupMember[]
+}
+
+/// Участник группы: ровно одна группа на пользователя.
+model UserGroupMember {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  groupId          String
+  group            UserGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  assignedAt       DateTime @default(now())
+  assignedByUserId String?
+
+  @@index([groupId])
 }

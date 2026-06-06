@@ -20,6 +20,7 @@ import {
   type UserProfileVitrineDto,
 } from './dto/user-profile-vitrine.dto';
 import { normalizeEmailOrPhoneForLookup } from '../../common/utils/phone-normalize';
+import { UserGroupProfileResolverService } from '../user-group-profiles/user-group-profile-resolver.service';
 
 /** Символы для публичного кода (без 0/O, I, L). */
 const WinWinCrockford = '0123456789ABCDEFGHJKMNPQRSTVWXYZ' as const;
@@ -51,6 +52,7 @@ export class UsersService {
     private prisma: PrismaService,
     private media: MediaLibraryService,
     private mail: MailService,
+    private profileResolver: UserGroupProfileResolverService,
   ) {}
 
   async existsByPhoneOrEmail(phoneDigits: string | null, emailLower: string | null): Promise<boolean> {
@@ -445,6 +447,8 @@ export class UsersService {
       designerCasesCount = typeof casesCount === 'number' ? casesCount : null;
     }
 
+    const userGroupLabel = await this.profileResolver.getUserGroupLabel(userId);
+
     return mapUserProfileToVitrineDto(
       p,
       email,
@@ -453,6 +457,7 @@ export class UsersService {
       designerSiteVisible,
       designerLikesUserCount,
       designerCasesCount,
+      userGroupLabel,
     );
   }
 

@@ -4,9 +4,16 @@ import { UsersController } from './users.controller';
 import { UsersAdminController } from './users-admin.controller';
 import { MediaLibraryModule } from '../media-library/media-library.module';
 import { AuthModule } from '../auth/auth.module';
+import { UserGroupsModule } from '../user-groups/user-groups.module';
+import { UserGroupProfileResolverModule } from '../user-group-profiles/user-group-profile-resolver.module';
 
 @Module({
-  imports: [MediaLibraryModule, forwardRef(() => AuthModule)],
+  imports: [
+    MediaLibraryModule,
+    forwardRef(() => AuthModule),
+    UserGroupsModule,
+    UserGroupProfileResolverModule,
+  ],
   providers: [UsersService],
   controllers: [UsersController, UsersAdminController],
   exports: [UsersService],

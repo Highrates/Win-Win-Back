@@ -8,6 +8,7 @@ import { AuditService } from '../audit/audit.service';
 import { MailService } from '../auth/mail.service';
 import { OrderChatService } from '../order-chat/order-chat.service';
 import { ReferralsService } from '../referrals/referrals.service';
+import { OrderProgramSnapshotService } from '../user-groups/order-program-snapshot.service';
 import type {
   AddOrderPreparationLineDto,
   PatchOrderPreparationDto,
@@ -92,6 +93,7 @@ export class OrdersService {
     private readonly orderChat: OrderChatService,
     private readonly config: ConfigService,
     private readonly referrals: ReferralsService,
+    private readonly orderProgramSnapshots: OrderProgramSnapshotService,
   ) {}
 
   async findByUser(userId: string, page = 1, limit = 20, scopeRaw?: string) {
@@ -670,6 +672,12 @@ export class OrdersService {
         partialSubmit: Boolean(lineIdsFilter),
       },
     });
+    try {
+      await this.orderProgramSnapshots.captureForOrderIfNeeded(result.updated.id, userId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Order submit: program snapshot failed: ${msg}`);
+    }
     void this.notifyStaffOrderSubmitted(result.updated.id).catch((err) => {
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.warn(`Order submit: staff email notify failed: ${msg}`);

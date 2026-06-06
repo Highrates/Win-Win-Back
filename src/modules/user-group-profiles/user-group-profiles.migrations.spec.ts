@@ -13,6 +13,7 @@ describe('user-group-profiles migrations', () => {
   const phase1 = readMigration('20260621120000_user_group_profiles_phase1');
   const percentFields = readMigration('20260623120000_referral_profile_percent_fields');
   const primaryLabel = readMigration('20260622120000_profile_primary_label');
+  const phase2 = readMigration('20260624120000_user_groups_phase2');
 
   it('phase1: создаёт таблицы профилей и partial unique на isDefault', () => {
     expect(phase1).toContain('CREATE TABLE "ReferralProgramProfile"');
@@ -38,5 +39,13 @@ describe('user-group-profiles migrations', () => {
   it('primary label: переименовывает seed «По умолчанию» → «Основной»', () => {
     expect(primaryLabel).toContain("'Основной'");
     expect(primaryLabel).toContain("'По умолчанию'");
+  });
+
+  it('phase2: UserGroup, UserGroupMember, снимки на Order', () => {
+    expect(phase2).toContain('CREATE TABLE "UserGroup"');
+    expect(phase2).toContain('CREATE TABLE "UserGroupMember"');
+    expect(phase2).toContain('UserGroupMember_userId_key');
+    expect(phase2).toContain('buyerReferralProgramProfileIdSnapshot');
+    expect(phase2).toContain('buyerDesignerBonusProfileIdSnapshot');
   });
 });

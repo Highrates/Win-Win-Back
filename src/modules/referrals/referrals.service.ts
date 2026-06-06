@@ -170,10 +170,17 @@ export class ReferralsService {
     }
 
     const partnerProgram = await this.profileResolver.resolveReferralProgramForUser(partnerUserId);
+    if (!partnerProgram.enabled) {
+      return this.emptyPartnerProgramSummary(partnerProgram);
+    }
+
     const ownOrderCfg = await this.orderSettings.getResolved(partnerUserId);
     const tierByBuyer = await this.buildBuyerTierMap(partnerUserId);
     const buyerIds = [...tierByBuyer.keys()];
-    const buyerProgramCache = new Map<string, ResolvedReferralProgram>();
+    const buyerOrderContextCache = new Map<
+      string,
+      { enabled: boolean; minimumOrderSiteTotalRub: number }
+    >();
 
     const orders =
       buyerIds.length > 0
@@ -202,20 +209,23 @@ export class ReferralsService {
       const tier = tierByBuyer.get(buyerId);
       if (!tier) continue;
 
-      let buyerProgram = buyerProgramCache.get(buyerId);
-      if (!buyerProgram) {
-        buyerProgram = await this.profileResolver.resolveReferralProgramForUser(buyerId);
-        buyerProgramCache.set(buyerId, buyerProgram);
+      let buyerCtx = buyerOrderContextCache.get(buyerId);
+      if (!buyerCtx) {
+        buyerCtx = await this.profileResolver.resolveBuyerReferralOrderContext({
+          userId: buyerId,
+          buyerReferralProgramProfileIdSnapshot: o.buyerReferralProgramProfileIdSnapshot,
+        });
+        buyerOrderContextCache.set(buyerId, buyerCtx);
       }
-      if (!buyerProgram.enabled) continue;
+      if (!buyerCtx.enabled) continue;
 
       const catalog = catalogTotalFromItems(o.items);
       const { bonus, percent } = this.computeLineBonus(
         catalog,
-        buyerProgram.minimumOrderSiteTotalRub,
+        buyerCtx.minimumOrderSiteTotalRub,
         tier,
-        buyerProgram.level1Percent,
-        buyerProgram.level2Percent,
+        partnerProgram.level1Percent,
+        partnerProgram.level2Percent,
       );
       const pipeline = o.status !== OrderStatus.COMPLETED;
 
@@ -250,8 +260,17 @@ export class ReferralsService {
     });
     for (const o of ownOrders) {
       const catalog = catalogTotalFromItems(o.items);
-      const bonus = this.orderSettings.computeDesignerOwnCatalogBonusRub(ownOrderCfg, catalog);
-      const pct = ownOrderCfg.designerOwnCatalogBonusPercent;
+      const orderBonus = await this.profileResolver.resolveDesignerBonusForOrder({
+        userId: partnerUserId,
+        buyerDesignerBonusProfileIdSnapshot: o.buyerDesignerBonusProfileIdSnapshot,
+      });
+      const bonusCfg = {
+        ...ownOrderCfg,
+        designerOwnCatalogBonusPercent: orderBonus.designerOwnCatalogBonusPercent,
+        designerOwnMinimumCatalogSiteTotalRub: orderBonus.designerOwnMinimumCatalogSiteTotalRub,
+      };
+      const bonus = this.orderSettings.computeDesignerOwnCatalogBonusRub(bonusCfg, catalog);
+      const pct = orderBonus.designerOwnCatalogBonusPercent;
       personalLines.push({
         orderId: o.id,
         orderUpdatedAt: o.updatedAt.toISOString(),
@@ -296,6 +315,30 @@ export class ReferralsService {
     };
   }
 
+  private emptyPartnerProgramSummary(
+    partnerProgram: ResolvedReferralProgram,
+  ): PartnerProgramSummaryDto {
+    return {
+      program: {
+        enabled: partnerProgram.enabled,
+        level1Percent: partnerProgram.level1Percent,
+        level2Percent: partnerProgram.level2Percent,
+        minimumOrderSiteTotalRub: partnerProgram.minimumOrderSiteTotalRub,
+        basisNote: 'SITE_CATALOG_LINE_PRICES',
+      },
+      totals: {
+        personalPipelineRub: '0.00',
+        personalCompletedRub: '0.00',
+        teamPipelineRub: '0.00',
+        teamCompletedRub: '0.00',
+        payableFromCompletedRub: '0.00',
+        pipelineOutlookRub: '0.00',
+      },
+      personalLines: [],
+      teamLines: [],
+    };
+  }
+
   async ensureRewardsForCompletedOrder(orderId: string): Promise<void> {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
@@ -303,14 +346,17 @@ export class ReferralsService {
     });
     if (!order || order.status !== OrderStatus.COMPLETED) return;
 
-    const buyerId = order.userId;
-    const cfg = await this.profileResolver.resolveReferralProgramForUser(buyerId);
-    if (!cfg.enabled) {
+    const buyerCtx = await this.profileResolver.resolveBuyerReferralOrderContext({
+      userId: order.userId,
+      buyerReferralProgramProfileIdSnapshot: order.buyerReferralProgramProfileIdSnapshot,
+    });
+    if (!buyerCtx.enabled) {
       await this.prisma.referralReward.deleteMany({ where: { orderId } });
       return;
     }
 
     const catalog = catalogTotalFromItems(order.items);
+    const buyerId = order.userId;
 
     const receivers = new Map<string, 1 | 2>();
 
@@ -329,15 +375,24 @@ export class ReferralsService {
       }
     }
 
+    const receiverProgramCache = new Map<string, ResolvedReferralProgram>();
+
     await this.prisma.$transaction(async (tx) => {
       await tx.referralReward.deleteMany({ where: { orderId } });
       for (const [userId, lvl] of receivers) {
+        let receiverProgram = receiverProgramCache.get(userId);
+        if (!receiverProgram) {
+          receiverProgram = await this.profileResolver.resolveReferralProgramForUser(userId);
+          receiverProgramCache.set(userId, receiverProgram);
+        }
+        if (!receiverProgram.enabled) continue;
+
         const { bonus } = this.computeLineBonus(
           catalog,
-          cfg.minimumOrderSiteTotalRub,
+          buyerCtx.minimumOrderSiteTotalRub,
           lvl,
-          cfg.level1Percent,
-          cfg.level2Percent,
+          receiverProgram.level1Percent,
+          receiverProgram.level2Percent,
         );
         if (bonus.lessThanOrEqualTo(0)) continue;
         const partner = await tx.userProfile.findUnique({

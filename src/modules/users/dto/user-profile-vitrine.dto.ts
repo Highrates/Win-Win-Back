@@ -40,6 +40,8 @@ export type UserProfileVitrineDto = {
   designerLikesUserCount: number | null;
   /** Количество кейсов дизайнера (если есть designer record). */
   designerCasesCount: number | null;
+  /** Публичный лейбл группы пользователя (бейдж в ЛК), если назначена группа. */
+  userGroupLabel: string | null;
 };
 
 /** Select для чтения профиля ЛК без «тяжёлых» или внутренних JSON (напр. kycData). */
@@ -82,6 +84,7 @@ export function mapUserProfileToVitrineDto(
   designerSiteVisible: boolean,
   designerLikesUserCount: number | null,
   designerCasesCount: number | null,
+  userGroupLabel: string | null,
 ): UserProfileVitrineDto {
   return {
     ...row,
@@ -91,5 +94,6 @@ export function mapUserProfileToVitrineDto(
     designerSiteVisible,
     designerLikesUserCount,
     designerCasesCount,
+    userGroupLabel,
   };
 }

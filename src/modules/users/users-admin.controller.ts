@@ -1,10 +1,12 @@
 import {
+  Body,
   Controller,
   DefaultValuePipe,
   Get,
   Param,
   ParseIntPipe,
   Post,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -12,6 +14,9 @@ import { UserRole } from '@prisma/client';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { SetUserGroupMembershipAdminDto } from '../user-groups/dto/user-group-admin.dto';
+import { UserGroupsService } from '../user-groups/user-groups.service';
 import { UsersService } from './users.service';
 
 /** Список покупателей (роль USER) для админки. */
@@ -19,7 +24,10 @@ import { UsersService } from './users.service';
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.ADMIN, UserRole.MODERATOR)
 export class UsersAdminController {
-  constructor(private readonly users: UsersService) {}
+  constructor(
+    private readonly users: UsersService,
+    private readonly userGroups: UserGroupsService,
+  ) {}
 
   @Get('partner-applications/pending-count')
   partnerApplicationsPendingCount() {
@@ -72,6 +80,21 @@ export class UsersAdminController {
   ) {
     const t = Math.min(Math.max(take, 1), 100);
     return this.users.listRetailUsers({ skip: Math.max(skip, 0), take: t, q });
+  }
+
+  @Get(':id/group')
+  userGroup(@Param('id') id: string) {
+    return this.userGroups.getMembershipForUser(id);
+  }
+
+  @Put(':id/group')
+  setUserGroup(
+    @Param('id') id: string,
+    @Body() dto: SetUserGroupMembershipAdminDto,
+    @CurrentUser('sub') adminUserId: string,
+  ) {
+    const groupId = dto.groupId === undefined ? null : dto.groupId;
+    return this.userGroups.setMembershipForUser(id, groupId, adminUserId);
   }
 
   @Get(':id')

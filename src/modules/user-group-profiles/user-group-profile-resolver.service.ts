@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import type { DesignerBonusProfile, ReferralProgramProfile } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   ORDER_CFG_DESIGNER_OWN_CATALOG_BONUS_PERCENT,
@@ -38,27 +39,120 @@ function parseMinRub(raw: string | undefined, fallback: number): number {
   return Math.floor(n);
 }
 
+function mapReferralProfile(row: ReferralProgramProfile): ResolvedReferralProgram {
+  return {
+    profileId: row.id,
+    enabled: row.enabled,
+    level1Percent: row.level1Percent.toNumber(),
+    level2Percent: row.level2Percent.toNumber(),
+    minimumOrderSiteTotalRub: row.minimumOrderSiteTotalRub,
+  };
+}
+
+function mapDesignerBonusProfile(row: DesignerBonusProfile): ResolvedDesignerBonus {
+  return {
+    profileId: row.id,
+    designerOwnCatalogBonusPercent: row.designerOwnCatalogBonusPercent.toNumber(),
+    designerOwnMinimumCatalogSiteTotalRub: row.designerOwnMinimumCatalogSiteTotalRub,
+  };
+}
+
 /**
  * Единая точка чтения профилей для runtime.
- * Фаза 1: всегда основной профиль (userId игнорируется).
- * Фаза 2: группа пользователя → профиль группы, иначе основной.
+ * Фаза 2: группа пользователя → профиль группы, иначе основной (isDefault).
  */
 @Injectable()
 export class UserGroupProfileResolverService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async resolveReferralProgramForUser(_userId?: string): Promise<ResolvedReferralProgram> {
+  async getUserGroupLabel(userId: string): Promise<string | null> {
+    const member = await this.prisma.userGroupMember.findUnique({
+      where: { userId },
+      include: { group: { select: { label: true } } },
+    });
+    const label = member?.group.label?.trim();
+    return label || null;
+  }
+
+  async resolveReferralProgramByProfileId(profileId: string): Promise<ResolvedReferralProgram | null> {
+    const row = await this.prisma.referralProgramProfile.findUnique({ where: { id: profileId } });
+    return row ? mapReferralProfile(row) : null;
+  }
+
+  async resolveDesignerBonusByProfileId(profileId: string): Promise<ResolvedDesignerBonus | null> {
+    const row = await this.prisma.designerBonusProfile.findUnique({ where: { id: profileId } });
+    return row ? mapDesignerBonusProfile(row) : null;
+  }
+
+  /**
+   * Контекст покупателя для заказа: enabled и min сумма.
+   * Снимок на Order (если есть) фиксирует профиль на момент отправки.
+   */
+  async resolveBuyerReferralOrderContext(order: {
+    userId: string;
+    buyerReferralProgramProfileIdSnapshot: string | null;
+  }): Promise<Pick<ResolvedReferralProgram, 'profileId' | 'enabled' | 'minimumOrderSiteTotalRub'>> {
+    if (order.buyerReferralProgramProfileIdSnapshot) {
+      const snap = await this.resolveReferralProgramByProfileId(order.buyerReferralProgramProfileIdSnapshot);
+      if (snap) {
+        return {
+          profileId: snap.profileId,
+          enabled: snap.enabled,
+          minimumOrderSiteTotalRub: snap.minimumOrderSiteTotalRub,
+        };
+      }
+    }
+    const live = await this.resolveReferralProgramForUser(order.userId);
+    return {
+      profileId: live.profileId,
+      enabled: live.enabled,
+      minimumOrderSiteTotalRub: live.minimumOrderSiteTotalRub,
+    };
+  }
+
+  async resolveDesignerBonusForOrder(order: {
+    userId: string;
+    buyerDesignerBonusProfileIdSnapshot: string | null;
+  }): Promise<ResolvedDesignerBonus> {
+    if (order.buyerDesignerBonusProfileIdSnapshot) {
+      const snap = await this.resolveDesignerBonusByProfileId(order.buyerDesignerBonusProfileIdSnapshot);
+      if (snap) return snap;
+    }
+    return this.resolveDesignerBonusForUser(order.userId);
+  }
+
+  async resolveReferralProgramForUser(userId?: string): Promise<ResolvedReferralProgram> {
+    if (userId) {
+      const member = await this.prisma.userGroupMember.findUnique({
+        where: { userId },
+        include: { group: { include: { referralProgramProfile: true } } },
+      });
+      if (member?.group.referralProgramProfile) {
+        return mapReferralProfile(member.group.referralProgramProfile);
+      }
+    }
+    return this.resolveDefaultReferralProgram();
+  }
+
+  async resolveDesignerBonusForUser(userId?: string): Promise<ResolvedDesignerBonus> {
+    if (userId) {
+      const member = await this.prisma.userGroupMember.findUnique({
+        where: { userId },
+        include: { group: { include: { designerBonusProfile: true } } },
+      });
+      if (member?.group.designerBonusProfile) {
+        return mapDesignerBonusProfile(member.group.designerBonusProfile);
+      }
+    }
+    return this.resolveDefaultDesignerBonus();
+  }
+
+  private async resolveDefaultReferralProgram(): Promise<ResolvedReferralProgram> {
     const primary = await this.prisma.referralProgramProfile.findFirst({
       where: { isDefault: true },
     });
     if (primary) {
-      return {
-        profileId: primary.id,
-        enabled: primary.enabled,
-        level1Percent: primary.level1Percent.toNumber(),
-        level2Percent: primary.level2Percent.toNumber(),
-        minimumOrderSiteTotalRub: primary.minimumOrderSiteTotalRub,
-      };
+      return mapReferralProfile(primary);
     }
 
     const rows = await this.prisma.referralConfig.findMany({
@@ -85,16 +179,12 @@ export class UserGroupProfileResolverService {
     };
   }
 
-  async resolveDesignerBonusForUser(_userId?: string): Promise<ResolvedDesignerBonus> {
+  private async resolveDefaultDesignerBonus(): Promise<ResolvedDesignerBonus> {
     const primary = await this.prisma.designerBonusProfile.findFirst({
       where: { isDefault: true },
     });
     if (primary) {
-      return {
-        profileId: primary.id,
-        designerOwnCatalogBonusPercent: primary.designerOwnCatalogBonusPercent.toNumber(),
-        designerOwnMinimumCatalogSiteTotalRub: primary.designerOwnMinimumCatalogSiteTotalRub,
-      };
+      return mapDesignerBonusProfile(primary);
     }
 
     const rows = await this.prisma.referralConfig.findMany({
