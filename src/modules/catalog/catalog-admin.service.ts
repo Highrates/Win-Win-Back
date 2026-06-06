@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { adminListResult, parseAdminListQuery } from '../../common/admin-list-pagination';
 import { ObjectStorageService } from '../storage/object-storage.service';
 import { MediaLibraryService } from '../media-library/media-library.service';
 import {
@@ -168,26 +169,47 @@ export class CatalogAdminService {
     return memo;
   }
 
-  async listCategories(q?: string) {
-    const where =
-      q && q.trim()
-        ? { name: { contains: q.trim(), mode: 'insensitive' as const } }
-        : {};
-    const [rows, subtreeCounts] = await Promise.all([
-      this.prisma.category.findMany({
+  async listCategories(q?: string, pageRaw?: number, limitRaw?: number) {
+    const trim = q?.trim();
+    const where = trim ? { name: { contains: trim, mode: 'insensitive' as const } } : {};
+    const subtreeCounts = await this.subtreeProductCounts();
+    const include = {
+      parent: { select: { id: true, name: true } },
+      _count: { select: { primaryProducts: true, productCategories: true, children: true } },
+    } as const;
+
+    if (!trim) {
+      const rows = await this.prisma.category.findMany({
         where,
         orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
-        include: {
-          parent: { select: { id: true, name: true } },
-          _count: { select: { primaryProducts: true, productCategories: true, children: true } },
-        },
+        include,
+      });
+      return rows.map((row) => ({
+        ...row,
+        recursiveProductCount: subtreeCounts.get(row.id) ?? 0,
+      }));
+    }
+
+    const { page, limit, skip } = parseAdminListQuery(pageRaw, limitRaw);
+    const [rows, total] = await Promise.all([
+      this.prisma.category.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+        include,
       }),
-      this.subtreeProductCounts(),
+      this.prisma.category.count({ where }),
     ]);
-    return rows.map((row) => ({
-      ...row,
-      recursiveProductCount: subtreeCounts.get(row.id) ?? 0,
-    }));
+    return adminListResult(
+      rows.map((row) => ({
+        ...row,
+        recursiveProductCount: subtreeCounts.get(row.id) ?? 0,
+      })),
+      total,
+      page,
+      limit,
+    );
   }
 
   async getCategory(id: string) {
@@ -528,13 +550,23 @@ export class CatalogAdminService {
     return this.mediaLibrary.ingestCategoryBackgroundImage(file);
   }
 
-  async listBrandsForAdmin(q?: string) {
+  async listBrandsForAdmin(q?: string, pageRaw?: number, limitRaw?: number) {
     const trim = q?.trim();
-    return this.prisma.brand.findMany({
-      where: trim ? { name: { contains: trim, mode: 'insensitive' } } : {},
-      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
-      include: { _count: { select: { products: true } } },
-    });
+    const where: Prisma.BrandWhereInput = trim
+      ? { name: { contains: trim, mode: 'insensitive' } }
+      : {};
+    const { page, limit, skip } = parseAdminListQuery(pageRaw, limitRaw);
+    const [items, total] = await Promise.all([
+      this.prisma.brand.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+        include: { _count: { select: { products: true } } },
+      }),
+      this.prisma.brand.count({ where }),
+    ]);
+    return adminListResult(items, total, page, limit);
   }
 
   /** Удаляет только бренды без привязанных товаров. */
@@ -666,8 +698,8 @@ export class CatalogAdminService {
     return { url };
   }
 
-  async listProductsForAdmin(q?: string) {
-    return this.productAdmin.listProductsForAdmin(q);
+  async listProductsForAdmin(q?: string, pageRaw?: number, limitRaw?: number) {
+    return this.productAdmin.listProductsForAdmin(q, pageRaw, limitRaw);
   }
 
   async deleteProducts(ids: string[]) {

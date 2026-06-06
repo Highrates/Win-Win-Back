@@ -167,8 +167,16 @@ export class CatalogAdminController {
   }
 
   @Get('brands')
-  listBrands(@Query('q') q?: string) {
-    return this.catalogAdmin.listBrandsForAdmin(q);
+  listBrands(
+    @Query('q') q?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.catalogAdmin.listBrandsForAdmin(
+      q,
+      page ? parseInt(page, 10) : undefined,
+      limit ? parseInt(limit, 10) : undefined,
+    );
   }
 
   @Post('brands/bulk-delete')
@@ -192,8 +200,16 @@ export class CatalogAdminController {
   }
 
   @Get('categories')
-  list(@Query('q') q?: string) {
-    return this.catalogAdmin.listCategories(q);
+  list(
+    @Query('q') q?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.catalogAdmin.listCategories(
+      q,
+      page ? parseInt(page, 10) : undefined,
+      limit ? parseInt(limit, 10) : undefined,
+    );
   }
 
   @Post('categories/reorder')
@@ -229,8 +245,16 @@ export class CatalogAdminController {
   }
 
   @Get('products')
-  listProducts(@Query('q') q?: string) {
-    return this.catalogAdmin.listProductsForAdmin(q);
+  listProducts(
+    @Query('q') q?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.catalogAdmin.listProductsForAdmin(
+      q,
+      page ? parseInt(page, 10) : undefined,
+      limit ? parseInt(limit, 10) : undefined,
+    );
   }
 
   @Post('products')
@@ -354,8 +378,16 @@ export class CatalogAdminController {
   }
 
   @Get('curated-collections')
-  listCuratedCollections(@Query('q') q?: string) {
-    return this.curatedCollections.listForAdmin(q);
+  listCuratedCollections(
+    @Query('q') q?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.curatedCollections.listForAdmin(
+      q,
+      page ? parseInt(page, 10) : undefined,
+      limit ? parseInt(limit, 10) : undefined,
+    );
   }
 
   @Post('curated-collections/bulk-delete')
@@ -379,8 +411,16 @@ export class CatalogAdminController {
   }
 
   @Get('product-sets')
-  listProductSets(@Query('q') q?: string) {
-    return this.productSets.listForAdmin(q);
+  listProductSets(
+    @Query('q') q?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.productSets.listForAdmin(
+      q,
+      page ? parseInt(page, 10) : undefined,
+      limit ? parseInt(limit, 10) : undefined,
+    );
   }
 
   @Post('product-sets/bulk-delete')

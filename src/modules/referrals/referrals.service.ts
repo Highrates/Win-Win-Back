@@ -2,13 +2,16 @@ import { BadRequestException, ForbiddenException, Injectable, Logger } from '@ne
 import { OrderStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { OrderSettingsService } from '../order-settings/order-settings.service';
+import { ProgramConfigSyncService } from '../user-group-profiles/program-config-sync.service';
 import {
-  REFERRAL_CFG_LEVEL1_PERCENT,
-  REFERRAL_CFG_LEVEL2_PERCENT,
-  REFERRAL_CFG_MIN_ORDER_SITE_TOTAL_RUB,
-  REFERRAL_PROGRAM_DEFAULTS,
-} from './referral-program.constants';
+  UserGroupProfileResolverService,
+  type ResolvedReferralProgram,
+} from '../user-group-profiles/user-group-profile-resolver.service';
 import type { UpdateReferralProgramAdminDto } from './dto/referral-program-admin.dto';
+import {
+  referralProgramRewardsInputsChanged,
+  type ReferralProgramRewardsInputs,
+} from './referral-program-rewards.util';
 
 const LOG = new Logger('ReferralsService');
 
@@ -28,6 +31,7 @@ export type PartnerProgramBonusLineDto = {
 
 export type PartnerProgramSummaryDto = {
   program: {
+    enabled: boolean;
     level1Percent: number;
     level2Percent: number;
     minimumOrderSiteTotalRub: number;
@@ -45,18 +49,6 @@ export type PartnerProgramSummaryDto = {
   teamLines: PartnerProgramBonusLineDto[];
 };
 
-function parsePercent(raw: string | undefined, fallback: number): number {
-  const n = Number(String(raw ?? '').replace(',', '.').trim());
-  if (!Number.isFinite(n) || n < 0) return fallback;
-  return Math.min(100, n);
-}
-
-function parseMinRub(raw: string | undefined): number {
-  const n = Number(String(raw ?? '').replace(',', '.').trim());
-  if (!Number.isFinite(n) || n < 0) return 0;
-  return n;
-}
-
 function catalogTotalFromItems(items: { price: Prisma.Decimal; quantity: number }[]): Prisma.Decimal {
   let sum = new Prisma.Decimal(0);
   for (const it of items) {
@@ -70,6 +62,8 @@ export class ReferralsService {
   constructor(
     private prisma: PrismaService,
     private orderSettings: OrderSettingsService,
+    private profileResolver: UserGroupProfileResolverService,
+    private configSync: ProgramConfigSyncService,
   ) {}
 
   async getConfig() {
@@ -77,55 +71,57 @@ export class ReferralsService {
     return Object.fromEntries(rows.map((r) => [r.key, r.value]));
   }
 
-  private async getResolvedProgramConfig(): Promise<{
+  async getAdminProgramConfig(): Promise<{
+    enabled: boolean;
     level1Percent: number;
     level2Percent: number;
     minimumOrderSiteTotalRub: number;
   }> {
-    const rows = await this.prisma.referralConfig.findMany();
-    const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
-    const d1 = REFERRAL_PROGRAM_DEFAULTS[REFERRAL_CFG_LEVEL1_PERCENT] ?? '0';
-    const d2 = REFERRAL_PROGRAM_DEFAULTS[REFERRAL_CFG_LEVEL2_PERCENT] ?? '0';
-    const dmin = REFERRAL_PROGRAM_DEFAULTS[REFERRAL_CFG_MIN_ORDER_SITE_TOTAL_RUB] ?? '0';
+    const cfg = await this.profileResolver.resolveReferralProgramForUser();
     return {
-      level1Percent: parsePercent(map[REFERRAL_CFG_LEVEL1_PERCENT], parsePercent(d1, 0)),
-      level2Percent: parsePercent(map[REFERRAL_CFG_LEVEL2_PERCENT], parsePercent(d2, 0)),
-      minimumOrderSiteTotalRub: parseMinRub(map[REFERRAL_CFG_MIN_ORDER_SITE_TOTAL_RUB] ?? dmin),
+      enabled: cfg.enabled,
+      level1Percent: cfg.level1Percent,
+      level2Percent: cfg.level2Percent,
+      minimumOrderSiteTotalRub: cfg.minimumOrderSiteTotalRub,
     };
   }
 
-  async getAdminProgramConfig(): Promise<{
-    level1Percent: number;
-    level2Percent: number;
-    minimumOrderSiteTotalRub: number;
-  }> {
-    return this.getResolvedProgramConfig();
+  async updateAdminProgramConfig(dto: UpdateReferralProgramAdminDto): Promise<void> {
+    const before = await this.profileResolver.resolveReferralProgramForUser();
+    const primary = await this.prisma.referralProgramProfile.findFirst({ where: { isDefault: true } });
+    if (primary) {
+      await this.prisma.referralProgramProfile.update({
+        where: { id: primary.id },
+        data: {
+          level1Percent: new Prisma.Decimal(dto.level1Percent),
+          level2Percent: new Prisma.Decimal(dto.level2Percent),
+          minimumOrderSiteTotalRub: dto.minimumOrderSiteTotalRub,
+        },
+      });
+    }
+    await this.configSync.mirrorReferralProgram({
+      level1Percent: dto.level1Percent,
+      level2Percent: dto.level2Percent,
+      minimumOrderSiteTotalRub: dto.minimumOrderSiteTotalRub,
+    });
+    const after: ReferralProgramRewardsInputs = {
+      enabled: before.enabled,
+      level1Percent: dto.level1Percent,
+      level2Percent: dto.level2Percent,
+      minimumOrderSiteTotalRub: dto.minimumOrderSiteTotalRub,
+    };
+    await this.recalculateRewardsIfProgramChanged(before, after);
   }
 
-  async updateAdminProgramConfig(dto: UpdateReferralProgramAdminDto): Promise<void> {
-    const upsert = (key: string, value: string, description: string) =>
-      this.prisma.referralConfig.upsert({
-        where: { key },
-        update: { value, description },
-        create: { key, value, description },
-      });
-    await this.prisma.$transaction([
-      upsert(
-        REFERRAL_CFG_LEVEL1_PERCENT,
-        String(dto.level1Percent),
-        'Процент партнёра с суммы «цена на сайте» (позиции заказа), уровень L1',
-      ),
-      upsert(
-        REFERRAL_CFG_LEVEL2_PERCENT,
-        String(dto.level2Percent),
-        'Процент партнёра с суммы «цена на сайте» (позиции заказа), уровень L2',
-      ),
-      upsert(
-        REFERRAL_CFG_MIN_ORDER_SITE_TOTAL_RUB,
-        String(dto.minimumOrderSiteTotalRub),
-        'Минимальная сумма «цена на сайте» заказа для начисления, ₽',
-      ),
-    ]);
+  /** Полный пересчёт только если изменились поля, влияющие на ReferralReward. */
+  async recalculateRewardsIfProgramChanged(
+    before: ReferralProgramRewardsInputs,
+    after: ReferralProgramRewardsInputs,
+  ): Promise<void> {
+    if (!referralProgramRewardsInputsChanged(before, after)) {
+      LOG.log('referral rewards recalc skipped: program inputs unchanged');
+      return;
+    }
     await this.recalculateRewardsForAllCompletedOrders();
   }
 
@@ -173,10 +169,11 @@ export class ReferralsService {
       throw new ForbiddenException('Раздел дохода доступен одобренным партнёрам Win-Win');
     }
 
-    const cfg = await this.getResolvedProgramConfig();
-    const ownOrderCfg = await this.orderSettings.getResolved();
+    const partnerProgram = await this.profileResolver.resolveReferralProgramForUser(partnerUserId);
+    const ownOrderCfg = await this.orderSettings.getResolved(partnerUserId);
     const tierByBuyer = await this.buildBuyerTierMap(partnerUserId);
     const buyerIds = [...tierByBuyer.keys()];
+    const buyerProgramCache = new Map<string, ResolvedReferralProgram>();
 
     const orders =
       buyerIds.length > 0
@@ -205,13 +202,20 @@ export class ReferralsService {
       const tier = tierByBuyer.get(buyerId);
       if (!tier) continue;
 
+      let buyerProgram = buyerProgramCache.get(buyerId);
+      if (!buyerProgram) {
+        buyerProgram = await this.profileResolver.resolveReferralProgramForUser(buyerId);
+        buyerProgramCache.set(buyerId, buyerProgram);
+      }
+      if (!buyerProgram.enabled) continue;
+
       const catalog = catalogTotalFromItems(o.items);
       const { bonus, percent } = this.computeLineBonus(
         catalog,
-        cfg.minimumOrderSiteTotalRub,
+        buyerProgram.minimumOrderSiteTotalRub,
         tier,
-        cfg.level1Percent,
-        cfg.level2Percent,
+        buyerProgram.level1Percent,
+        buyerProgram.level2Percent,
       );
       const pipeline = o.status !== OrderStatus.COMPLETED;
 
@@ -273,9 +277,10 @@ export class ReferralsService {
 
     return {
       program: {
-        level1Percent: cfg.level1Percent,
-        level2Percent: cfg.level2Percent,
-        minimumOrderSiteTotalRub: cfg.minimumOrderSiteTotalRub,
+        enabled: partnerProgram.enabled,
+        level1Percent: partnerProgram.level1Percent,
+        level2Percent: partnerProgram.level2Percent,
+        minimumOrderSiteTotalRub: partnerProgram.minimumOrderSiteTotalRub,
         basisNote: 'SITE_CATALOG_LINE_PRICES',
       },
       totals: {
@@ -298,9 +303,14 @@ export class ReferralsService {
     });
     if (!order || order.status !== OrderStatus.COMPLETED) return;
 
-    const cfg = await this.getResolvedProgramConfig();
-    const catalog = catalogTotalFromItems(order.items);
     const buyerId = order.userId;
+    const cfg = await this.profileResolver.resolveReferralProgramForUser(buyerId);
+    if (!cfg.enabled) {
+      await this.prisma.referralReward.deleteMany({ where: { orderId } });
+      return;
+    }
+
+    const catalog = catalogTotalFromItems(order.items);
 
     const receivers = new Map<string, 1 | 2>();
 

@@ -8,6 +8,7 @@ import { MediaLibraryCategory, Prisma } from '@prisma/client';
 import imageSize from 'image-size';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
+import { adminListResult, parseAdminListQuery } from '../../common/admin-list-pagination';
 import { ObjectStorageService } from '../storage/object-storage.service';
 
 const CYR_TO_LAT: Record<string, string> = {
@@ -368,6 +369,8 @@ export class MediaLibraryService {
     tab?: 'all' | 'images' | 'documents' | 'models' | 'videos';
     folderId?: string;
     scope?: 'winwin' | 'user';
+    page?: number;
+    limit?: number;
   }) {
     const andFilters: Prisma.MediaObjectWhereInput[] = [];
     const scope = params.scope ?? 'winwin';
@@ -410,16 +413,22 @@ export class MediaLibraryService {
     const where: Prisma.MediaObjectWhereInput =
       andFilters.length > 1 ? { AND: andFilters } : andFilters[0] ?? {};
 
-    const rows = await this.prisma.mediaObject.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-      include: { folder: { select: { id: true, name: true, pathKey: true } } },
-      take: 200,
-    });
-    return rows.map((r) => ({
+    const { page, limit, skip } = parseAdminListQuery(params.page, params.limit, 40, 100);
+    const [rows, total] = await Promise.all([
+      this.prisma.mediaObject.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        include: { folder: { select: { id: true, name: true, pathKey: true } } },
+        skip,
+        take: limit,
+      }),
+      this.prisma.mediaObject.count({ where }),
+    ]);
+    const items = rows.map((r) => ({
       ...r,
       publicUrl: this.storage.getPublicUrlForKey(r.storageKey),
     }));
+    return adminListResult(items, total, page, limit);
   }
 
   async getObject(id: string) {

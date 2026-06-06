@@ -1183,3 +1183,31 @@ model SiteSettings {
 
   updatedAt DateTime @updatedAt
 }
+
+/// Профиль реферальной программы для групп пользователей (фаза 1 — справочник).
+model ReferralProgramProfile {
+  id                        String   @id @default(cuid())
+  name                      String   @default("")
+  sortOrder                 Int      @default(0)
+  /// Ровно один профиль с isDefault=true — для пользователей без группы.
+  isDefault                 Boolean  @default(false)
+  /// Участие в реферальной программе.
+  enabled                   Boolean  @default(true)
+  level1Percent             Decimal  @db.Decimal(10, 4)
+  level2Percent             Decimal  @db.Decimal(10, 4)
+  minimumOrderSiteTotalRub  Int      @default(0)
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+}
+
+/// Профиль бонуса дизайнера со своего заказа (для групп пользователей).
+model DesignerBonusProfile {
+  id                                  String   @id @default(cuid())
+  name                                String   @default("")
+  sortOrder                           Int      @default(0)
+  isDefault                           Boolean  @default(false)
+  designerOwnCatalogBonusPercent      Decimal  @db.Decimal(10, 4)
+  designerOwnMinimumCatalogSiteTotalRub Int    @default(0)
+  createdAt                           DateTime @default(now())
+  updatedAt                           DateTime @updatedAt
+}

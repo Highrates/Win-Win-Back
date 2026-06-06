@@ -1,10 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ProgramConfigSyncService } from '../user-group-profiles/program-config-sync.service';
+import { UserGroupProfileResolverService } from '../user-group-profiles/user-group-profile-resolver.service';
 import type { UpdateOrderSettingsAdminDto } from './dto/order-settings-admin.dto';
 import {
-  ORDER_CFG_DESIGNER_OWN_CATALOG_BONUS_PERCENT,
-  ORDER_CFG_DESIGNER_OWN_MIN_CATALOG_SITE_TOTAL_RUB,
   ORDER_CFG_KP_MAX_LINE_DISCOUNT_PERCENT,
   ORDER_PROGRAM_DEFAULTS,
 } from './order-program.constants';
@@ -13,12 +13,6 @@ function parsePercent(raw: string | undefined, fallback: number): number {
   const n = Number(String(raw ?? '').replace(',', '.').trim());
   if (!Number.isFinite(n) || n < 0) return fallback;
   return Math.min(100, n);
-}
-
-function parseMinRub(raw: string | undefined, fallback: number): number {
-  const n = Number(String(raw ?? '').replace(',', '.').trim());
-  if (!Number.isFinite(n) || n < 0) return fallback;
-  return Math.floor(n);
 }
 
 export type ResolvedOrderProgramConfig = {
@@ -35,35 +29,26 @@ export type OrderSettingsAdminPayload = ResolvedOrderProgramConfig & {
 
 @Injectable()
 export class OrderSettingsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private profileResolver: UserGroupProfileResolverService,
+    private configSync: ProgramConfigSyncService,
+  ) {}
 
-  private async readMap(): Promise<Record<string, string>> {
-    const keys = [
-      ORDER_CFG_DESIGNER_OWN_CATALOG_BONUS_PERCENT,
-      ORDER_CFG_DESIGNER_OWN_MIN_CATALOG_SITE_TOTAL_RUB,
-      ORDER_CFG_KP_MAX_LINE_DISCOUNT_PERCENT,
-    ] as const;
-    const rows = await this.prisma.referralConfig.findMany({
-      where: { key: { in: [...keys] } },
+  private async readKpMaxLineDiscountPercent(): Promise<number> {
+    const row = await this.prisma.referralConfig.findUnique({
+      where: { key: ORDER_CFG_KP_MAX_LINE_DISCOUNT_PERCENT },
     });
-    return Object.fromEntries(rows.map((r) => [r.key, r.value]));
+    const dk = ORDER_PROGRAM_DEFAULTS[ORDER_CFG_KP_MAX_LINE_DISCOUNT_PERCENT] ?? '100';
+    return parsePercent(row?.value, parsePercent(dk, 100));
   }
 
-  async getResolved(): Promise<ResolvedOrderProgramConfig> {
-    const map = await this.readMap();
-    const dp = ORDER_PROGRAM_DEFAULTS[ORDER_CFG_DESIGNER_OWN_CATALOG_BONUS_PERCENT] ?? '0';
-    const dm = ORDER_PROGRAM_DEFAULTS[ORDER_CFG_DESIGNER_OWN_MIN_CATALOG_SITE_TOTAL_RUB] ?? '0';
-    const dk = ORDER_PROGRAM_DEFAULTS[ORDER_CFG_KP_MAX_LINE_DISCOUNT_PERCENT] ?? '100';
+  async getResolved(userId?: string): Promise<ResolvedOrderProgramConfig> {
+    const bonus = await this.profileResolver.resolveDesignerBonusForUser(userId);
     return {
-      designerOwnCatalogBonusPercent: parsePercent(map[ORDER_CFG_DESIGNER_OWN_CATALOG_BONUS_PERCENT], parsePercent(dp, 0)),
-      designerOwnMinimumCatalogSiteTotalRub: parseMinRub(
-        map[ORDER_CFG_DESIGNER_OWN_MIN_CATALOG_SITE_TOTAL_RUB],
-        parseMinRub(dm, 0),
-      ),
-      kpMaxLineDiscountPercent: parsePercent(
-        map[ORDER_CFG_KP_MAX_LINE_DISCOUNT_PERCENT],
-        parsePercent(dk, 100),
-      ),
+      designerOwnCatalogBonusPercent: bonus.designerOwnCatalogBonusPercent,
+      designerOwnMinimumCatalogSiteTotalRub: bonus.designerOwnMinimumCatalogSiteTotalRub,
+      kpMaxLineDiscountPercent: await this.readKpMaxLineDiscountPercent(),
     };
   }
 
@@ -77,29 +62,14 @@ export class OrderSettingsService {
   }
 
   async patchAdmin(dto: UpdateOrderSettingsAdminDto): Promise<OrderSettingsAdminPayload> {
-    const upsert = (key: string, value: string, description: string) =>
-      this.prisma.referralConfig.upsert({
-        where: { key },
-        update: { value, description },
-        create: { key, value, description },
-      });
-    await this.prisma.$transaction([
-      upsert(
-        ORDER_CFG_DESIGNER_OWN_CATALOG_BONUS_PERCENT,
-        String(dto.designerOwnCatalogBonusPercent),
-        'Процент бонуса дизайнера с суммы «цена на сайте» своего заказа (строчки каталога), 0–100',
-      ),
-      upsert(
-        ORDER_CFG_DESIGNER_OWN_MIN_CATALOG_SITE_TOTAL_RUB,
-        String(Math.max(0, Math.floor(dto.designerOwnMinimumCatalogSiteTotalRub))),
-        'Минимальная сумма «цена на сайте» по заказу для бонуса дизайнера со своего заказа, ₽',
-      ),
-      upsert(
-        ORDER_CFG_KP_MAX_LINE_DISCOUNT_PERCENT,
-        String(dto.kpMaxLineDiscountPercent),
-        'Максимальная скидка по строке коммерческого предложения, % (не выше этого значения и не выше 100%)',
-      ),
-    ]);
+    if (dto.kpMaxLineDiscountPercent === undefined) {
+      throw new BadRequestException(
+        'Укажите kpMaxLineDiscountPercent. Бонусы дизайнера настраиваются через settings/admin/designer-bonus-profiles.',
+      );
+    }
+
+    await this.configSync.mirrorKpMaxLineDiscountPercent(dto.kpMaxLineDiscountPercent);
+
     return this.getAdmin();
   }
 

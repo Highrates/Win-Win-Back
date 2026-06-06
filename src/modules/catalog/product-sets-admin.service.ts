@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { adminListResult, parseAdminListQuery } from '../../common/admin-list-pagination';
 import { ObjectStorageService } from '../storage/object-storage.service';
 import { MediaLibraryService } from '../media-library/media-library.service';
 import { CreateProductSetAdminDto, UpdateProductSetAdminDto } from './dto/product-sets-admin.dto';
@@ -128,25 +129,32 @@ export class ProductSetsAdminService {
     if (!b) throw new BadRequestException('Бренд не найден');
   }
 
-  async listForAdmin(q?: string) {
+  async listForAdmin(q?: string, pageRaw?: number, limitRaw?: number) {
     const where =
       q && q.trim()
         ? { name: { contains: q.trim(), mode: 'insensitive' as const } }
         : {};
-    const rows = await this.prisma.curatedProductSet.findMany({
-      where,
-      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
-      include: {
-        _count: { select: { items: true } },
-      },
-    });
-    return rows.map((r) => ({
+    const { page, limit, skip } = parseAdminListQuery(pageRaw, limitRaw);
+    const [rows, total] = await Promise.all([
+      this.prisma.curatedProductSet.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+        include: {
+          _count: { select: { items: true } },
+        },
+      }),
+      this.prisma.curatedProductSet.count({ where }),
+    ]);
+    const items = rows.map((r) => ({
       id: r.id,
       name: r.name,
       slug: r.slug,
       isActive: r.isActive,
       itemCount: r._count.items,
     }));
+    return adminListResult(items, total, page, limit);
   }
 
   async getForAdmin(id: string) {

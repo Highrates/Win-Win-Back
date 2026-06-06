@@ -59,6 +59,8 @@ export class MediaLibraryAdminController {
     @Query('tab') tabRaw?: string,
     @Query('folderId') folderId?: string,
     @Query('scope') scopeRaw?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
   ) {
     const tab =
       tabRaw === 'images' ||
@@ -68,7 +70,14 @@ export class MediaLibraryAdminController {
         ? tabRaw
         : 'all';
     const scope = scopeRaw === 'user' ? 'user' : 'winwin';
-    return this.media.listObjects({ q, tab, folderId, scope });
+    return this.media.listObjects({
+      q,
+      tab,
+      folderId,
+      scope,
+      page: page ? parseInt(page, 10) : undefined,
+      limit: limit ? parseInt(limit, 10) : undefined,
+    });
   }
 
   @Get('objects/:id')

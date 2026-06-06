@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { CuratedCollectionKind, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { adminListResult, parseAdminListQuery } from '../../common/admin-list-pagination';
 import { ObjectStorageService } from '../storage/object-storage.service';
 import { MediaLibraryService } from '../media-library/media-library.service';
 import {
@@ -131,19 +132,25 @@ export class CuratedCollectionsAdminService {
     if (n !== ids.length) throw new BadRequestException('Один из брендов не найден');
   }
 
-  async listForAdmin(q?: string) {
+  async listForAdmin(q?: string, pageRaw?: number, limitRaw?: number) {
     const where =
       q && q.trim()
         ? { name: { contains: q.trim(), mode: 'insensitive' as const } }
         : {};
-    const rows = await this.prisma.curatedCollection.findMany({
-      where,
-      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
-      include: {
-        _count: { select: { productItems: true, brandItems: true } },
-      },
-    });
-    return rows.map((r) => ({
+    const { page, limit, skip } = parseAdminListQuery(pageRaw, limitRaw);
+    const [rows, total] = await Promise.all([
+      this.prisma.curatedCollection.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+        include: {
+          _count: { select: { productItems: true, brandItems: true } },
+        },
+      }),
+      this.prisma.curatedCollection.count({ where }),
+    ]);
+    const items = rows.map((r) => ({
       id: r.id,
       name: r.name,
       slug: r.slug,
@@ -151,6 +158,7 @@ export class CuratedCollectionsAdminService {
       isActive: r.isActive,
       itemCount: r.kind === CuratedCollectionKind.PRODUCT ? r._count.productItems : r._count.brandItems,
     }));
+    return adminListResult(items, total, page, limit);
   }
 
   async getForAdmin(id: string) {

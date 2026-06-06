@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { CuratedCollectionKind, Prisma, ProductPriceMode } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { adminListResult, parseAdminListQuery } from '../../common/admin-list-pagination';
 import { ProductSearchIndexService } from '../../meilisearch/product-search-index.service';
 import { ObjectStorageService } from '../storage/object-storage.service';
 import {
@@ -222,19 +223,27 @@ export class CatalogProductAdminService {
     }
   }
 
-  async listProductsForAdmin(q?: string) {
+  async listProductsForAdmin(q?: string, pageRaw?: number, limitRaw?: number) {
     const trim = q?.trim();
     const where: Prisma.ProductWhereInput = trim
       ? {
           OR: [
             { name: { contains: trim, mode: 'insensitive' } },
             { slug: { contains: trim, mode: 'insensitive' } },
+            {
+              variants: {
+                some: { sku: { contains: trim, mode: 'insensitive' } },
+              },
+            },
           ],
         }
       : {};
-    const [rows, cats] = await Promise.all([
+    const { page, limit, skip } = parseAdminListQuery(pageRaw, limitRaw);
+    const [rows, total, cats] = await Promise.all([
       this.prisma.product.findMany({
         where,
+        skip,
+        take: limit,
         select: {
           id: true,
           name: true,
@@ -258,12 +267,13 @@ export class CatalogProductAdminService {
         },
         orderBy: [{ updatedAt: 'desc' }],
       }),
+      this.prisma.product.count({ where }),
       this.prisma.category.findMany({
         select: { id: true, name: true, parentId: true },
       }),
     ]);
     const byId = new Map(cats.map((c) => [c.id, { name: c.name, parentId: c.parentId }]));
-    return rows.map((r) => {
+    const items = rows.map((r) => {
       const dv = r.variants[0];
       const thumbUrl = r.images[0]?.url ?? null;
       return {
@@ -279,6 +289,7 @@ export class CatalogProductAdminService {
         thumbUrl,
       };
     });
+    return adminListResult(items, total, page, limit);
   }
 
   async deleteProducts(ids: string[]) {
