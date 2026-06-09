@@ -92,4 +92,14 @@ describe('UserGroupProfileResolverService', () => {
     });
     await expect(svc.getUserGroupLabel('u1')).resolves.toBe('Pro+');
   });
+
+  it('resolveGroupPricingProfileIdForUser: id профиля или null', async () => {
+    prisma.userGroupMember.findUnique.mockResolvedValue({
+      group: { pricingProfileId: 'pp-1' },
+    });
+    await expect(svc.resolveGroupPricingProfileIdForUser('u1')).resolves.toBe('pp-1');
+
+    prisma.userGroupMember.findUnique.mockResolvedValue(null);
+    await expect(svc.resolveGroupPricingProfileIdForUser('u2')).resolves.toBeNull();
+  });
 });

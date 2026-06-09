@@ -102,12 +102,14 @@ export class CatalogController {
   @Public()
   @Get('products/:slug')
   product(
+    @Headers('authorization') authorization: string | undefined,
     @Param('slug') slug: string,
     @Query('vs') vs?: string,
     @Query('v') v?: string,
     /** Размер (id или sizeSlug) без выбора SKU — фильтр галереи и цены */
     @Query('sz') sz?: string,
   ) {
+    const userId = userIdFromBearerHeader(this.jwtService, authorization);
     const variantSlug = vs?.trim();
     const variantId = v?.trim();
     const sizeParam = sz?.trim();
@@ -115,6 +117,7 @@ export class CatalogController {
       ...(variantSlug ? { variantSlug } : {}),
       ...(variantId ? { variantId } : {}),
       ...(sizeParam ? { sizeParam } : {}),
+      userId,
     });
   }
 }

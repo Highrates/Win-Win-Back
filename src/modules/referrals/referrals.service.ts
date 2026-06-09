@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { OrderStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { OrderSettingsService } from '../order-settings/order-settings.service';
@@ -30,6 +30,12 @@ export type PartnerProgramBonusLineDto = {
 };
 
 export type PartnerProgramSummaryDto = {
+  isWinWinPartner: boolean;
+  /** Текущий профиль бонуса дизайнера (группа или основной). */
+  designerBonus: {
+    bonusPercent: number;
+    minCatalogSiteTotalRub: number;
+  };
   program: {
     enabled: boolean;
     level1Percent: number;
@@ -144,6 +150,78 @@ export class ReferralsService {
     return tierByBuyer;
   }
 
+  private sumBonusRub(lines: PartnerProgramBonusLineDto[]): Prisma.Decimal {
+    let sum = new Prisma.Decimal(0);
+    for (const line of lines) {
+      sum = sum.add(new Prisma.Decimal(line.bonusRub));
+    }
+    return sum;
+  }
+
+  /** Завершённые собственные заказы: % и сумма из профиля бонуса дизайнера (группа / снимок). */
+  private async buildOwnOrderBonusLines(userId: string): Promise<PartnerProgramBonusLineDto[]> {
+    const ownOrderCfg = await this.orderSettings.getResolved(userId);
+    const ownOrders = await this.prisma.order.findMany({
+      where: { userId, status: OrderStatus.COMPLETED },
+      include: { items: { select: { price: true, quantity: true } } },
+      orderBy: { updatedAt: 'desc' },
+      take: 120,
+    });
+    const lines: PartnerProgramBonusLineDto[] = [];
+    for (const o of ownOrders) {
+      const catalog = catalogTotalFromItems(o.items);
+      const orderBonus = await this.profileResolver.resolveDesignerBonusForOrder({
+        userId,
+        buyerDesignerBonusProfileIdSnapshot: o.buyerDesignerBonusProfileIdSnapshot,
+      });
+      const bonusCfg = {
+        ...ownOrderCfg,
+        designerOwnCatalogBonusPercent: orderBonus.designerOwnCatalogBonusPercent,
+        designerOwnMinimumCatalogSiteTotalRub: orderBonus.designerOwnMinimumCatalogSiteTotalRub,
+      };
+      const bonus = this.orderSettings.computeDesignerOwnCatalogBonusRub(bonusCfg, catalog);
+      const pct = orderBonus.designerOwnCatalogBonusPercent;
+      lines.push({
+        orderId: o.id,
+        orderUpdatedAt: o.updatedAt.toISOString(),
+        catalogTotalRub: catalog.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toFixed(2),
+        purchaserUserId: userId,
+        tier: 1,
+        percentApplied: pct,
+        bonusRub: bonus.toFixed(2),
+        orderStatus: o.status,
+        pipeline: false,
+        source: 'OWN_ORDER',
+      });
+    }
+    lines.sort((a, b) => Date.parse(b.orderUpdatedAt) - Date.parse(a.orderUpdatedAt));
+    return lines;
+  }
+
+  private makePartnerProgramSummary(
+    isWinWinPartner: boolean,
+    designerBonus: PartnerProgramSummaryDto['designerBonus'],
+    partnerProgram: ResolvedReferralProgram,
+    totals: PartnerProgramSummaryDto['totals'],
+    personalLines: PartnerProgramBonusLineDto[],
+    teamLines: PartnerProgramBonusLineDto[],
+  ): PartnerProgramSummaryDto {
+    return {
+      isWinWinPartner,
+      designerBonus,
+      program: {
+        enabled: partnerProgram.enabled,
+        level1Percent: partnerProgram.level1Percent,
+        level2Percent: partnerProgram.level2Percent,
+        minimumOrderSiteTotalRub: partnerProgram.minimumOrderSiteTotalRub,
+        basisNote: 'SITE_CATALOG_LINE_PRICES',
+      },
+      totals,
+      personalLines,
+      teamLines,
+    };
+  }
+
   private computeLineBonus(
     catalog: Prisma.Decimal,
     minRub: number,
@@ -160,22 +238,62 @@ export class ReferralsService {
     return { bonus, percent: pct };
   }
 
-  async getPartnerProgramSummary(partnerUserId: string): Promise<PartnerProgramSummaryDto> {
+  async getPartnerProgramSummary(userId: string): Promise<PartnerProgramSummaryDto> {
     const p = await this.prisma.userProfile.findUnique({
-      where: { userId: partnerUserId },
+      where: { userId },
       select: { winWinPartnerApproved: true },
     });
-    if (!p?.winWinPartnerApproved) {
-      throw new ForbiddenException('Раздел дохода доступен одобренным партнёрам Win-Win');
+    const isWinWinPartner = Boolean(p?.winWinPartnerApproved);
+
+    const partnerProgram = await this.profileResolver.resolveReferralProgramForUser(userId);
+    const designerBonusResolved = await this.profileResolver.resolveDesignerBonusForUser(userId);
+    const designerBonus = {
+      bonusPercent: designerBonusResolved.designerOwnCatalogBonusPercent,
+      minCatalogSiteTotalRub: designerBonusResolved.designerOwnMinimumCatalogSiteTotalRub,
+    };
+
+    const ownOrderLines = await this.buildOwnOrderBonusLines(userId);
+    const ownCompleted = this.sumBonusRub(ownOrderLines);
+
+    if (!isWinWinPartner) {
+      const completed = ownCompleted.toFixed(2);
+      return this.makePartnerProgramSummary(
+        false,
+        designerBonus,
+        partnerProgram,
+        {
+          personalPipelineRub: '0.00',
+          personalCompletedRub: completed,
+          teamPipelineRub: '0.00',
+          teamCompletedRub: '0.00',
+          payableFromCompletedRub: completed,
+          pipelineOutlookRub: '0.00',
+        },
+        ownOrderLines,
+        [],
+      );
     }
 
-    const partnerProgram = await this.profileResolver.resolveReferralProgramForUser(partnerUserId);
     if (!partnerProgram.enabled) {
-      return this.emptyPartnerProgramSummary(partnerProgram);
+      const completed = ownCompleted.toFixed(2);
+      return this.makePartnerProgramSummary(
+        true,
+        designerBonus,
+        partnerProgram,
+        {
+          personalPipelineRub: '0.00',
+          personalCompletedRub: completed,
+          teamPipelineRub: '0.00',
+          teamCompletedRub: '0.00',
+          payableFromCompletedRub: completed,
+          pipelineOutlookRub: '0.00',
+        },
+        ownOrderLines,
+        [],
+      );
     }
 
-    const ownOrderCfg = await this.orderSettings.getResolved(partnerUserId);
-    const tierByBuyer = await this.buildBuyerTierMap(partnerUserId);
+    const tierByBuyer = await this.buildBuyerTierMap(userId);
     const buyerIds = [...tierByBuyer.keys()];
     const buyerOrderContextCache = new Map<
       string,
@@ -205,7 +323,7 @@ export class ReferralsService {
 
     for (const o of orders) {
       const buyerId = o.userId;
-      if (buyerId === partnerUserId) continue;
+      if (buyerId === userId) continue;
       const tier = tierByBuyer.get(buyerId);
       if (!tier) continue;
 
@@ -252,39 +370,8 @@ export class ReferralsService {
       }
     }
 
-    const ownOrders = await this.prisma.order.findMany({
-      where: { userId: partnerUserId, status: OrderStatus.COMPLETED },
-      include: { items: { select: { price: true, quantity: true } } },
-      orderBy: { updatedAt: 'desc' },
-      take: 120,
-    });
-    for (const o of ownOrders) {
-      const catalog = catalogTotalFromItems(o.items);
-      const orderBonus = await this.profileResolver.resolveDesignerBonusForOrder({
-        userId: partnerUserId,
-        buyerDesignerBonusProfileIdSnapshot: o.buyerDesignerBonusProfileIdSnapshot,
-      });
-      const bonusCfg = {
-        ...ownOrderCfg,
-        designerOwnCatalogBonusPercent: orderBonus.designerOwnCatalogBonusPercent,
-        designerOwnMinimumCatalogSiteTotalRub: orderBonus.designerOwnMinimumCatalogSiteTotalRub,
-      };
-      const bonus = this.orderSettings.computeDesignerOwnCatalogBonusRub(bonusCfg, catalog);
-      const pct = orderBonus.designerOwnCatalogBonusPercent;
-      personalLines.push({
-        orderId: o.id,
-        orderUpdatedAt: o.updatedAt.toISOString(),
-        catalogTotalRub: catalog.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toFixed(2),
-        purchaserUserId: partnerUserId,
-        tier: 1,
-        percentApplied: pct,
-        bonusRub: bonus.toFixed(2),
-        orderStatus: o.status,
-        pipeline: false,
-        source: 'OWN_ORDER',
-      });
-      personalCompleted = personalCompleted.add(bonus);
-    }
+    personalLines.push(...ownOrderLines);
+    personalCompleted = personalCompleted.add(ownCompleted);
 
     const cmpUpdated = (a: PartnerProgramBonusLineDto, b: PartnerProgramBonusLineDto) =>
       Date.parse(b.orderUpdatedAt) - Date.parse(a.orderUpdatedAt);
@@ -294,15 +381,11 @@ export class ReferralsService {
     const payableFromCompleted = personalCompleted.add(teamCompleted);
     const pipelineOutlook = personalPipeline.add(teamPipeline);
 
-    return {
-      program: {
-        enabled: partnerProgram.enabled,
-        level1Percent: partnerProgram.level1Percent,
-        level2Percent: partnerProgram.level2Percent,
-        minimumOrderSiteTotalRub: partnerProgram.minimumOrderSiteTotalRub,
-        basisNote: 'SITE_CATALOG_LINE_PRICES',
-      },
-      totals: {
+    return this.makePartnerProgramSummary(
+      true,
+      designerBonus,
+      partnerProgram,
+      {
         personalPipelineRub: personalPipeline.toFixed(2),
         personalCompletedRub: personalCompleted.toFixed(2),
         teamPipelineRub: teamPipeline.toFixed(2),
@@ -312,31 +395,7 @@ export class ReferralsService {
       },
       personalLines,
       teamLines,
-    };
-  }
-
-  private emptyPartnerProgramSummary(
-    partnerProgram: ResolvedReferralProgram,
-  ): PartnerProgramSummaryDto {
-    return {
-      program: {
-        enabled: partnerProgram.enabled,
-        level1Percent: partnerProgram.level1Percent,
-        level2Percent: partnerProgram.level2Percent,
-        minimumOrderSiteTotalRub: partnerProgram.minimumOrderSiteTotalRub,
-        basisNote: 'SITE_CATALOG_LINE_PRICES',
-      },
-      totals: {
-        personalPipelineRub: '0.00',
-        personalCompletedRub: '0.00',
-        teamPipelineRub: '0.00',
-        teamCompletedRub: '0.00',
-        payableFromCompletedRub: '0.00',
-        pipelineOutlookRub: '0.00',
-      },
-      personalLines: [],
-      teamLines: [],
-    };
+    );
   }
 
   async ensureRewardsForCompletedOrder(orderId: string): Promise<void> {

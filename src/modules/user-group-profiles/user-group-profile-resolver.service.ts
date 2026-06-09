@@ -74,6 +74,16 @@ export class UserGroupProfileResolverService {
     return label || null;
   }
 
+  /** `pricingProfileId` группы пользователя; null — tier-цены витрины не применяются. */
+  async resolveGroupPricingProfileIdForUser(userId: string): Promise<string | null> {
+    const member = await this.prisma.userGroupMember.findUnique({
+      where: { userId },
+      include: { group: { select: { pricingProfileId: true } } },
+    });
+    const id = member?.group.pricingProfileId?.trim();
+    return id || null;
+  }
+
   async resolveReferralProgramByProfileId(profileId: string): Promise<ResolvedReferralProgram | null> {
     const row = await this.prisma.referralProgramProfile.findUnique({ where: { id: profileId } });
     return row ? mapReferralProfile(row) : null;

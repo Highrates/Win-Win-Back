@@ -13,6 +13,7 @@ import {
   collectCategoryAndDescendantIds,
   meilisearchCategoryScopeFilter,
 } from './category-scope';
+import { CatalogTierPricingService } from './catalog-tier-pricing.service';
 
 /**
  * Убирает повторы одного товара в выдаче (например, при склейке «свои + по доп. категории» или сбое индекса).
@@ -51,6 +52,7 @@ export class CatalogService {
   constructor(
     private prisma: PrismaService,
     private meilisearch: MeilisearchService,
+    private tierPricing: CatalogTierPricingService,
   ) {}
 
   async getCategories() {
@@ -180,9 +182,15 @@ export class CatalogService {
    */
   async getProductBySlug(
     slug: string,
-    variantQuery?: { variantSlug?: string; variantId?: string; sizeParam?: string },
+    variantQuery?: {
+      variantSlug?: string;
+      variantId?: string;
+      sizeParam?: string;
+      userId?: string;
+    },
   ) {
     void variantQuery;
+    const userId = variantQuery?.userId;
     const row = await this.prisma.product.findUnique({
       where: { slug, isActive: true },
       include: {
@@ -227,6 +235,10 @@ export class CatalogService {
             variantLabel: true,
             modificationId: true,
             price: true,
+            priceMode: true,
+            costPriceCny: true,
+            weightKg: true,
+            volumeLiters: true,
             sku: true,
             isDefault: true,
             model3dUrl: true,
@@ -251,23 +263,23 @@ export class CatalogService {
 
     const shared = row.images.map((i) => ({ url: i.url, alt: i.alt }));
 
-    const decimalPrice = (p: unknown): number => {
-      if (p == null) return 0;
-      if (typeof p === 'number' && Number.isFinite(p)) return p;
-      const n = parseFloat(String(p));
-      return Number.isFinite(n) ? n : 0;
-    };
-
-    const prices = row.variants.map((v) => decimalPrice(v.price)).filter((n) => n > 0);
+    const productCategories = row.productCategories.map((pc) => ({ categoryId: pc.categoryId }));
+    const displayPrices = await this.tierPricing.resolveVariantDisplayPricesForUser(
+      userId,
+      row.categoryId,
+      productCategories,
+      row.variants,
+    );
+    const prices = displayPrices.filter((n) => n > 0);
     const priceMin = prices.length ? Math.min(...prices) : 0;
     const priceMax = prices.length ? Math.max(...prices) : 0;
 
-    const variants = row.variants.map((v) => ({
+    const variants = row.variants.map((v, i) => ({
       id: v.id,
       variantSlug: v.variantSlug,
       variantLabel: v.variantLabel,
       modificationId: v.modificationId,
-      price: v.price,
+      price: displayPrices[i] > 0 ? displayPrices[i] : v.price,
       sku: v.sku,
       isDefault: v.isDefault,
       model3dUrl: v.model3dUrl,
@@ -385,7 +397,8 @@ export class CatalogService {
       const deduped = dedupeProductHitsById(rawHits).filter(
         (h): h is Record<string, unknown> & { id: string } => typeof h.id === 'string' && !!h.id,
       );
-      const hits = await enrichProductsWithLikedByMe(this.prisma, deduped, params.userId);
+      const liked = await enrichProductsWithLikedByMe(this.prisma, deduped, params.userId);
+      const hits = await this.tierPricing.enrichSearchHits(liked, params.userId);
       return {
         hits,
         total: result.estimatedTotalHits ?? hits.length,
@@ -501,7 +514,8 @@ export class CatalogService {
         }) as Record<string, unknown> & { id: string };
       }),
     );
-    const hits = await enrichProductsWithLikedByMe(this.prisma, rawHits, userId);
+    const liked = await enrichProductsWithLikedByMe(this.prisma, rawHits, userId);
+    const hits = await this.tierPricing.enrichSearchHits(liked, userId);
     return { hits, total, page, limit };
   }
 
@@ -685,7 +699,27 @@ export class CatalogService {
       };
     });
 
-    const productsWithLikes = await enrichProductsWithLikedByMe(this.prisma, products, userId);
+    const tierHits = products.map((p) => {
+      const priceNum = p.price != null ? priceToNumber(p.price) : 0;
+      return {
+        id: p.id,
+        price: priceNum,
+        priceMin: priceNum,
+        priceMax: priceNum,
+        sortPrice: priceNum,
+      };
+    });
+    const enrichedTierHits = await this.tierPricing.enrichSearchHits(tierHits, userId);
+    const tierPriceByProductId = new Map(
+      enrichedTierHits.map((h) => [h.id, h.price as number]),
+    );
+    const productsWithTier = products.map((p) => {
+      const tierPrice = tierPriceByProductId.get(p.id);
+      if (tierPrice == null || !Number.isFinite(tierPrice) || tierPrice <= 0) return p;
+      return { ...p, price: tierPrice };
+    });
+
+    const productsWithLikes = await enrichProductsWithLikedByMe(this.prisma, productsWithTier, userId);
 
     return {
       slug: col.slug,
@@ -770,11 +804,30 @@ export class CatalogService {
         id: dv?.id ?? pr.id,
         slug: pr.slug,
         name: displayName,
-        price: dv?.price ?? 0,
+        price: dv?.price != null ? priceToNumber(dv.price) : 0,
         thumbUrl: imageUrls[0] ?? null,
         imageUrls,
       });
     }
+
+    const tierHits = items.map((it) => ({
+      id: it.productId,
+      price: it.price,
+      priceMin: it.price,
+      priceMax: it.price,
+      sortPrice: it.price,
+    }));
+    const enrichedTierHits = await this.tierPricing.enrichSearchHits(tierHits, userId);
+    const tierPriceByProductId = new Map(
+      enrichedTierHits.map((h) => [h.id, h.price as number]),
+    );
+    for (const it of items) {
+      const tierPrice = tierPriceByProductId.get(it.productId);
+      if (tierPrice != null && Number.isFinite(tierPrice) && tierPrice > 0) {
+        it.price = tierPrice;
+      }
+    }
+
     const likedRows = await enrichProductsWithLikedByMe(
       this.prisma,
       items.map((it) => ({ id: it.productId })),

@@ -447,7 +447,10 @@ export class UsersService {
       designerCasesCount = typeof casesCount === 'number' ? casesCount : null;
     }
 
-    const userGroupLabel = await this.profileResolver.getUserGroupLabel(userId);
+    const [userGroupLabel, designerBonus] = await Promise.all([
+      this.profileResolver.getUserGroupLabel(userId),
+      this.profileResolver.resolveDesignerBonusForUser(userId),
+    ]);
 
     return mapUserProfileToVitrineDto(
       p,
@@ -458,6 +461,7 @@ export class UsersService {
       designerLikesUserCount,
       designerCasesCount,
       userGroupLabel,
+      designerBonus.designerOwnCatalogBonusPercent,
     );
   }
 

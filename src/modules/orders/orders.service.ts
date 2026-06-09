@@ -9,6 +9,7 @@ import { MailService } from '../auth/mail.service';
 import { OrderChatService } from '../order-chat/order-chat.service';
 import { ReferralsService } from '../referrals/referrals.service';
 import { OrderProgramSnapshotService } from '../user-groups/order-program-snapshot.service';
+import { CatalogTierPricingService } from '../catalog/catalog-tier-pricing.service';
 import type {
   AddOrderPreparationLineDto,
   PatchOrderPreparationDto,
@@ -94,6 +95,7 @@ export class OrdersService {
     private readonly config: ConfigService,
     private readonly referrals: ReferralsService,
     private readonly orderProgramSnapshots: OrderProgramSnapshotService,
+    private readonly tierPricing: CatalogTierPricingService,
   ) {}
 
   async findByUser(userId: string, page = 1, limit = 20, scopeRaw?: string) {
@@ -418,36 +420,18 @@ export class OrdersService {
     }
   }
 
-  private async resolveUnitPriceRub(
+  private resolveUnitPriceRub(
+    userId: string,
     productId: string,
     productVariantId: string | null,
     snapshot: Record<string, unknown> | null,
   ): Promise<number> {
-    if (productVariantId) {
-      const v = await this.prisma.productVariant.findFirst({
-        where: { id: productVariantId, productId, isActive: true },
-        select: { price: true },
-      });
-      if (v) {
-        const n = priceToNumber(v.price);
-        if (n > 0) return n;
-      }
-    }
-    const min = snapshot?.catalogPriceMinRub;
-    const max = snapshot?.catalogPriceMaxRub;
-    if (typeof min === 'number' && Number.isFinite(min) && min > 0) {
-      return min;
-    }
-    if (typeof max === 'number' && Number.isFinite(max) && max > 0) {
-      return max;
-    }
-    const def = await this.prisma.productVariant.findFirst({
-      where: { productId, isActive: true },
-      orderBy: [{ isDefault: 'desc' }, { sortOrder: 'asc' }],
-      select: { price: true },
-    });
-    const n = def ? priceToNumber(def.price) : 0;
-    return n > 0 ? n : 0;
+    return this.tierPricing.resolveOrderLineUnitPriceRub(
+      userId,
+      productId,
+      productVariantId,
+      snapshot,
+    );
   }
 
   private formatPriceLabel(unitRub: number, snapshot: Record<string, unknown> | null): string {
@@ -554,7 +538,7 @@ export class OrdersService {
     await this.validateProductLine(dto.productId, dto.productVariantId);
     const snapshot = (dto.snapshot ?? {}) as Record<string, unknown>;
     const variantId = dto.productVariantId?.trim() || null;
-    const unitRub = await this.resolveUnitPriceRub(dto.productId, variantId, snapshot);
+    const unitRub = await this.resolveUnitPriceRub(userId, dto.productId, variantId, snapshot);
     const order = await this.findOrCreateDraftOrder(userId);
     const maxSort = await this.prisma.orderItem.aggregate({
       where: { orderId: order.id },

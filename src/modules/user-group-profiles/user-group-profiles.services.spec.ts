@@ -295,6 +295,16 @@ describe('ReferralsService.getPartnerProgramSummary', () => {
         level2Percent: 3,
         minimumOrderSiteTotalRub: 0,
       }),
+      resolveDesignerBonusForUser: vi.fn().mockResolvedValue({
+        profileId: 'bonus-a',
+        designerOwnCatalogBonusPercent: 0,
+        designerOwnMinimumCatalogSiteTotalRub: 0,
+      }),
+      resolveDesignerBonusForOrder: vi.fn().mockResolvedValue({
+        profileId: 'bonus-a',
+        designerOwnCatalogBonusPercent: 0,
+        designerOwnMinimumCatalogSiteTotalRub: 0,
+      }),
     };
     const orderSettings = {
       getResolved: vi.fn().mockResolvedValue({
@@ -338,9 +348,11 @@ describe('ReferralsService.getPartnerProgramSummary', () => {
 
     const summary = await svc.getPartnerProgramSummary('partner-1');
 
+    expect(summary.isWinWinPartner).toBe(true);
     expect(summary.program.enabled).toBe(false);
     expect(summary.personalLines.filter((l) => l.source === 'REFERRAL')).toHaveLength(0);
     expect(summary.teamLines).toHaveLength(0);
+    expect(summary.designerBonus.bonusPercent).toBe(0);
     expect(summary.totals.pipelineOutlookRub).toBe('0.00');
     expect(summary.totals.teamCompletedRub).toBe('0.00');
   });

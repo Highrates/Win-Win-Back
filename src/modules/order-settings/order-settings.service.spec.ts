@@ -40,3 +40,26 @@ describe('OrderSettingsService.patchAdmin', () => {
     expect(configSync.mirrorKpMaxLineDiscountPercent).not.toHaveBeenCalled();
   });
 });
+
+describe('OrderSettingsService.getResolved', () => {
+  it('передаёт userId в resolveDesignerBonusForUser', async () => {
+    const profileResolver = {
+      resolveDesignerBonusForUser: vi.fn().mockResolvedValue({
+        profileId: 'des-vip',
+        designerOwnCatalogBonusPercent: 12,
+        designerOwnMinimumCatalogSiteTotalRub: 100_000,
+      }),
+    };
+    const prisma = {
+      referralConfig: { findUnique: vi.fn().mockResolvedValue({ value: '100' }) },
+    };
+    const svc = new OrderSettingsService(prisma as never, profileResolver as never, {
+      mirrorKpMaxLineDiscountPercent: vi.fn(),
+    } as never);
+
+    const r = await svc.getResolved('user-vip');
+    expect(profileResolver.resolveDesignerBonusForUser).toHaveBeenCalledWith('user-vip');
+    expect(r.designerOwnCatalogBonusPercent).toBe(12);
+    expect(r.designerOwnMinimumCatalogSiteTotalRub).toBe(100_000);
+  });
+});

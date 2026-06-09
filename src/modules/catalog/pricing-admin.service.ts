@@ -1,10 +1,4 @@
-import {
-  BadRequestException,
-  HttpException,
-  HttpStatus,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { calcMskAndRetailRub, type PricingProfileCalcInput } from './pricing-calculation';
@@ -13,6 +7,7 @@ export type PricingProfileAdminRow = {
   id: string;
   name: string;
   sortOrder: number;
+  isDefault: boolean;
   containerType: string;
   cnyRate: string;
   usdRate: string;
@@ -54,6 +49,10 @@ export type UpsertPricingProfileDto = {
   categoryIds: string[];
 };
 
+export type PatchPricingProfileDto = Partial<UpsertPricingProfileDto> & {
+  setAsPrimary?: boolean;
+};
+
 function d(n: number): Prisma.Decimal {
   return new Prisma.Decimal(n);
 }
@@ -62,6 +61,7 @@ function rowToAdmin(p: {
   id: string;
   name: string;
   sortOrder: number;
+  isDefault: boolean;
   containerType: string;
   cnyRate: Prisma.Decimal;
   usdRate: Prisma.Decimal;
@@ -85,6 +85,7 @@ function rowToAdmin(p: {
     id: p.id,
     name: p.name,
     sortOrder: p.sortOrder,
+    isDefault: p.isDefault,
     containerType: p.containerType,
     cnyRate: p.cnyRate.toString(),
     usdRate: p.usdRate.toString(),
@@ -112,7 +113,7 @@ export class PricingAdminService {
 
   async listProfiles(): Promise<PricingProfileAdminRow[]> {
     const rows = await this.prisma.pricingProfile.findMany({
-      orderBy: [{ updatedAt: 'desc' }, { name: 'asc' }, { id: 'asc' }],
+      orderBy: [{ isDefault: 'desc' }, { updatedAt: 'desc' }, { name: 'asc' }, { id: 'asc' }],
       include: { categories: { select: { categoryId: true } } },
     });
     return rows.map(rowToAdmin);
@@ -120,17 +121,18 @@ export class PricingAdminService {
 
   async createProfile(dto: UpsertPricingProfileDto): Promise<PricingProfileAdminRow> {
     await this.assertCategoriesExist(dto.categoryIds);
-    await this.assertNoCategoryConflict(dto.categoryIds, undefined);
     this.assertContainer(dto.containerType);
 
     const cmw = this.normOptionalContainerMax(dto.containerMaxWeightKg);
     const cmv = this.normOptionalContainerMax(dto.containerMaxVolumeM3);
     this.assertContainerPair(cmw, cmv);
 
+    const existingCount = await this.prisma.pricingProfile.count();
     const created = await this.prisma.pricingProfile.create({
       data: {
         name: (dto.name ?? '').trim(),
         sortOrder: 0,
+        isDefault: existingCount === 0,
         containerType: dto.containerType.trim(),
         containerMaxWeightKg: cmw,
         containerMaxVolumeM3: cmv,
@@ -156,43 +158,101 @@ export class PricingAdminService {
     return rowToAdmin(created);
   }
 
-  async updateProfile(id: string, dto: UpsertPricingProfileDto): Promise<PricingProfileAdminRow> {
-    const existing = await this.prisma.pricingProfile.findUnique({ where: { id } });
+  async updateProfile(id: string, dto: PatchPricingProfileDto): Promise<PricingProfileAdminRow> {
+    const existing = await this.prisma.pricingProfile.findUnique({
+      where: { id },
+      include: { categories: { select: { categoryId: true } } },
+    });
     if (!existing) throw new NotFoundException('Профиль не найден');
 
-    await this.assertCategoriesExist(dto.categoryIds);
-    await this.assertNoCategoryConflict(dto.categoryIds, id);
-    this.assertContainer(dto.containerType);
+    if (dto.setAsPrimary) {
+      await this.setPrimaryProfile(id);
+    }
 
-    const cmw = this.normOptionalContainerMax(dto.containerMaxWeightKg);
-    const cmv = this.normOptionalContainerMax(dto.containerMaxVolumeM3);
+    const categoryIds = dto.categoryIds ?? existing.categories.map((c) => c.categoryId);
+    const containerType = dto.containerType ?? existing.containerType;
+    const hasFieldPatch =
+      dto.categoryIds !== undefined ||
+      dto.containerType !== undefined ||
+      dto.name !== undefined ||
+      dto.cnyRate !== undefined ||
+      dto.usdRate !== undefined ||
+      dto.eurRate !== undefined ||
+      dto.transferCommissionPct !== undefined ||
+      dto.customsAdValoremPct !== undefined ||
+      dto.customsWeightPct !== undefined ||
+      dto.vatPct !== undefined ||
+      dto.markupPct !== undefined ||
+      dto.agentRub !== undefined ||
+      dto.warehousePortUsd !== undefined ||
+      dto.fobUsd !== undefined ||
+      dto.portMskRub !== undefined ||
+      dto.extraLogisticsRub !== undefined ||
+      dto.containerMaxWeightKg !== undefined ||
+      dto.containerMaxVolumeM3 !== undefined;
+
+    if (!hasFieldPatch) {
+      const refreshed = await this.prisma.pricingProfile.findUnique({
+        where: { id },
+        include: { categories: { select: { categoryId: true } } },
+      });
+      return rowToAdmin(refreshed!);
+    }
+
+    await this.assertCategoriesExist(categoryIds);
+    this.assertContainer(containerType);
+
+    const cmw =
+      dto.containerMaxWeightKg !== undefined
+        ? this.normOptionalContainerMax(dto.containerMaxWeightKg)
+        : existing.containerMaxWeightKg;
+    const cmv =
+      dto.containerMaxVolumeM3 !== undefined
+        ? this.normOptionalContainerMax(dto.containerMaxVolumeM3)
+        : existing.containerMaxVolumeM3;
     this.assertContainerPair(cmw, cmv);
 
-    await this.prisma.pricingProfileCategory.deleteMany({ where: { profileId: id } });
+    if (dto.categoryIds !== undefined) {
+      await this.prisma.pricingProfileCategory.deleteMany({ where: { profileId: id } });
+    }
 
     const updated = await this.prisma.pricingProfile.update({
       where: { id },
       data: {
-        name: (dto.name ?? '').trim(),
-        containerType: dto.containerType.trim(),
+        ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
+        containerType: containerType.trim(),
         containerMaxWeightKg: cmw,
         containerMaxVolumeM3: cmv,
-        cnyRate: d(dto.cnyRate),
-        usdRate: d(dto.usdRate),
-        eurRate: d(dto.eurRate),
-        transferCommissionPct: d(dto.transferCommissionPct),
-        customsAdValoremPct: d(dto.customsAdValoremPct),
-        customsWeightPct: d(dto.customsWeightPct),
-        vatPct: d(dto.vatPct),
-        markupPct: d(dto.markupPct),
-        agentRub: d(dto.agentRub),
-        warehousePortUsd: d(dto.warehousePortUsd),
-        fobUsd: d(dto.fobUsd),
-        portMskRub: d(dto.portMskRub),
-        extraLogisticsRub: d(dto.extraLogisticsRub),
-        categories: {
-          create: dto.categoryIds.map((categoryId) => ({ categoryId })),
-        },
+        ...(dto.cnyRate !== undefined ? { cnyRate: d(dto.cnyRate) } : {}),
+        ...(dto.usdRate !== undefined ? { usdRate: d(dto.usdRate) } : {}),
+        ...(dto.eurRate !== undefined ? { eurRate: d(dto.eurRate) } : {}),
+        ...(dto.transferCommissionPct !== undefined
+          ? { transferCommissionPct: d(dto.transferCommissionPct) }
+          : {}),
+        ...(dto.customsAdValoremPct !== undefined
+          ? { customsAdValoremPct: d(dto.customsAdValoremPct) }
+          : {}),
+        ...(dto.customsWeightPct !== undefined
+          ? { customsWeightPct: d(dto.customsWeightPct) }
+          : {}),
+        ...(dto.vatPct !== undefined ? { vatPct: d(dto.vatPct) } : {}),
+        ...(dto.markupPct !== undefined ? { markupPct: d(dto.markupPct) } : {}),
+        ...(dto.agentRub !== undefined ? { agentRub: d(dto.agentRub) } : {}),
+        ...(dto.warehousePortUsd !== undefined
+          ? { warehousePortUsd: d(dto.warehousePortUsd) }
+          : {}),
+        ...(dto.fobUsd !== undefined ? { fobUsd: d(dto.fobUsd) } : {}),
+        ...(dto.portMskRub !== undefined ? { portMskRub: d(dto.portMskRub) } : {}),
+        ...(dto.extraLogisticsRub !== undefined
+          ? { extraLogisticsRub: d(dto.extraLogisticsRub) }
+          : {}),
+        ...(dto.categoryIds !== undefined
+          ? {
+              categories: {
+                create: categoryIds.map((categoryId) => ({ categoryId })),
+              },
+            }
+          : {}),
       },
       include: { categories: { select: { categoryId: true } } },
     });
@@ -200,20 +260,78 @@ export class PricingAdminService {
   }
 
   async deleteProfile(id: string): Promise<void> {
-    try {
-      await this.prisma.pricingProfile.delete({ where: { id } });
-    } catch {
-      throw new NotFoundException('Профиль не найден');
+    const existing = await this.prisma.pricingProfile.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Профиль не найден');
+    if (existing.isDefault) {
+      throw new BadRequestException('Нельзя удалить основной профиль');
     }
+    await this.prisma.pricingProfile.delete({ where: { id } });
   }
 
-  /** Первый подходящий профиль по основной или доп. категории (самый свежий updatedAt). */
+  private async setPrimaryProfile(id: string): Promise<void> {
+    const existing = await this.prisma.pricingProfile.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Профиль не найден');
+    await this.prisma.$transaction([
+      this.prisma.pricingProfile.updateMany({
+        where: { isDefault: true },
+        data: { isDefault: false },
+      }),
+      this.prisma.pricingProfile.update({
+        where: { id },
+        data: { isDefault: true },
+      }),
+    ]);
+  }
+
+  async findProfileById(id: string) {
+    const trimmed = id.trim();
+    if (!trimmed) return null;
+    return this.prisma.pricingProfile.findUnique({
+      where: { id: trimmed },
+      include: { categories: { select: { categoryId: true } } },
+    });
+  }
+
+  /** Профиль группы применим к товару, если пересекаются categoryIds. */
+  profileAppliesToCategoryIds(
+    profile: { categories: { categoryId: string }[] },
+    categoryIds: string[],
+  ): boolean {
+    const productCats = new Set(categoryIds.filter(Boolean));
+    if (!productCats.size) return false;
+    return profile.categories.some((c) => productCats.has(c.categoryId));
+  }
+
+  profileToCalcInput(row: {
+    containerType: string;
+    containerMaxWeightKg: Prisma.Decimal | null;
+    containerMaxVolumeM3: Prisma.Decimal | null;
+    cnyRate: Prisma.Decimal;
+    usdRate: Prisma.Decimal;
+    eurRate: Prisma.Decimal;
+    transferCommissionPct: Prisma.Decimal;
+    customsAdValoremPct: Prisma.Decimal;
+    customsWeightPct: Prisma.Decimal;
+    vatPct: Prisma.Decimal;
+    markupPct: Prisma.Decimal;
+    agentRub: Prisma.Decimal;
+    warehousePortUsd: Prisma.Decimal;
+    fobUsd: Prisma.Decimal;
+    portMskRub: Prisma.Decimal;
+    extraLogisticsRub: Prisma.Decimal;
+  }): PricingProfileCalcInput {
+    return this.profileEntityToCalc(row);
+  }
+
+  /** Основной профиль (isDefault) по пересечению категорий — для гостей и пользователей без группы. */
   async findProfileForCategoryIds(categoryIds: string[]) {
     const uniq = [...new Set(categoryIds.filter(Boolean))];
     if (!uniq.length) return null;
     return this.prisma.pricingProfile.findFirst({
-      where: { categories: { some: { categoryId: { in: uniq } } } },
-      orderBy: { updatedAt: 'desc' },
+      where: {
+        isDefault: true,
+        categories: { some: { categoryId: { in: uniq } } },
+      },
       include: { categories: { select: { categoryId: true } } },
     });
   }
@@ -306,28 +424,6 @@ export class PricingAdminService {
         'Укажите оба параметра контейнера (max вес и max объём) или оставьте оба пустыми',
       );
     }
-  }
-
-  private async assertNoCategoryConflict(categoryIds: string[], excludeProfileId?: string) {
-    const uniq = [...new Set(categoryIds.filter(Boolean))];
-    if (!uniq.length) return;
-    const conflicts = await this.prisma.pricingProfileCategory.findMany({
-      where: {
-        categoryId: { in: uniq },
-        ...(excludeProfileId ? { NOT: { profileId: excludeProfileId } } : {}),
-      },
-      select: { categoryId: true },
-    });
-    if (!conflicts.length) return;
-    const conflictingCategoryIds = [...new Set(conflicts.map((c) => c.categoryId))];
-    throw new HttpException(
-      {
-        statusCode: HttpStatus.BAD_REQUEST,
-        message: 'Для выбранных категорий уже задан другой профиль ценообразования',
-        conflictingCategoryIds,
-      },
-      HttpStatus.BAD_REQUEST,
-    );
   }
 
   private assertContainer(t: string) {

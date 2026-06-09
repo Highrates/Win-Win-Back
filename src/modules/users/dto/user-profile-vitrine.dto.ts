@@ -42,6 +42,8 @@ export type UserProfileVitrineDto = {
   designerCasesCount: number | null;
   /** Публичный лейбл группы пользователя (бейдж в ЛК), если назначена группа. */
   userGroupLabel: string | null;
+  /** % бонуса со своего заказа (группа или основной профиль) — для вкладки «Доход». */
+  designerOwnCatalogBonusPercent: number;
 };
 
 /** Select для чтения профиля ЛК без «тяжёлых» или внутренних JSON (напр. kycData). */
@@ -85,6 +87,7 @@ export function mapUserProfileToVitrineDto(
   designerLikesUserCount: number | null,
   designerCasesCount: number | null,
   userGroupLabel: string | null,
+  designerOwnCatalogBonusPercent: number,
 ): UserProfileVitrineDto {
   return {
     ...row,
@@ -95,5 +98,6 @@ export function mapUserProfileToVitrineDto(
     designerLikesUserCount,
     designerCasesCount,
     userGroupLabel,
+    designerOwnCatalogBonusPercent,
   };
 }

@@ -406,6 +406,8 @@ model PricingProfile {
   name   String @default("")
   /// Порядок в списке админки
   sortOrder Int @default(0)
+  /// Ровно один профиль с isDefault=true — для пользователей без группы (стандартные цены).
+  isDefault Boolean @default(false)
   /// "40" | "20" — тип контейнера для расчёта доли
   containerType String
   /// Если заданы оба — W90/V90 = 0,9 × эти лимиты; иначе константы по containerType

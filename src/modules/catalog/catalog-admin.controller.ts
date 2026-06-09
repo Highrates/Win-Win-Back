@@ -52,7 +52,11 @@ import {
   UpdateProductShellAdminDto,
   UpdateProductVariantAdminDto,
 } from './dto/catalog-admin.dto';
-import { PricingPreviewAdminDto, UpsertPricingProfileAdminDto } from './dto/pricing-admin.dto';
+import {
+  PatchPricingProfileAdminDto,
+  PricingPreviewAdminDto,
+  UpsertPricingProfileAdminDto,
+} from './dto/pricing-admin.dto';
 import { PricingAdminService } from './pricing-admin.service';
 import { slugifyVariantLabel } from './slug-transliteration';
 
@@ -354,7 +358,7 @@ export class CatalogAdminController {
   }
 
   @Patch('pricing-profiles/:id')
-  async updatePricingProfile(@Param('id') id: string, @Body() dto: UpsertPricingProfileAdminDto) {
+  async updatePricingProfile(@Param('id') id: string, @Body() dto: PatchPricingProfileAdminDto) {
     const row = await this.pricingAdmin.updateProfile(id, dto);
     await this.catalogAdmin.recalculateAllFormulaProductPrices();
     return row;

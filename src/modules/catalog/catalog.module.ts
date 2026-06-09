@@ -14,11 +14,14 @@ import { ProductStructureAdminService } from './product-structure-admin.service'
 import { StorageModule } from '../storage/storage.module';
 import { MediaLibraryModule } from '../media-library/media-library.module';
 import { AuthModule } from '../auth/auth.module';
+import { UserGroupProfileResolverModule } from '../user-group-profiles/user-group-profile-resolver.module';
+import { CatalogTierPricingService } from './catalog-tier-pricing.service';
 
 @Module({
-  imports: [AuthModule, StorageModule, MediaLibraryModule],
+  imports: [AuthModule, StorageModule, MediaLibraryModule, UserGroupProfileResolverModule],
   providers: [
     CatalogService,
+    CatalogTierPricingService,
     CatalogVariantPricingService,
     CatalogVariantAdminService,
     CatalogProductAdminService,
@@ -30,6 +33,6 @@ import { AuthModule } from '../auth/auth.module';
     ProductStructureAdminService,
   ],
   controllers: [CatalogController, CatalogAdminController],
-  exports: [CatalogService, StorageModule],
+  exports: [CatalogService, CatalogTierPricingService, StorageModule],
 })
 export class CatalogModule {}

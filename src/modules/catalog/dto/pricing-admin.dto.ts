@@ -3,6 +3,7 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsIn,
   IsNumber,
   IsOptional,
@@ -17,6 +18,10 @@ export class UpsertPricingProfileAdminDto {
   @IsString()
   @MaxLength(200)
   name?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  setAsPrimary?: boolean;
 
   @IsString()
   @IsIn(['40', '20'])
@@ -105,6 +110,121 @@ export class UpsertPricingProfileAdminDto {
   @IsString({ each: true })
   @MinLength(1, { each: true })
   categoryIds!: string[];
+}
+
+/** PATCH: все поля опциональны (в т.ч. только setAsPrimary). */
+export class PatchPricingProfileAdminDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  name?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  setAsPrimary?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @IsIn(['40', '20'])
+  containerType?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  containerMaxWeightKg?: number | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  containerMaxVolumeM3?: number | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  cnyRate?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  usdRate?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  eurRate?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  transferCommissionPct?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  customsAdValoremPct?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  customsWeightPct?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  vatPct?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  markupPct?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  agentRub?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  warehousePortUsd?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  fobUsd?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  portMskRub?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  extraLogisticsRub?: number;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(200)
+  @IsString({ each: true })
+  @MinLength(1, { each: true })
+  categoryIds?: string[];
 }
 
 export class PricingPreviewAdminDto {
