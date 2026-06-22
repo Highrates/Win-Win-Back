@@ -524,18 +524,87 @@ export class MediaLibraryService {
     }));
   }
 
+  private async mediaObjectReferenceCounts(ids: string[]) {
+    if (!ids.length) {
+      return new Map<string, number>();
+    }
+    const [categories, curatedCollections, curatedSets] = await Promise.all([
+      this.prisma.category.findMany({
+        where: { backgroundMediaObjectId: { in: ids } },
+        select: { backgroundMediaObjectId: true },
+      }),
+      this.prisma.curatedCollection.findMany({
+        where: { coverMediaObjectId: { in: ids } },
+        select: { coverMediaObjectId: true },
+      }),
+      this.prisma.curatedProductSet.findMany({
+        where: { coverMediaObjectId: { in: ids } },
+        select: { coverMediaObjectId: true },
+      }),
+    ]);
+    const counts = new Map<string, number>();
+    for (const row of categories) {
+      const id = row.backgroundMediaObjectId;
+      if (!id) continue;
+      counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+    for (const row of curatedCollections) {
+      const id = row.coverMediaObjectId;
+      if (!id) continue;
+      counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+    for (const row of curatedSets) {
+      const id = row.coverMediaObjectId;
+      if (!id) continue;
+      counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+    return counts;
+  }
+
   async deleteObject(id: string) {
     const row = await this.prisma.mediaObject.findUnique({ where: { id } });
     if (!row) throw new NotFoundException('Объект не найден');
-    const catRefs = await this.prisma.category.count({ where: { backgroundMediaObjectId: id } });
-    if (catRefs > 0) {
+    const refs = await this.mediaObjectReferenceCounts([id]);
+    if ((refs.get(id) ?? 0) > 0) {
       throw new BadRequestException(
-        'Объект используется как фон категории — сначала смените фон в каталоге',
+        'Объект используется в каталоге или коллекциях — сначала замените ссылку',
       );
     }
     await this.storage.removeObjectKey(row.storageKey);
     await this.prisma.mediaObject.delete({ where: { id } });
     return { ok: true as const };
+  }
+
+  async bulkDeleteObjects(ids: string[]) {
+    const unique = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
+    const deleted: string[] = [];
+    const skipped: string[] = [];
+    if (!unique.length) return { deleted, skipped };
+
+    const rows = await this.prisma.mediaObject.findMany({
+      where: { id: { in: unique } },
+      select: { id: true, storageKey: true },
+    });
+    const rowById = new Map(rows.map((row) => [row.id, row]));
+    for (const id of unique) {
+      if (!rowById.has(id)) skipped.push(id);
+    }
+
+    const refs = await this.mediaObjectReferenceCounts(rows.map((row) => row.id));
+    for (const row of rows) {
+      if ((refs.get(row.id) ?? 0) > 0) {
+        skipped.push(row.id);
+        continue;
+      }
+      try {
+        await this.storage.removeObjectKey(row.storageKey);
+        await this.prisma.mediaObject.delete({ where: { id: row.id } });
+        deleted.push(row.id);
+      } catch {
+        skipped.push(row.id);
+      }
+    }
+    return { deleted, skipped };
   }
 
   /**

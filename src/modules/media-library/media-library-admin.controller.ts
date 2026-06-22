@@ -23,7 +23,11 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { UserRole } from '@prisma/client';
 import { MediaLibraryService } from './media-library.service';
-import { CreateMediaFolderDto, UpdateMediaObjectDto } from './dto/media-library.dto';
+import {
+  BulkDeleteMediaObjectsDto,
+  CreateMediaFolderDto,
+  UpdateMediaObjectDto,
+} from './dto/media-library.dto';
 
 const uploadStorage = memoryStorage();
 const LIBRARY_UPLOAD_MAX = 100 * 1024 * 1024;
@@ -78,6 +82,11 @@ export class MediaLibraryAdminController {
       page: page ? parseInt(page, 10) : undefined,
       limit: limit ? parseInt(limit, 10) : undefined,
     });
+  }
+
+  @Post('objects/bulk-delete')
+  bulkDeleteObjects(@Body() dto: BulkDeleteMediaObjectsDto) {
+    return this.media.bulkDeleteObjects(dto.ids);
   }
 
   @Get('objects/:id')

@@ -8,7 +8,6 @@ import { AuditHttpInterceptor } from './modules/audit/audit-http.interceptor';
 import { AuditModule } from './modules/audit/audit.module';
 import { AuthSecurityExceptionFilter } from './modules/audit/auth-security.exception-filter';
 import { PrismaModule } from './prisma/prisma.module';
-import { RedisModule } from './redis/redis.module';
 import { MeilisearchModule } from './meilisearch/meilisearch.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
@@ -45,7 +44,6 @@ import { LikesModule } from './modules/likes/likes.module';
     // default limiter: 100 req/min per tracker (см. ThrottlerGuard).
     ThrottlerModule.forRoot([{ name: 'default', ttl: 60000, limit: 100 }]),
     PrismaModule,
-    RedisModule,
     MeilisearchModule,
     AuthModule,
     UsersModule,

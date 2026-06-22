@@ -1,4 +1,4 @@
-import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 export class CreateMediaFolderDto {
   @IsString()
@@ -24,4 +24,11 @@ export class UpdateMediaObjectDto {
   @IsOptional()
   @IsString()
   folderId?: string | null;
+}
+
+export class BulkDeleteMediaObjectsDto {
+  @IsArray()
+  @ArrayMaxSize(500)
+  @IsString({ each: true })
+  ids!: string[];
 }
