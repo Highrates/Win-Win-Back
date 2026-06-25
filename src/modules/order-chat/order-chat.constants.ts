@@ -20,3 +20,7 @@ export const ORDER_CHAT_DELETE_WITHIN_MS = 24 * 60 * 60 * 1000;
 export function roomOrderChat(orderId: string): string {
   return `orderChat:${orderId}`;
 }
+
+export function roomSourcingChat(sourcingRequestId: string): string {
+  return `sourcingChat:${sourcingRequestId}`;
+}

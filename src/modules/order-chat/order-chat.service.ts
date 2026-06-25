@@ -12,6 +12,7 @@ import {
   CommercialProposalStatus,
   OrderStatus,
   Prisma,
+  SourcingRequestStatus,
   UserRole,
 } from '@prisma/client';
 import { randomBytes } from 'crypto';
@@ -491,6 +492,36 @@ export class OrderChatService {
     return n;
   }
 
+  /** Заявки на подбор с непросмотренным опубликованным КП. */
+  private async countSourcingWithUnseenPublishedCommercialProposal(
+    userId: string,
+    sourcingStatuses?: SourcingRequestStatus[],
+  ): Promise<number> {
+    const rows = await this.prisma.sourcingRequest.findMany({
+      where: {
+        userId,
+        ...(sourcingStatuses?.length ? { status: { in: sourcingStatuses } } : {}),
+      },
+      select: {
+        customerLastSeenCommercialProposalVersion: true,
+        commercialProposals: {
+          where: { status: CommercialProposalStatus.PUBLISHED },
+          orderBy: { versionNumber: 'desc' },
+          take: 1,
+          select: { versionNumber: true },
+        },
+      },
+    });
+    let n = 0;
+    for (const r of rows) {
+      const latest = r.commercialProposals[0]?.versionNumber;
+      if (latest == null) continue;
+      const seen = r.customerLastSeenCommercialProposalVersion ?? 0;
+      if (latest > seen) n++;
+    }
+    return n;
+  }
+
   async unreadCountForCustomer(
     userId: string,
     opts?: { orderStatuses?: OrderStatus[] },
@@ -529,7 +560,39 @@ export class OrderChatService {
       });
       total += n;
     }
+
+    const sourcingStatuses =
+      opts?.orderStatuses?.length
+        ? [SourcingRequestStatus.PENDING_REVIEW, SourcingRequestStatus.IN_PROGRESS]
+        : undefined;
+    const sourcingConvs = await this.prisma.chatConversation.findMany({
+      where: {
+        sourcingRequest: {
+          userId,
+          ...(sourcingStatuses ? { status: { in: sourcingStatuses } } : {}),
+        },
+        OR: [{ retentionPurgesAt: null }, { retentionPurgesAt: { gt: new Date() } }],
+      },
+      select: {
+        id: true,
+        readStates: { where: { userId }, select: { lastReadAt: true }, take: 1 },
+      },
+    });
+    for (const c of sourcingConvs) {
+      const lastRead = c.readStates[0]?.lastReadAt ?? new Date(0);
+      const n = await this.prisma.chatMessage.count({
+        where: {
+          conversationId: c.id,
+          authorRole: ChatMessageAuthorRole.STAFF,
+          deletedAt: null,
+          createdAt: { gt: lastRead },
+        },
+      });
+      total += n;
+    }
+
     total += await this.countOrdersWithUnseenPublishedCommercialProposal(userId, opts?.orderStatuses);
+    total += await this.countSourcingWithUnseenPublishedCommercialProposal(userId, sourcingStatuses);
     return total;
   }
 
@@ -561,6 +624,7 @@ export class OrderChatService {
 
     await Promise.all(
       convs.map(async (c) => {
+        if (!c.orderId) return;
         const lastRead = c.readStates[0]?.lastReadAt ?? new Date(0);
         const n = await this.prisma.chatMessage.count({
           where: {
@@ -702,6 +766,23 @@ export class OrderChatService {
     }
   }
 
+  /** Перед удалением заявки на подбор: файлы вложений чата из S3. */
+  async purgeSourcingChatMediaForRequest(sourcingRequestId: string): Promise<void> {
+    const conv = await this.prisma.chatConversation.findUnique({
+      where: { sourcingRequestId },
+      select: {
+        messages: { select: { attachments: { select: { fileUrl: true } } } },
+      },
+    });
+    if (!conv?.messages?.length) return;
+    for (const m of conv.messages) {
+      for (const a of m.attachments) {
+        const key = this.storage.tryPublicUrlToKey(a.fileUrl);
+        if (key) await this.storage.removeObjectKey(key).catch(() => undefined);
+      }
+    }
+  }
+
   /** Непрочитанные сообщения клиента по заказам (для админки). */
   async unreadCustomerCountsForStaffOrders(
     staffUserId: string,
@@ -729,6 +810,7 @@ export class OrderChatService {
 
     await Promise.all(
       convs.map(async (c) => {
+        if (!c.orderId) return;
         const lastRead = c.readStates[0]?.lastReadAt ?? new Date(0);
         const n = await this.prisma.chatMessage.count({
           where: {
@@ -739,6 +821,50 @@ export class OrderChatService {
           },
         });
         out[c.orderId] = n;
+      }),
+    );
+
+    return out;
+  }
+
+  /** Непрочитанные сообщения клиента по заявкам на подбор (для админки). */
+  async unreadCustomerCountsForStaffSourcingRequests(
+    staffUserId: string,
+    sourcingRequestIds: string[],
+  ): Promise<Record<string, number>> {
+    const out: Record<string, number> = {};
+    for (const id of sourcingRequestIds) out[id] = 0;
+    if (!sourcingRequestIds.length) return out;
+
+    const convs = await this.prisma.chatConversation.findMany({
+      where: {
+        sourcingRequestId: { in: sourcingRequestIds },
+        OR: [{ retentionPurgesAt: null }, { retentionPurgesAt: { gt: new Date() } }],
+      },
+      select: {
+        id: true,
+        sourcingRequestId: true,
+        readStates: {
+          where: { userId: staffUserId },
+          select: { lastReadAt: true },
+          take: 1,
+        },
+      },
+    });
+
+    await Promise.all(
+      convs.map(async (c) => {
+        if (!c.sourcingRequestId) return;
+        const lastRead = c.readStates[0]?.lastReadAt ?? new Date(0);
+        const n = await this.prisma.chatMessage.count({
+          where: {
+            conversationId: c.id,
+            authorRole: ChatMessageAuthorRole.CUSTOMER,
+            deletedAt: null,
+            createdAt: { gt: lastRead },
+          },
+        });
+        out[c.sourcingRequestId] = n;
       }),
     );
 
@@ -794,6 +920,61 @@ export class OrderChatService {
     };
   }
 
+  /** Сводка непрочитанных от клиента по вкладкам списка заявок на подбор в админке. */
+  async unreadSourcingCustomerChatSummaryForAdminBuckets(staffUserId: string): Promise<{
+    total: number;
+    new: number;
+    active: number;
+    completed: number;
+  }> {
+    const countBucket = async (
+      statuses: SourcingRequestStatus[],
+    ): Promise<number> => {
+      const convs = await this.prisma.chatConversation.findMany({
+        where: {
+          sourcingRequestId: { not: null },
+          sourcingRequest: { status: { in: statuses } },
+          OR: [{ retentionPurgesAt: null }, { retentionPurgesAt: { gt: new Date() } }],
+        },
+        select: {
+          id: true,
+          readStates: {
+            where: { userId: staffUserId },
+            select: { lastReadAt: true },
+            take: 1,
+          },
+        },
+      });
+      const parts = await Promise.all(
+        convs.map(async (c) => {
+          const lastRead = c.readStates[0]?.lastReadAt ?? new Date(0);
+          return this.prisma.chatMessage.count({
+            where: {
+              conversationId: c.id,
+              authorRole: ChatMessageAuthorRole.CUSTOMER,
+              deletedAt: null,
+              createdAt: { gt: lastRead },
+            },
+          });
+        }),
+      );
+      return parts.reduce((a, b) => a + b, 0);
+    };
+
+    const newN = await countBucket([SourcingRequestStatus.PENDING_REVIEW]);
+    const activeN = await countBucket([SourcingRequestStatus.IN_PROGRESS]);
+    const completedN = await countBucket([
+      SourcingRequestStatus.COMPLETED,
+      SourcingRequestStatus.CANCELLED,
+    ]);
+    return {
+      total: newN + activeN + completedN,
+      new: newN,
+      active: activeN,
+      completed: completedN,
+    };
+  }
+
   async verifyJoinRoom(userId: string, role: string, orderId: string): Promise<void> {
     const ar = this.authorRoleFromJwt(role);
     if (ar === ChatMessageAuthorRole.STAFF) {
@@ -801,5 +982,408 @@ export class OrderChatService {
       return;
     }
     await this.assertCustomerCanAccess(orderId, userId);
+  }
+
+  // --- Чат заявок на подбор ---
+
+  async assertSourcingCustomerCanAccess(sourcingRequestId: string, userId: string): Promise<void> {
+    const row = await this.prisma.sourcingRequest.findFirst({
+      where: { id: sourcingRequestId, userId },
+      select: { id: true, status: true },
+    });
+    if (!row) throw new ForbiddenException('Нет доступа к заявке');
+    if (row.status === SourcingRequestStatus.CANCELLED) {
+      throw new ForbiddenException('Чат недоступен для отменённой заявки');
+    }
+  }
+
+  async assertSourcingStaffCanAccess(_sourcingRequestId: string): Promise<void> {
+    /* staff: любая заявка */
+  }
+
+  private async assertSourcingConversationActive(
+    sourcingRequestId: string,
+  ): Promise<{ id: string } | null> {
+    const conv = await this.prisma.chatConversation.findUnique({
+      where: { sourcingRequestId },
+      select: { id: true, retentionPurgesAt: true },
+    });
+    if (conv?.retentionPurgesAt && conv.retentionPurgesAt <= new Date()) {
+      throw new ForbiddenException('Срок хранения переписки истёк');
+    }
+    return conv;
+  }
+
+  private validateSourcingAttachmentKeys(sourcingRequestId: string, urls: string[]): void {
+    const prefix = `objects/chat/sourcing-requests/${sourcingRequestId}/`;
+    for (const url of urls) {
+      const key = this.storage.tryPublicUrlToKey(url);
+      if (!key || !key.startsWith(prefix)) {
+        throw new BadRequestException('Недопустимый URL вложения');
+      }
+    }
+  }
+
+  async ensureSourcingConversation(sourcingRequestId: string): Promise<void> {
+    await this.prisma.chatConversation.upsert({
+      where: { sourcingRequestId },
+      create: { kind: 'SOURCING', sourcingRequestId },
+      update: {},
+    });
+  }
+
+  async listSourcingMessagesForStaff(
+    sourcingRequestId: string,
+    opts?: { limit?: number; beforeMessageId?: string | null },
+  ) {
+    await this.assertSourcingStaffCanAccess(sourcingRequestId);
+    return this.listSourcingMessagesInternal(sourcingRequestId, opts);
+  }
+
+  async listSourcingMessages(
+    sourcingRequestId: string,
+    jwtUserId: string,
+    jwtRole: string,
+    opts?: { limit?: number; beforeMessageId?: string | null },
+  ) {
+    const authorRole = this.authorRoleFromJwt(jwtRole);
+    if (authorRole === ChatMessageAuthorRole.CUSTOMER) {
+      await this.assertSourcingCustomerCanAccess(sourcingRequestId, jwtUserId);
+    } else {
+      await this.assertSourcingStaffCanAccess(sourcingRequestId);
+    }
+    return this.listSourcingMessagesInternal(sourcingRequestId, opts);
+  }
+
+  private async listSourcingMessagesInternal(
+    sourcingRequestId: string,
+    opts?: { limit?: number; beforeMessageId?: string | null },
+  ) {
+    const limit = this.normalizeMessagesPageLimit(opts?.limit);
+    let conv = await this.prisma.chatConversation.findUnique({
+      where: { sourcingRequestId },
+      select: { id: true, retentionPurgesAt: true },
+    });
+    if (!conv) {
+      await this.ensureSourcingConversation(sourcingRequestId);
+      conv = await this.prisma.chatConversation.findUnique({
+        where: { sourcingRequestId },
+        select: { id: true, retentionPurgesAt: true },
+      });
+    }
+    if (!conv) {
+      return { conversationId: null, messages: [], hasOlder: false };
+    }
+    if (conv.retentionPurgesAt && conv.retentionPurgesAt <= new Date()) {
+      return { conversationId: conv.id, messages: [], hasOlder: false };
+    }
+
+    const includePayload = {
+      attachments: true,
+      author: {
+        select: { email: true, profile: { select: { firstName: true, lastName: true, avatarUrl: true } } },
+      },
+    } as const;
+
+    let messageWhere: Prisma.ChatMessageWhereInput = { conversationId: conv.id };
+    const beforeId = opts?.beforeMessageId?.trim();
+    if (beforeId) {
+      const anchor = await this.prisma.chatMessage.findFirst({
+        where: { id: beforeId, conversationId: conv.id },
+        select: { id: true, createdAt: true },
+      });
+      if (!anchor) throw new BadRequestException('Неизвестная граница истории сообщений');
+      messageWhere = {
+        conversationId: conv.id,
+        OR: [
+          { createdAt: { lt: anchor.createdAt } },
+          { AND: [{ createdAt: anchor.createdAt }, { id: { lt: anchor.id } }] },
+        ],
+      };
+    }
+
+    const takePeek = limit + 1;
+    const rowsDesc = await this.prisma.chatMessage.findMany({
+      where: messageWhere,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: takePeek,
+      include: includePayload,
+    });
+    const hasOlder = rowsDesc.length > limit;
+    const chronological = rowsDesc.slice(0, limit).reverse();
+    return {
+      conversationId: conv.id,
+      messages: chronological.map((r) => this.mapMessage(r)),
+      hasOlder,
+    };
+  }
+
+  async postSourcingMessage(
+    sourcingRequestId: string,
+    jwtUserId: string,
+    jwtRole: string,
+    dto: PostOrderChatMessageDto,
+  ) {
+    await this.assertSourcingConversationActive(sourcingRequestId);
+    const authorRole = this.authorRoleFromJwt(jwtRole);
+    if (authorRole === ChatMessageAuthorRole.CUSTOMER) {
+      await this.assertSourcingCustomerCanAccess(sourcingRequestId, jwtUserId);
+    } else {
+      await this.assertSourcingStaffCanAccess(sourcingRequestId);
+    }
+
+    const body = dto.body?.trim() ?? '';
+    const att = dto.attachments ?? [];
+    if (!body && att.length === 0) throw new BadRequestException('Пустое сообщение');
+    if (body.length > ORDER_CHAT_POST_BODY_MAX_CHARS) {
+      throw new BadRequestException('Слишком длинное сообщение');
+    }
+    if (att.length > 0) this.assertAttachmentRefsPayloadLimits(att);
+    this.validateSourcingAttachmentKeys(
+      sourcingRequestId,
+      att.map((a) => a.fileUrl),
+    );
+
+    const conv = await this.prisma.chatConversation.upsert({
+      where: { sourcingRequestId },
+      create: { kind: 'SOURCING', sourcingRequestId },
+      update: {},
+      select: { id: true, retentionPurgesAt: true },
+    });
+    if (conv.retentionPurgesAt && conv.retentionPurgesAt <= new Date()) {
+      throw new ForbiddenException('Срок хранения переписки истёк');
+    }
+
+    const row = await this.prisma.chatMessage.create({
+      data: {
+        conversationId: conv.id,
+        authorUserId: jwtUserId,
+        authorRole,
+        body,
+        attachments: {
+          create: att.map((a) => ({
+            fileUrl: a.fileUrl,
+            filename: decodeUploadOriginalName(a.filename).slice(0, 512),
+            mimeType: a.mimeType?.slice(0, 128) ?? null,
+            kind: a.kind,
+          })),
+        },
+      },
+      include: {
+        attachments: true,
+        author: {
+          select: { email: true, profile: { select: { firstName: true, lastName: true, avatarUrl: true } } },
+        },
+      },
+    });
+
+    const out = this.mapMessage(row);
+    this.gateway?.broadcastSourcingNewMessage(sourcingRequestId, out);
+    void this.notifySourcingEmail(sourcingRequestId, authorRole, body).catch((e) =>
+      this.logger.warn(`sourcing-chat notify mail failed: ${e instanceof Error ? e.message : e}`),
+    );
+    return out;
+  }
+
+  async deleteSourcingMessage(
+    sourcingRequestId: string,
+    messageId: string,
+    jwtUserId: string,
+    jwtRole: string,
+  ): Promise<void> {
+    await this.assertSourcingConversationActive(sourcingRequestId);
+    const authorRole = this.authorRoleFromJwt(jwtRole);
+    if (authorRole === ChatMessageAuthorRole.CUSTOMER) {
+      await this.assertSourcingCustomerCanAccess(sourcingRequestId, jwtUserId);
+    } else {
+      await this.assertSourcingStaffCanAccess(sourcingRequestId);
+    }
+
+    const conv = await this.prisma.chatConversation.findUnique({
+      where: { sourcingRequestId },
+      select: { id: true },
+    });
+    if (!conv) throw new NotFoundException();
+
+    const msg = await this.prisma.chatMessage.findFirst({
+      where: { id: messageId, conversationId: conv.id, deletedAt: null },
+    });
+    if (!msg) throw new NotFoundException();
+    const within =
+      Date.now() - msg.createdAt.getTime() <= ORDER_CHAT_DELETE_WITHIN_MS;
+    if (authorRole === ChatMessageAuthorRole.CUSTOMER) {
+      if (msg.authorUserId !== jwtUserId) throw new ForbiddenException();
+      if (!within) throw new ForbiddenException('Время удаления истекло');
+    }
+
+    await this.prisma.chatMessage.update({
+      where: { id: msg.id },
+      data: { deletedAt: new Date(), body: '' },
+    });
+    this.gateway?.broadcastSourcingMessageDeleted(sourcingRequestId, { id: messageId });
+  }
+
+  async markSourcingRead(sourcingRequestId: string, jwtUserId: string, jwtRole: string): Promise<void> {
+    const authorRole = this.authorRoleFromJwt(jwtRole);
+    if (authorRole === ChatMessageAuthorRole.CUSTOMER) {
+      await this.assertSourcingCustomerCanAccess(sourcingRequestId, jwtUserId);
+    } else {
+      await this.assertSourcingStaffCanAccess(sourcingRequestId);
+    }
+    const conv = await this.prisma.chatConversation.findUnique({
+      where: { sourcingRequestId },
+      select: { id: true },
+    });
+    if (!conv) return;
+    const now = new Date();
+    await this.prisma.chatReadState.upsert({
+      where: { conversationId_userId: { conversationId: conv.id, userId: jwtUserId } },
+      create: { conversationId: conv.id, userId: jwtUserId, lastReadAt: now },
+      update: { lastReadAt: now },
+    });
+  }
+
+  async uploadSourcingAttachment(
+    sourcingRequestId: string,
+    jwtUserId: string,
+    jwtRole: string,
+    file: Express.Multer.File,
+  ) {
+    await this.assertSourcingConversationActive(sourcingRequestId);
+    const authorRole = this.authorRoleFromJwt(jwtRole);
+    if (authorRole === ChatMessageAuthorRole.CUSTOMER) {
+      await this.assertSourcingCustomerCanAccess(sourcingRequestId, jwtUserId);
+    } else {
+      await this.assertSourcingStaffCanAccess(sourcingRequestId);
+    }
+
+    const safeName = decodeUploadOriginalName(file.originalname);
+    this.storage.assertLibraryFile({
+      size: file.size,
+      mimetype: file.mimetype,
+      originalname: safeName,
+    });
+    const ext = this.storage.libraryFileExtension(file.mimetype, safeName || 'file');
+    const objectKey = `objects/chat/sourcing-requests/${sourcingRequestId}/${randomBytes(16).toString('hex')}${ext}`;
+    const { url } = await this.storage.uploadMediaLibraryObject(
+      file.buffer,
+      file.mimetype,
+      objectKey,
+      safeName,
+    );
+    const kind: ChatAttachmentKind =
+      file.mimetype.startsWith('image/') && file.mimetype !== 'image/tiff'
+        ? ChatAttachmentKind.IMAGE
+        : ChatAttachmentKind.FILE;
+    return { url, filename: safeName.slice(0, 512), mimeType: file.mimetype, kind };
+  }
+
+  async verifyJoinSourcingRoom(userId: string, role: string, sourcingRequestId: string): Promise<void> {
+    const ar = this.authorRoleFromJwt(role);
+    if (ar === ChatMessageAuthorRole.STAFF) {
+      await this.assertSourcingStaffCanAccess(sourcingRequestId);
+      return;
+    }
+    await this.assertSourcingCustomerCanAccess(sourcingRequestId, userId);
+  }
+
+  async unreadStaffCountsForCustomerSourcingRequests(
+    userId: string,
+    sourcingRequestIds: string[],
+  ): Promise<Record<string, number>> {
+    const out: Record<string, number> = {};
+    for (const id of sourcingRequestIds) out[id] = 0;
+    if (!sourcingRequestIds.length) return out;
+
+    const convs = await this.prisma.chatConversation.findMany({
+      where: {
+        sourcingRequestId: { in: sourcingRequestIds },
+        sourcingRequest: { userId },
+        OR: [{ retentionPurgesAt: null }, { retentionPurgesAt: { gt: new Date() } }],
+      },
+      select: {
+        id: true,
+        sourcingRequestId: true,
+        readStates: { where: { userId }, select: { lastReadAt: true }, take: 1 },
+      },
+    });
+
+    await Promise.all(
+      convs.map(async (c) => {
+        if (!c.sourcingRequestId) return;
+        const lastRead = c.readStates[0]?.lastReadAt ?? new Date(0);
+        const n = await this.prisma.chatMessage.count({
+          where: {
+            conversationId: c.id,
+            authorRole: ChatMessageAuthorRole.STAFF,
+            deletedAt: null,
+            createdAt: { gt: lastRead },
+          },
+        });
+        out[c.sourcingRequestId] = n;
+      }),
+    );
+    return out;
+  }
+
+  async onSourcingStatusChanged(sourcingRequestId: string, status: SourcingRequestStatus): Promise<void> {
+    if (status !== SourcingRequestStatus.COMPLETED && status !== SourcingRequestStatus.CANCELLED) return;
+    const exists = await this.prisma.chatConversation.findUnique({
+      where: { sourcingRequestId },
+      select: { id: true },
+    });
+    if (!exists) return;
+    const expires = new Date(Date.now() + this.retentionDays() * 86400000);
+    await this.prisma.chatConversation.update({
+      where: { sourcingRequestId },
+      data: { retentionPurgesAt: expires },
+    });
+  }
+
+  private async notifySourcingEmail(
+    sourcingRequestId: string,
+    fromRole: ChatMessageAuthorRole,
+    bodyPreview: string,
+  ): Promise<void> {
+    const frontBase =
+      this.config.get<string>('FRONTEND_PUBLIC_URL')?.replace(/\/+$/, '') ||
+      this.config.get<string>('NEXT_PUBLIC_SITE_URL')?.replace(/\/+$/, '') ||
+      'http://localhost:3000';
+
+    const row = await this.prisma.sourcingRequest.findUnique({
+      where: { id: sourcingRequestId },
+      select: {
+        id: true,
+        title: true,
+        user: { select: { email: true, profile: { select: { firstName: true } } } },
+      },
+    });
+    if (!row) return;
+
+    const shortId = `${sourcingRequestId.slice(0, 4)}…${sourcingRequestId.slice(-4)}`;
+    const snippet = bodyPreview.trim().slice(0, 280) || '(вложение)';
+
+    if (fromRole === ChatMessageAuthorRole.CUSTOMER) {
+      const recipients = await this.resolveStaffNotifyEmails();
+      if (!recipients.length) return;
+      await this.mail.sendOrderChatNotifyStaff({
+        recipients,
+        orderDisplayId: shortId,
+        orderId: sourcingRequestId,
+        snippet,
+        adminOrderUrl: `${frontBase}/admin/orders/sourcing/${sourcingRequestId}`,
+      });
+      return;
+    }
+
+    const to = row.user.email?.trim();
+    if (!to) return;
+    await this.mail.sendOrderChatNotifyCustomer({
+      to,
+      customerName: row.user.profile?.firstName?.trim() || null,
+      orderDisplayId: shortId,
+      snippet,
+      accountOrdersUrl: `${frontBase}/account/orders?tab=work`,
+    });
   }
 }

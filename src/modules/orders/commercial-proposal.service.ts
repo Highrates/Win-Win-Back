@@ -9,7 +9,6 @@ import {
   Prisma,
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
-import { OrderChatService } from '../order-chat/order-chat.service';
 import { OrderSettingsService } from '../order-settings/order-settings.service';
 import type { CommercialProposalLineInputDto, PublishCommercialProposalDto } from './dto/commercial-proposal.dto';
 import { OrdersService } from './orders.service';
@@ -28,7 +27,6 @@ export class CommercialProposalService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly orders: OrdersService,
-    private readonly orderChat: OrderChatService,
     private readonly orderSettings: OrderSettingsService,
   ) {}
 
@@ -532,7 +530,6 @@ export class CommercialProposalService {
       const next =
         (dto?.nextOrderStatus as OrderStatus | undefined) ?? OrderStatus.PROPOSAL_FORMED;
       const updated = await this.orders.updateStatus(orderId, next);
-      await this.orderChat.onOrderStatusChanged(updated.id, updated.status);
     }
 
     const summary = await this.getSummary(orderId);

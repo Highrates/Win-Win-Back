@@ -1,5 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { USER_HEAVY_CREATE_THROTTLE } from '../../common/throttle/user-heavy-create.throttle';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import {
   AddOrderPreparationLineDto,
@@ -44,6 +46,7 @@ export class OrdersMeController {
   }
 
   @Post('preparation/submit')
+  @Throttle(USER_HEAVY_CREATE_THROTTLE)
   submit(@CurrentUser('sub') userId: string, @Body() dto: SubmitPreparationDraftDto) {
     return this.orders.submitPreparationDraft(userId, dto);
   }

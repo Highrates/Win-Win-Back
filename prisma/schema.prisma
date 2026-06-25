@@ -45,12 +45,15 @@ model User {
   chatMessagesAuthored ChatMessage[]
   chatReadStates       ChatReadState[]
   commercialProposalsPublished CommercialProposal[] @relation("CommercialProposalPublishedBy")
+  sourcingCommercialProposalsPublished SourcingCommercialProposal[] @relation("SourcingCommercialProposalPublishedBy")
   userGroupMember UserGroupMember?
+  sourcingRequests SourcingRequest[]
 }
 
 /// Чаты по заказу (приватный диалог клиент ↔ поддержка).
 enum ChatConversationKind {
   ORDER
+  SOURCING
 }
 
 enum ChatMessageAuthorRole {
@@ -66,8 +69,10 @@ enum ChatAttachmentKind {
 model ChatConversation {
   id                String               @id @default(cuid())
   kind              ChatConversationKind @default(ORDER)
-  orderId           String               @unique
-  order             Order                @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId           String?              @unique
+  order             Order?               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  sourcingRequestId String?              @unique
+  sourcingRequest   SourcingRequest?     @relation(fields: [sourcingRequestId], references: [id], onDelete: Cascade)
   /// После этой даты переписку можно удалить (заказ завершён + retention).
   retentionPurgesAt DateTime?
   createdAt         DateTime             @default(now())
@@ -819,6 +824,124 @@ model CommercialProposalLine {
   lineNote            String?            @db.Text
 
   @@index([proposalId])
+}
+
+// --- Заявки на подбор (индивидуальный sourcing) ---
+enum SourcingRequestStatus {
+  PENDING_REVIEW
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+model SourcingRequest {
+  id           String                @id @default(cuid())
+  userId       String
+  user         User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title        String                @db.Text
+  deliveryCity String?               @db.Text
+  status       SourcingRequestStatus @default(PENDING_REVIEW)
+  /// Последняя просмотренная клиентом версия опубликованного КП (1+).
+  customerLastSeenCommercialProposalVersion Int?
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+
+  items       SourcingRequestItem[]
+  attachments SourcingRequestAttachment[]
+  chatConversation ChatConversation?
+  commercialProposals SourcingCommercialProposal[]
+
+  @@index([userId, status])
+  @@index([status, createdAt])
+}
+
+model SourcingRequestItem {
+  id             String          @id @default(cuid())
+  requestId      String
+  request        SourcingRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  sortOrder      Int             @default(0)
+  name           String          @db.Text
+  productLink    String?         @db.Text
+  material       String?         @db.Text
+  color          String?         @db.Text
+  size           String?         @db.Text
+  description    String?         @db.Text
+  quantity       Int             @default(1)
+  unit           String          @default("шт")
+  expectedBudget Decimal?        @db.Decimal(12, 2)
+
+  referenceImages SourcingRequestItemImage[]
+
+  @@index([requestId])
+}
+
+model SourcingRequestItemImage {
+  id        String              @id @default(cuid())
+  itemId    String
+  item      SourcingRequestItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  url       String
+  filename  String
+  mimeType  String?
+  sortOrder Int                 @default(0)
+
+  @@index([itemId])
+}
+
+model SourcingCommercialProposal {
+  id                String                   @id @default(cuid())
+  sourcingRequestId String
+  sourcingRequest   SourcingRequest          @relation(fields: [sourcingRequestId], references: [id], onDelete: Cascade)
+  versionNumber     Int
+  status            CommercialProposalStatus
+  publishedAt       DateTime?
+  publishedByUserId String?
+  publishedBy       User?                    @relation("SourcingCommercialProposalPublishedBy", fields: [publishedByUserId], references: [id], onDelete: SetNull)
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+
+  lines SourcingCommercialProposalLine[]
+
+  @@unique([sourcingRequestId, versionNumber])
+  @@index([sourcingRequestId, status])
+}
+
+model SourcingCommercialProposalLine {
+  id                          String                     @id @default(cuid())
+  proposalId                  String
+  proposal                    SourcingCommercialProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  sourceSourcingRequestItemId String?
+  sortOrder                   Int                        @default(0)
+  productName                 String                     @db.Text
+  description                 String?                    @db.Text
+  quantity                    Int                        @default(1)
+  unit                        String                     @default("шт")
+  offerUnitPrice              Decimal                    @db.Decimal(12, 2)
+  deliveryEta                 String?                    @db.Text
+  images                      SourcingCommercialProposalLineImage[]
+
+  @@index([proposalId])
+}
+
+model SourcingCommercialProposalLineImage {
+  id        String                     @id @default(cuid())
+  lineId    String
+  line      SourcingCommercialProposalLine @relation(fields: [lineId], references: [id], onDelete: Cascade)
+  url       String
+  sortOrder Int                        @default(0)
+
+  @@index([lineId])
+}
+
+model SourcingRequestAttachment {
+  id        String          @id @default(cuid())
+  requestId String
+  request   SourcingRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  url       String
+  filename  String
+  mimeType  String?
+  sortOrder Int             @default(0)
+
+  @@index([requestId])
 }
 
 // --- Коллекции (личные, шаринг по ссылке) ---

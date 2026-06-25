@@ -19,6 +19,7 @@ import {
   ORDER_CHAT_SOCKET_NAMESPACE,
   ROOM_STAFF_ORDER_CHAT,
   roomOrderChat,
+  roomSourcingChat,
 } from './order-chat.constants';
 import { getOrderChatWebSocketCorsOptions } from './order-chat-ws-cors';
 
@@ -87,6 +88,31 @@ export class OrderChatGateway implements OnGatewayInit, OnGatewayConnection {
     return { ok: true };
   }
 
+  @SubscribeMessage('join_sourcing_chat')
+  async joinSourcingRoom(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() body: { sourcingRequestId?: string },
+  ): Promise<{ ok: true }> {
+    const sourcingRequestId =
+      typeof body?.sourcingRequestId === 'string' ? body.sourcingRequestId.trim() : '';
+    if (!sourcingRequestId) throw new WsException('sourcingRequestId required');
+    await this.chat.verifyJoinSourcingRoom(client.data.userId, client.data.role, sourcingRequestId);
+    await client.join(roomSourcingChat(sourcingRequestId));
+    return { ok: true };
+  }
+
+  @SubscribeMessage('leave_sourcing_chat')
+  async leaveSourcingRoom(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() body: { sourcingRequestId?: string },
+  ): Promise<{ ok: true }> {
+    const sourcingRequestId =
+      typeof body?.sourcingRequestId === 'string' ? body.sourcingRequestId.trim() : '';
+    if (!sourcingRequestId) return { ok: true };
+    await client.leave(roomSourcingChat(sourcingRequestId));
+    return { ok: true };
+  }
+
   broadcastNewMessage(orderId: string, payload: OrderChatMessageOut): void {
     this.server.to(roomOrderChat(orderId)).emit('message_created', payload);
     this.server.to(ROOM_STAFF_ORDER_CHAT).emit('order_chat_updated', { orderId });
@@ -95,5 +121,15 @@ export class OrderChatGateway implements OnGatewayInit, OnGatewayConnection {
   broadcastMessageDeleted(orderId: string, payload: { id: string }): void {
     this.server.to(roomOrderChat(orderId)).emit('message_deleted', payload);
     this.server.to(ROOM_STAFF_ORDER_CHAT).emit('order_chat_updated', { orderId });
+  }
+
+  broadcastSourcingNewMessage(sourcingRequestId: string, payload: OrderChatMessageOut): void {
+    this.server.to(roomSourcingChat(sourcingRequestId)).emit('message_created', payload);
+    this.server.to(ROOM_STAFF_ORDER_CHAT).emit('sourcing_chat_updated', { sourcingRequestId });
+  }
+
+  broadcastSourcingMessageDeleted(sourcingRequestId: string, payload: { id: string }): void {
+    this.server.to(roomSourcingChat(sourcingRequestId)).emit('message_deleted', payload);
+    this.server.to(ROOM_STAFF_ORDER_CHAT).emit('sourcing_chat_updated', { sourcingRequestId });
   }
 }

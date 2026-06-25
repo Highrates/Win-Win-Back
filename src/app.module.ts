@@ -29,6 +29,7 @@ import { DesignerProjectsModule } from './modules/designer-projects/designer-pro
 import { OrderSettingsModule } from './modules/order-settings/order-settings.module';
 import { UserGroupProfilesModule } from './modules/user-group-profiles/user-group-profiles.module';
 import { UserGroupsModule } from './modules/user-groups/user-groups.module';
+import { SourcingRequestsModule } from './modules/sourcing-requests/sourcing-requests.module';
 import { LikesModule } from './modules/likes/likes.module';
 
 @Module({
@@ -67,6 +68,7 @@ import { LikesModule } from './modules/likes/likes.module';
     OrderSettingsModule,
     UserGroupProfilesModule,
     UserGroupsModule,
+    SourcingRequestsModule,
   ],
   providers: [
     {

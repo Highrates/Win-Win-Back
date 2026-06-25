@@ -120,17 +120,19 @@ export class OrdersService {
               },
             },
           },
-          commercialProposals: {
-            where: { status: CommercialProposalStatus.PUBLISHED },
-            orderBy: { versionNumber: 'desc' },
-            take: 1,
-            select: {
-              lines: {
-                orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
-                select: { quantity: true, offerUnitPrice: true, discountPercent: true, deliveryEta: true },
-              },
+        commercialProposals: {
+          where: { status: CommercialProposalStatus.PUBLISHED },
+          orderBy: { versionNumber: 'desc' },
+          take: 1,
+          select: {
+            versionNumber: true,
+            publishedAt: true,
+            lines: {
+              orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+              select: { quantity: true, offerUnitPrice: true, discountPercent: true, deliveryEta: true },
             },
           },
+        },
         },
       }),
       this.prisma.order.count({ where }),
@@ -141,7 +143,7 @@ export class OrdersService {
     );
     return {
       items: orders.map((o) => {
-        const { commercialProposals, ...rest } = o;
+        const { commercialProposals, customerLastSeenCommercialProposalVersion, ...rest } = o;
         const latest = commercialProposals[0];
         const commercialProposalOffer = latest?.lines?.length
           ? commercialProposalOfferFromLines(latest.lines)
@@ -150,10 +152,14 @@ export class OrdersService {
           .map((l) => (typeof l.deliveryEta === 'string' ? l.deliveryEta.trim() : ''))
           .filter(Boolean);
         const commercialProposalDeliveryEta = deliveryEtas.length ? deliveryEtas.join(' · ') : null;
+        const seen = customerLastSeenCommercialProposalVersion ?? 0;
+        const hasUnseenCommercialProposal = latest != null && latest.versionNumber > seen;
         return {
           ...rest,
           commercialProposalOffer,
           commercialProposalDeliveryEta,
+          commercialProposalPublishedAt: latest?.publishedAt?.toISOString() ?? null,
+          hasUnseenCommercialProposal,
           unreadStaffChatCount: unreadStaffByOrderId[o.id] ?? 0,
         };
       }),
@@ -255,9 +261,22 @@ export class OrdersService {
             rows.map((r) => r.id),
           )
         : null;
+    const orderIds = rows.map((r) => r.id);
+    const chatExists = orderIds.length
+      ? new Set(
+          (
+            await this.prisma.chatConversation.findMany({
+              where: { orderId: { in: orderIds } },
+              select: { orderId: true },
+            })
+          )
+            .map((c) => c.orderId)
+            .filter((id): id is string => Boolean(id)),
+        )
+      : new Set<string>();
     const items = rows.map((o) => ({
       ...o,
-      hasChatMessages: false as boolean,
+      hasChatMessages: chatExists.has(o.id),
       unreadCustomerChatCount: unreadByOrder ? (unreadByOrder[o.id] ?? 0) : 0,
     }));
     return { items, total, page: Math.max(page, 1), limit: take };
@@ -290,6 +309,10 @@ export class OrdersService {
     });
   }
 
+  /**
+   * Смена статуса заказа (админ). PATCH с тем же status → 200 без audit и без side-effects
+   * (идемпотентность для повторных запросов UI).
+   */
   async updateStatus(orderId: string, status: OrderStatus, documentUrls?: Record<string, string>) {
     const prev = await this.prisma.order.findUnique({
       where: { id: orderId },
@@ -301,6 +324,14 @@ export class OrdersService {
     }
     if (status === OrderStatus.DRAFT) {
       throw new BadRequestException('Нельзя перевести заказ в статус «Черновик»');
+    }
+    if (prev.status === status) {
+      const existing = await this.prisma.order.findUnique({
+        where: { id: orderId },
+        include: { items: { include: { product: true } } },
+      });
+      if (!existing) throw new NotFoundException('Order not found');
+      return existing;
     }
     const order = await this.prisma.order.update({
       where: { id: orderId },
@@ -328,6 +359,7 @@ export class OrdersService {
         );
       }
     }
+    await this.orderChat.onOrderStatusChanged(order.id, order.status);
     return order;
   }
 

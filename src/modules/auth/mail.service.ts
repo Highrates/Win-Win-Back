@@ -286,4 +286,46 @@ export class MailService {
     });
     this.logger.log(`Order pending-approval notify (staff) sent to ${dedup.length} recipient(s)`);
   }
+
+  /** Уведомление о новой заявке на подбор. Те же получатели: `ORDER_CHAT_STAFF_EMAIL`. */
+  async sendSourcingSubmittedStaff(params: {
+    recipients: string[];
+    requestDisplayId: string;
+    requestTitle: string;
+    adminSourcingUrl: string;
+  }): Promise<void> {
+    const dedup = [...new Set(params.recipients.map((e) => e.trim()).filter(Boolean))];
+    if (!dedup.length) return;
+    const from = this.config.get<string>('MAIL_FROM')?.trim() || this.config.get<string>('SMTP_USER');
+    if (!from) throw new Error('MAIL_FROM или SMTP_USER нужен для отправки письма');
+    const configuredHost = this.config.get<string>('SMTP_HOST')?.trim();
+    if (!configuredHost) {
+      throw new Error('SMTP_HOST, SMTP_USER и SMTP_PASSWORD должны быть заданы для отправки почты');
+    }
+    const endpoint = await this.smtpConnectTarget(configuredHost);
+    const transport = this.transporter(endpoint);
+    const [primary, ...bcc] = dedup;
+    const title = params.requestTitle.trim() || 'Без названия';
+    const subject = `Новая заявка на подбор ${params.requestDisplayId} — Win-Win`;
+    const text = [
+      `Клиент отправил заявку на подбор (${params.requestDisplayId}).`,
+      `Тема: ${title}`,
+      ``,
+      `Открыть в админке: ${params.adminSourcingUrl}`,
+    ].join('\n');
+    const html = [
+      `<p>Клиент отправил заявку на подбор: <strong>${params.requestDisplayId}</strong>.</p>`,
+      `<p>Тема: <strong>${title}</strong></p>`,
+      `<p><a href="${params.adminSourcingUrl}">Открыть заявку в админке</a></p>`,
+    ].join('');
+    await transport.sendMail({
+      from,
+      to: primary,
+      ...(bcc.length ? { bcc } : {}),
+      subject,
+      text,
+      html,
+    });
+    this.logger.log(`Sourcing submit notify (staff) sent to ${dedup.length} recipient(s)`);
+  }
 }

@@ -25,4 +25,6 @@ export type OrderChatMessageOut = {
 export interface OrderChatRealtimeEmitter {
   broadcastNewMessage(orderId: string, payload: OrderChatMessageOut): void;
   broadcastMessageDeleted(orderId: string, payload: { id: string }): void;
+  broadcastSourcingNewMessage(sourcingRequestId: string, payload: OrderChatMessageOut): void;
+  broadcastSourcingMessageDeleted(sourcingRequestId: string, payload: { id: string }): void;
 }

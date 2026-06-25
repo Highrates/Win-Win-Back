@@ -5,7 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const PACKAGES = ['order-item-snapshot', 'order-status'];
+const PACKAGES = ['order-item-snapshot', 'order-status', 'sourcing-request'];
 
 const backendRoot = path.join(__dirname, '..');
 
