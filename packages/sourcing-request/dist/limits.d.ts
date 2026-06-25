@@ -1,0 +1,21 @@
+/** Лимиты заявки на подбор — единый контракт фронт / Nest. */
+export declare const SOURCING_FILE_MAX_BYTES: number;
+export declare const SOURCING_MAX_FILES = 50;
+export declare const SOURCING_UPLOAD_TOTAL_MAX_BYTES: number;
+export declare const SOURCING_MAX_PRODUCTS = 50;
+export declare const SOURCING_MAX_REFERENCE_KEYS_PER_PRODUCT = 20;
+export declare const SOURCING_MAX_ATTACHMENT_KEYS = 50;
+export declare const SOURCING_FILE_KEY_MAX = 128;
+export declare const SOURCING_TITLE_MAX = 200;
+export declare const SOURCING_CITY_MAX = 200;
+export declare const SOURCING_PRODUCT_NAME_MAX = 200;
+export declare const SOURCING_PRODUCT_DESCRIPTION_MAX = 5000;
+export declare const SOURCING_PRODUCT_FIELD_MAX = 500;
+export declare const SOURCING_PRODUCT_LINK_MAX = 2048;
+export declare const SOURCING_BUDGET_MAX = 32;
+export declare const SOURCING_UNIT_OPTIONS: readonly ["шт", "комплект", "м²", "м.п.", "кг", "упак.", "пара", "лист", "м³", "т"];
+export type SourcingUnit = (typeof SOURCING_UNIT_OPTIONS)[number];
+export declare const SOURCING_LIST_DEFAULT_LIMIT = 20;
+export declare const SOURCING_LIST_MAX_LIMIT = 100;
+export declare function clampSourcingListPage(page: number): number;
+export declare function clampSourcingListLimit(limit: number): number;
