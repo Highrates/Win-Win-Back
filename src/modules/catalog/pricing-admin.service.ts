@@ -1,7 +1,16 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
-import { calcMskAndRetailRub, type PricingProfileCalcInput } from './pricing-calculation';
+import {
+  calcMskAndRetailRub,
+  type PricingProfileCalcInput,
+} from './pricing-calculation';
+import {
+  batchForwardRetailFromProfileCalc,
+  forwardRetailFromProfileCalc,
+  reverseRetailToCnyFromProfileCalc,
+  type SourcingKpForwardLineInput,
+} from './sourcing-kp-pricing-calc';
 
 export type PricingProfileAdminRow = {
   id: string;
@@ -323,6 +332,49 @@ export class PricingAdminService {
     return this.profileEntityToCalc(row);
   }
 
+  /** Основной профиль (isDefault) — для заявок на подбор без категории. */
+  async findDefaultProfile() {
+    return this.prisma.pricingProfile.findFirst({
+      where: { isDefault: true },
+      orderBy: { updatedAt: 'desc' },
+    });
+  }
+
+  /** Загрузить основной профиль один раз для пакетного расчёта КП. */
+  async loadDefaultProfileCalcContext(): Promise<
+    | { ok: true; calcIn: PricingProfileCalcInput; profileUpdatedAt: Date }
+    | { ok: false; error: 'NO_PROFILE' }
+  > {
+    const profile = await this.findDefaultProfile();
+    if (!profile) return { ok: false, error: 'NO_PROFILE' };
+    return {
+      ok: true,
+      calcIn: this.profileEntityToCalc(profile),
+      profileUpdatedAt: profile.updatedAt,
+    };
+  }
+
+  batchForwardRetailFromProfileCalc(
+    calcIn: PricingProfileCalcInput,
+    lines: SourcingKpForwardLineInput[],
+  ) {
+    return batchForwardRetailFromProfileCalc(calcIn, lines);
+  }
+
+  forwardRetailFromProfileCalc(
+    calcIn: PricingProfileCalcInput,
+    dto: SourcingKpForwardLineInput,
+  ) {
+    return forwardRetailFromProfileCalc(calcIn, dto);
+  }
+
+  reverseRetailToCnyFromProfileCalc(
+    calcIn: PricingProfileCalcInput,
+    dto: { retailRub: number; weightKg?: number; volumeM3?: number },
+  ) {
+    return reverseRetailToCnyFromProfileCalc(calcIn, dto);
+  }
+
   /** Основной профиль (isDefault) по пересечению категорий — для гостей и пользователей без группы. */
   async findProfileForCategoryIds(categoryIds: string[]) {
     const uniq = [...new Set(categoryIds.filter(Boolean))];
@@ -367,6 +419,68 @@ export class PricingAdminService {
       volumeM3,
     });
     return { ok: true, retailRub, mskRub };
+  }
+
+  /** Прямой расчёт розницы ₽ из ¥ по основному профилю (КП заявки на подбор). */
+  async forwardRetailFromDefaultProfile(dto: {
+    costPriceCny: number;
+    weightKg: number;
+    volumeM3: number;
+  }): Promise<
+    | { ok: true; retailRub: number; mskRub: number; shareS: number }
+    | { ok: false; error: 'NO_PROFILE' | 'INVALID_INPUT' }
+  > {
+    const ctx = await this.loadDefaultProfileCalcContext();
+    if (!ctx.ok) return { ok: false, error: 'NO_PROFILE' };
+    const forward = forwardRetailFromProfileCalc(ctx.calcIn, dto);
+    if (!forward.ok) return { ok: false, error: 'INVALID_INPUT' };
+    return forward;
+  }
+
+  /** Пакетный прямой расчёт ₽ по основному профилю (превью КП). */
+  async batchForwardRetailFromDefaultProfile(lines: SourcingKpForwardLineInput[]): Promise<
+    | {
+        ok: true;
+        results: Array<
+          | { ok: true; retailRub: number; mskRub: number; shareS: number }
+          | { ok: false; error: 'INVALID_INPUT' }
+        >;
+      }
+    | { ok: false; error: 'NO_PROFILE' }
+  > {
+    const ctx = await this.loadDefaultProfileCalcContext();
+    if (!ctx.ok) return { ok: false, error: 'NO_PROFILE' };
+    return { ok: true, results: this.batchForwardRetailFromProfileCalc(ctx.calcIn, lines) };
+  }
+
+  /** Обратный расчёт ¥ из розничного бюджета (заявка на подбор, админка).
+   *  ¥ считается по типовым габаритам (30 кг / 0,15 м³); вес и объём из запроса
+   *  используются для прямой проверки — укладывается ли бюджет при этих габаритах. */
+  async reverseRetailToCny(dto: {
+    retailRub: number;
+    weightKg?: number;
+    volumeM3?: number;
+  }): Promise<
+    | {
+        ok: true;
+        costPriceCny: number;
+        mskRub: number;
+        retailRub: number;
+        retailAtDims: number;
+        fitsBudget: boolean;
+        shareS: number;
+        weightKg: number;
+        volumeM3: number;
+        typicalWeightKg: number;
+        typicalVolumeM3: number;
+      }
+    | { ok: false; error: 'NO_PROFILE' | 'INVALID_INPUT' | 'NEGATIVE_CNY' }
+  > {
+    const ctx = await this.loadDefaultProfileCalcContext();
+    if (!ctx.ok) return { ok: false, error: 'NO_PROFILE' };
+    const reverse = reverseRetailToCnyFromProfileCalc(ctx.calcIn, dto);
+    if (!reverse.ok) return reverse;
+    return reverse;
   }
 
   private profileEntityToCalc(row: {

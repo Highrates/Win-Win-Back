@@ -896,6 +896,8 @@ model SourcingCommercialProposal {
   publishedAt       DateTime?
   publishedByUserId String?
   publishedBy       User?                    @relation("SourcingCommercialProposalPublishedBy", fields: [publishedByUserId], references: [id], onDelete: SetNull)
+  /// Профиль ценообразования (updatedAt) на момент публикации — snapshot для offerUnitPrice.
+  pricingProfileUpdatedAt DateTime?
   createdAt         DateTime                 @default(now())
   updatedAt         DateTime                 @updatedAt
 
@@ -915,6 +917,11 @@ model SourcingCommercialProposalLine {
   description                 String?                    @db.Text
   quantity                    Int                        @default(1)
   unit                        String                     @default("шт")
+  /// Закупочная цена в ¥ (источник для расчёта offerUnitPrice).
+  costPriceCny                Decimal                    @default(0) @db.Decimal(12, 2)
+  grossWeightKg               Decimal?                   @db.Decimal(10, 3)
+  volumeM3                    Decimal?                   @db.Decimal(10, 6)
+  /// Розничная цена в ₽/ед. (прямой расчёт по основному профилю).
   offerUnitPrice              Decimal                    @db.Decimal(12, 2)
   deliveryEta                 String?                    @db.Text
   images                      SourcingCommercialProposalLineImage[]

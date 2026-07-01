@@ -17,6 +17,10 @@ import { OrderChatService } from '../order-chat/order-chat.service';
 import { assertSourcingStatusTransition } from './sourcing-status.constants';
 import { adminBucketStatuses, userScopeStatuses, resolveSourcingProductStoredName } from '@win-win/sourcing-request';
 import {
+  parseBudgetDigits as parseBudgetDigitsRaw,
+  sourcingCommercialProposalOfferTotalRub,
+} from '@win-win/sourcing-request';
+import {
   parseCreateSourcingRequestPayload,
   type CreateSourcingRequestPayload,
 } from './dto/create-sourcing-request.dto';
@@ -41,14 +45,19 @@ function sourcingCommercialProposalOfferFromLines(
   lines: SourcingCpLineForOffer[] | null | undefined,
 ): { oldTotalRub: number; newTotalRub: number; avgDiscountPercent: number } | null {
   if (!lines?.length) return null;
-  let total = 0;
-  for (const l of lines) {
-    const unit = priceToNumber(l.offerUnitPrice);
-    total += unit * l.quantity;
-  }
-  total = Math.round(total * 100) / 100;
-  if (total <= 0) return null;
+  const total = sourcingCommercialProposalOfferTotalRub(
+    lines.map((l) => ({ quantity: l.quantity, offerUnitPrice: priceToNumber(l.offerUnitPrice) })),
+  );
+  if (total == null) return null;
   return { oldTotalRub: total, newTotalRub: total, avgDiscountPercent: 0 };
+}
+
+function parseBudgetDigits(raw: string | undefined): Prisma.Decimal | null {
+  const digits = raw?.trim() ? parseBudgetDigitsRaw(raw) : '';
+  if (!digits) return null;
+  const n = Number(digits);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return new Prisma.Decimal(digits);
 }
 
 function decodeUploadOriginalName(original: string | undefined | null): string {
@@ -58,15 +67,6 @@ function decodeUploadOriginalName(original: string | undefined | null): string {
   } catch {
     return original;
   }
-}
-
-function parseBudgetDigits(raw: string | undefined): Prisma.Decimal | null {
-  if (!raw?.trim()) return null;
-  const digits = raw.replace(/\D/g, '');
-  if (!digits) return null;
-  const n = Number(digits);
-  if (!Number.isFinite(n) || n <= 0) return null;
-  return new Prisma.Decimal(digits);
 }
 
 function assertAllReferencedFilesPresent(

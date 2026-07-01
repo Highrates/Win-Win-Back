@@ -28,6 +28,16 @@ export type ProductPricingCalcInput = {
   volumeM3: number;
 };
 
+/** Типовые габариты — единый контракт в @win-win/sourcing-request. */
+export {
+  TYPICAL_SOURCING_VOLUME_M3,
+  TYPICAL_SOURCING_WEIGHT_KG,
+} from '@win-win/sourcing-request';
+
+export type CnyFromRetailResult =
+  | { ok: true; costPriceCny: number; mskRub: number; retailRub: number; shareS: number }
+  | { ok: false; reason: 'INVALID_INPUT' | 'NEGATIVE_CNY' };
+
 export function containerW90V90(containerType: string): { w90: number; v90: number } {
   const t = String(containerType).trim();
   if (t === '20') return { w90: 25407, v90: 29.7 };
@@ -117,6 +127,57 @@ export function calcMskAndRetailRub(
   const retailRub = roundMoney(Pretail);
 
   return { shareS: S, mskRub, retailRub };
+}
+
+/**
+ * Обратный расчёт закупочной цены ¥ из розничного бюджета (₽/ед.) по той же формуле, что calcMskAndRetailRub.
+ * Требует допущений по весу и объёму — в заявке на подбор их обычно нет.
+ */
+export function calcCnyFromRetailRub(
+  profile: PricingProfileCalcInput,
+  retailRub: number,
+  product: ProductPricingCalcInput,
+): CnyFromRetailResult {
+  const m = product.grossWeightKg;
+  const v = product.volumeM3;
+  if (!Number.isFinite(retailRub) || retailRub <= 0 || !Number.isFinite(m) || m <= 0 || !Number.isFinite(v) || v <= 0) {
+    return { ok: false, reason: 'INVALID_INPUT' };
+  }
+
+  const u = profile.markupPct / 100;
+  const targetMsk = retailRub / (1 + u);
+
+  const S = logisticsShareS(m, v, profile);
+  const Rc = profile.cnyRate;
+  const Ru = profile.usdRate;
+  const Re = profile.eurRate;
+  const k = profile.transferCommissionPct / 100;
+  const d = profile.customsAdValoremPct / 100;
+  const dm = profile.customsWeightPct / 100;
+  const nv = profile.vatPct / 100;
+
+  const Dsp = profile.warehousePortUsd * Ru * S;
+  const mult = (1 + k) + d + (1 + k) * nv;
+  const fixedPart = Dsp * mult + m * dm * Re + (profile.fobUsd * Ru + profile.portMskRub + profile.extraLogisticsRub + profile.agentRub) * S;
+
+  const denom = Rc * mult;
+  if (denom <= 0) return { ok: false, reason: 'INVALID_INPUT' };
+
+  const cnyRaw = (targetMsk - fixedPart) / denom;
+  if (!Number.isFinite(cnyRaw) || cnyRaw <= 0) {
+    return { ok: false, reason: 'NEGATIVE_CNY' };
+  }
+
+  const costPriceCny = Math.round(cnyRaw);
+  const forward = calcMskAndRetailRub(profile, { costPriceCny, grossWeightKg: m, volumeM3: v });
+
+  return {
+    ok: true,
+    costPriceCny,
+    mskRub: forward.mskRub,
+    retailRub: forward.retailRub,
+    shareS: S,
+  };
 }
 
 function roundMoney(x: number): number {

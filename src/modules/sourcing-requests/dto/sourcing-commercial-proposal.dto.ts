@@ -39,7 +39,24 @@ export class SourcingCommercialProposalLineInputDto {
 
   @IsNumber()
   @Min(0)
-  offerUnitPrice!: number;
+  costPriceCny!: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0.001)
+  grossWeightKg?: number | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0.000001)
+  volumeM3?: number | null;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  offerUnitPrice?: number;
 
   @IsOptional()
   @IsString()

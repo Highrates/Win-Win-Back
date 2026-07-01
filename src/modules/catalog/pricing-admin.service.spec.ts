@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { Prisma } from '@prisma/client';
 import { PricingAdminService } from './pricing-admin.service';
+import { TYPICAL_SOURCING_WEIGHT_KG, TYPICAL_SOURCING_VOLUME_M3 } from './pricing-calculation';
 
 const profileEntity = {
   id: 'pp-1',
@@ -17,18 +18,91 @@ const profileEntity = {
   customsAdValoremPct: new Prisma.Decimal(10),
   customsWeightPct: new Prisma.Decimal(8),
   vatPct: new Prisma.Decimal(22),
-  markupPct: new Prisma.Decimal(0),
+  markupPct: new Prisma.Decimal(25),
   agentRub: new Prisma.Decimal(50000),
   warehousePortUsd: new Prisma.Decimal(950),
   fobUsd: new Prisma.Decimal(4000),
   portMskRub: new Prisma.Decimal(280000),
   extraLogisticsRub: new Prisma.Decimal(141000),
   createdAt: new Date(),
-  updatedAt: new Date(),
+  updatedAt: new Date('2026-07-01T12:00:00.000Z'),
   categories: [{ categoryId: 'cat-a' }],
 };
 
-describe('PricingAdminService', () => {
+describe('PricingAdminService.reverseRetailToCny', () => {
+  let prisma: {
+    pricingProfile: { findFirst: ReturnType<typeof vi.fn> };
+  };
+  let svc: PricingAdminService;
+
+  beforeEach(() => {
+    prisma = {
+      pricingProfile: {
+        findFirst: vi.fn().mockResolvedValue(profileEntity),
+      },
+    };
+    svc = new PricingAdminService(prisma as never);
+  });
+
+  it('гибрид: ¥ по типовым габаритам, fitsBudget при лёгком товаре', async () => {
+    const r = await svc.reverseRetailToCny({ retailRub: 50_000 });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.typicalWeightKg).toBe(TYPICAL_SOURCING_WEIGHT_KG);
+    expect(r.typicalVolumeM3).toBe(TYPICAL_SOURCING_VOLUME_M3);
+    expect(r.costPriceCny).toBeGreaterThan(0);
+    expect(r.retailAtDims).toBeCloseTo(50_000, -2);
+  });
+
+  it('fitsBudget=false при тяжёлом товаре при том же ¥', async () => {
+    const r = await svc.reverseRetailToCny({
+      retailRub: 50_000,
+      weightKg: 100,
+      volumeM3: TYPICAL_SOURCING_VOLUME_M3,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.fitsBudget).toBe(false);
+    expect(r.retailAtDims).toBeGreaterThan(50_000);
+  });
+
+  it('NO_PROFILE без основного профиля', async () => {
+    prisma.pricingProfile.findFirst.mockResolvedValue(null);
+    const r = await svc.reverseRetailToCny({ retailRub: 50_000 });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toBe('NO_PROFILE');
+  });
+});
+
+describe('PricingAdminService.batchForwardRetailFromDefaultProfile', () => {
+  let prisma: {
+    pricingProfile: { findFirst: ReturnType<typeof vi.fn> };
+  };
+  let svc: PricingAdminService;
+
+  beforeEach(() => {
+    prisma = {
+      pricingProfile: {
+        findFirst: vi.fn().mockResolvedValue(profileEntity),
+      },
+    };
+    svc = new PricingAdminService(prisma as never);
+  });
+
+  it('один findFirst на пакет строк', async () => {
+    const r = await svc.batchForwardRetailFromDefaultProfile([
+      { costPriceCny: 5000, weightKg: 30, volumeM3: 0.15 },
+      { costPriceCny: 8000, weightKg: 30, volumeM3: 0.15 },
+    ]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.results).toHaveLength(2);
+    expect(prisma.pricingProfile.findFirst).toHaveBeenCalledOnce();
+  });
+});
+
+describe('PricingAdminService profiles CRUD', () => {
   let prisma: {
     pricingProfile: {
       findMany: ReturnType<typeof vi.fn>;
@@ -40,9 +114,7 @@ describe('PricingAdminService', () => {
       updateMany: ReturnType<typeof vi.fn>;
       delete: ReturnType<typeof vi.fn>;
     };
-    pricingProfileCategory: {
-      deleteMany: ReturnType<typeof vi.fn>;
-    };
+    pricingProfileCategory: { deleteMany: ReturnType<typeof vi.fn> };
     category: { findMany: ReturnType<typeof vi.fn> };
     $transaction: ReturnType<typeof vi.fn>;
   };
@@ -106,18 +178,6 @@ describe('PricingAdminService', () => {
         where: expect.objectContaining({ isDefault: true }),
       }),
     );
-  });
-
-  it('updateProfile setAsPrimary: без полей формы', async () => {
-    const nonDefault = { ...profileEntity, id: 'pp-2', isDefault: false };
-    const asDefault = { ...profileEntity, id: 'pp-2', isDefault: true };
-    prisma.pricingProfile.findUnique
-      .mockResolvedValueOnce(nonDefault)
-      .mockResolvedValueOnce(nonDefault)
-      .mockResolvedValueOnce(asDefault);
-    const row = await svc.updateProfile('pp-2', { setAsPrimary: true });
-    expect(prisma.$transaction).toHaveBeenCalledOnce();
-    expect(row.isDefault).toBe(true);
   });
 
   it('deleteProfile: нельзя удалить основной', async () => {

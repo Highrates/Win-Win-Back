@@ -11,6 +11,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateNested,
 } from 'class-validator';
 
 export class UpsertPricingProfileAdminDto {
@@ -244,4 +245,64 @@ export class PricingPreviewAdminDto {
   @Type(() => Number)
   @IsNumber()
   volumeM3!: number;
+}
+
+export class PricingReversePreviewAdminDto {
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  retailRub!: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0.001)
+  weightKg?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0.000001)
+  volumeM3?: number;
+}
+
+export class PricingForwardDefaultPreviewAdminDto {
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  costPriceCny!: number;
+
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0.001)
+  weightKg!: number;
+
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0.000001)
+  volumeM3!: number;
+}
+
+export class PricingForwardDefaultPreviewLineAdminDto {
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  costPriceCny!: number;
+
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0.001)
+  weightKg!: number;
+
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0.000001)
+  volumeM3!: number;
+}
+
+export class PricingForwardDefaultPreviewBatchAdminDto {
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => PricingForwardDefaultPreviewLineAdminDto)
+  lines!: PricingForwardDefaultPreviewLineAdminDto[];
 }

@@ -9,7 +9,20 @@ import {
   Prisma,
   SourcingRequestStatus,
 } from '@prisma/client';
+import {
+  parseExpectedBudgetRetailRub,
+  resolveSourcingProductDisplayName,
+  resolveSourcingTypicalDims,
+  TYPICAL_SOURCING_VOLUME_M3,
+  TYPICAL_SOURCING_WEIGHT_KG,
+} from '@win-win/sourcing-request';
 import { PrismaService } from '../../prisma/prisma.service';
+import { PricingAdminService } from '../catalog/pricing-admin.service';
+import type { PricingProfileCalcInput } from '../catalog/pricing-calculation';
+import {
+  forwardRetailFromProfileCalc,
+  reverseRetailToCnyFromProfileCalc,
+} from '../catalog/sourcing-kp-pricing-calc';
 import type {
   InitSourcingCommercialProposalDraftDto,
   SourcingCommercialProposalLineInputDto,
@@ -17,6 +30,20 @@ import type {
 
 function dec(n: number): Prisma.Decimal {
   return new Prisma.Decimal(Number.isFinite(n) ? n.toFixed(2) : '0');
+}
+
+function decCny(n: number): Prisma.Decimal {
+  return new Prisma.Decimal(Number.isFinite(n) && n >= 0 ? n.toFixed(2) : '0');
+}
+
+function dec3(n: number | null | undefined): Prisma.Decimal | null {
+  if (n == null || !Number.isFinite(n) || n <= 0) return null;
+  return new Prisma.Decimal(n.toFixed(3));
+}
+
+function dec6(n: number | null | undefined): Prisma.Decimal | null {
+  if (n == null || !Number.isFinite(n) || n <= 0) return null;
+  return new Prisma.Decimal(n.toFixed(6));
 }
 
 function numFromDecimal(v: Prisma.Decimal | null | undefined): number {
@@ -28,6 +55,25 @@ const KP_LINES_INCLUDE = {
   orderBy: [{ sortOrder: 'asc' as const }, { id: 'asc' as const }],
   include: { images: { orderBy: { sortOrder: 'asc' as const } } },
 };
+
+const REQUEST_FOR_KP_INIT_SELECT = {
+  id: true,
+  title: true,
+  items: {
+    orderBy: [{ sortOrder: 'asc' as const }, { id: 'asc' as const }],
+    select: {
+      id: true,
+      sortOrder: true,
+      name: true,
+      description: true,
+      quantity: true,
+      unit: true,
+      expectedBudget: true,
+    },
+  },
+} satisfies Prisma.SourcingRequestSelect;
+
+type RequestForKpInit = Prisma.SourcingRequestGetPayload<{ select: typeof REQUEST_FOR_KP_INIT_SELECT }>;
 
 function normalizeLineImageUrls(urls: string[] | undefined | null): string[] {
   if (!urls?.length) return [];
@@ -50,7 +96,10 @@ function lineImageCreates(urls: string[] | undefined | null) {
 export class SourcingCommercialProposalService {
   private readonly logger = new Logger(SourcingCommercialProposalService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly pricingAdmin: PricingAdminService,
+  ) {}
 
   private async assertRequestForKp(sourcingRequestId: string) {
     const row = await this.prisma.sourcingRequest.findUnique({
@@ -77,6 +126,9 @@ export class SourcingCommercialProposalService {
     description: string | null;
     quantity: number;
     unit: string;
+    costPriceCny: Prisma.Decimal;
+    grossWeightKg: Prisma.Decimal | null;
+    volumeM3: Prisma.Decimal | null;
     offerUnitPrice: Prisma.Decimal;
     deliveryEta: string | null;
     images?: Array<{ url: string; sortOrder: number }>;
@@ -93,9 +145,112 @@ export class SourcingCommercialProposalService {
         .map((img) => img.url),
       quantity: row.quantity,
       unit: row.unit,
+      costPriceCny: numFromDecimal(row.costPriceCny),
+      grossWeightKg: row.grossWeightKg != null ? numFromDecimal(row.grossWeightKg) : null,
+      volumeM3: row.volumeM3 != null ? numFromDecimal(row.volumeM3) : null,
       offerUnitPrice: numFromDecimal(row.offerUnitPrice),
       deliveryEta: row.deliveryEta,
     };
+  }
+
+  private resolveOfferUnitPriceRubFromCalc(
+    calcIn: PricingProfileCalcInput,
+    l: Pick<SourcingCommercialProposalLineInputDto, 'costPriceCny' | 'grossWeightKg' | 'volumeM3'>,
+  ): number {
+    const costPriceCny = Number.isFinite(l.costPriceCny) ? l.costPriceCny! : 0;
+    if (costPriceCny <= 0) return 0;
+    const { weightKg, volumeM3 } = resolveSourcingTypicalDims(l.grossWeightKg, l.volumeM3);
+    const forward = forwardRetailFromProfileCalc(calcIn, { costPriceCny, weightKg, volumeM3 });
+    if (!forward.ok) {
+      throw new BadRequestException('Некорректные ¥, вес или объём для расчёта цены');
+    }
+    return forward.retailRub;
+  }
+
+  private async requireDefaultProfileCalcContext() {
+    const ctx = await this.pricingAdmin.loadDefaultProfileCalcContext();
+    if (!ctx.ok) {
+      throw new BadRequestException('Нет основного профиля ценообразования для расчёта цены в ₽');
+    }
+    return ctx;
+  }
+
+  private buildLineCreatesFromRequestItems(
+    request: RequestForKpInit,
+    calcIn: PricingProfileCalcInput,
+  ): Prisma.SourcingCommercialProposalLineCreateWithoutProposalInput[] {
+    const productCount = request.items.length;
+    const lines: Prisma.SourcingCommercialProposalLineCreateWithoutProposalInput[] = [];
+
+    for (let i = 0; i < request.items.length; i++) {
+      const item = request.items[i]!;
+      const productName = resolveSourcingProductDisplayName({
+        name: item.name,
+        requestTitle: request.title,
+        productIndex: i,
+        productCount,
+      });
+
+      let costPriceCny = 0;
+      let offerUnitPrice = 0;
+      const retailRub = parseExpectedBudgetRetailRub(item.expectedBudget);
+      if (retailRub != null) {
+        const reverse = reverseRetailToCnyFromProfileCalc(calcIn, { retailRub });
+        if (reverse.ok) {
+          costPriceCny = reverse.costPriceCny;
+          const forward = forwardRetailFromProfileCalc(calcIn, {
+            costPriceCny,
+            weightKg: TYPICAL_SOURCING_WEIGHT_KG,
+            volumeM3: TYPICAL_SOURCING_VOLUME_M3,
+          });
+          if (forward.ok) offerUnitPrice = forward.retailRub;
+        }
+      }
+
+      lines.push({
+        sourceSourcingRequestItemId: item.id,
+        sortOrder: item.sortOrder,
+        productName,
+        description: item.description?.trim() || null,
+        quantity: Math.max(1, item.quantity),
+        unit: (item.unit?.trim() || 'шт').slice(0, 32),
+        costPriceCny: decCny(costPriceCny),
+        grossWeightKg: dec3(TYPICAL_SOURCING_WEIGHT_KG),
+        volumeM3: dec6(TYPICAL_SOURCING_VOLUME_M3),
+        offerUnitPrice: dec(offerUnitPrice),
+        deliveryEta: null,
+      });
+    }
+
+    return lines;
+  }
+
+  private async loadRequestForKpInit(sourcingRequestId: string): Promise<RequestForKpInit> {
+    return this.prisma.sourcingRequest.findUniqueOrThrow({
+      where: { id: sourcingRequestId },
+      select: REQUEST_FOR_KP_INIT_SELECT,
+    });
+  }
+
+  private async seedEmptyDraftFromRequest(
+    proposalId: string,
+    sourcingRequestId: string,
+  ) {
+    const request = await this.loadRequestForKpInit(sourcingRequestId);
+    const calcCtx = await this.requireDefaultProfileCalcContext();
+    const lineCreates = this.buildLineCreatesFromRequestItems(request, calcCtx.calcIn);
+    if (lineCreates.length === 0) return null;
+
+    return this.prisma.sourcingCommercialProposal.update({
+      where: { id: proposalId },
+      data: {
+        lines: {
+          deleteMany: {},
+          create: lineCreates,
+        },
+      },
+      include: { lines: KP_LINES_INCLUDE },
+    });
   }
 
   private serializeProposal(p: {
@@ -105,6 +260,7 @@ export class SourcingCommercialProposalService {
     status: CommercialProposalStatus;
     publishedAt: Date | null;
     publishedByUserId: string | null;
+    pricingProfileUpdatedAt?: Date | null;
     createdAt: Date;
     updatedAt: Date;
     lines: Array<Parameters<SourcingCommercialProposalService['serializeLine']>[0]>;
@@ -116,6 +272,7 @@ export class SourcingCommercialProposalService {
       status: p.status,
       publishedAt: p.publishedAt?.toISOString() ?? null,
       publishedByUserId: p.publishedByUserId,
+      pricingProfileUpdatedAt: p.pricingProfileUpdatedAt?.toISOString() ?? null,
       createdAt: p.createdAt.toISOString(),
       updatedAt: p.updatedAt.toISOString(),
       lines: p.lines.map((l) => this.serializeLine(l)),
@@ -233,6 +390,9 @@ export class SourcingCommercialProposalService {
                 description: l.description,
                 quantity: l.quantity,
                 unit: l.unit.slice(0, 32),
+                costPriceCny: l.costPriceCny,
+                grossWeightKg: l.grossWeightKg,
+                volumeM3: l.volumeM3,
                 offerUnitPrice: l.offerUnitPrice,
                 deliveryEta: l.deliveryEta,
                 images: {
@@ -258,13 +418,22 @@ export class SourcingCommercialProposalService {
       },
       include: { lines: KP_LINES_INCLUDE },
     });
-    if (existing) return this.serializeProposal(existing);
+    if (existing) {
+      if (existing.lines.length > 0) return this.serializeProposal(existing);
+      const seeded = await this.seedEmptyDraftFromRequest(existing.id, sourcingRequestId);
+      return this.serializeProposal(seeded ?? existing);
+    }
+
+    const request = await this.loadRequestForKpInit(sourcingRequestId);
+    const calcCtx = await this.requireDefaultProfileCalcContext();
+    const lineCreates = this.buildLineCreatesFromRequestItems(request, calcCtx.calcIn);
 
     const created = await this.prisma.sourcingCommercialProposal.create({
       data: {
         sourcingRequestId,
         versionNumber: 0,
         status: CommercialProposalStatus.DRAFT,
+        ...(lineCreates.length > 0 ? { lines: { create: lineCreates } } : {}),
       },
       include: { lines: KP_LINES_INCLUDE },
     });
@@ -283,12 +452,15 @@ export class SourcingCommercialProposalService {
     if (!draft) throw new NotFoundException('Сначала создайте черновик КП');
 
     const sorted = [...lines].sort((a, b) => a.sortOrder - b.sortOrder);
+    const calcCtx = await this.requireDefaultProfileCalcContext();
 
     await this.prisma.$transaction(async (tx) => {
       await tx.sourcingCommercialProposalLine.deleteMany({ where: { proposalId: draft.id } });
       for (const l of sorted) {
         const name = l.productName?.trim();
         if (!name) throw new BadRequestException('У каждой строки должно быть название товара');
+        const offerUnitPrice = this.resolveOfferUnitPriceRubFromCalc(calcCtx.calcIn, l);
+        const { weightKg, volumeM3 } = resolveSourcingTypicalDims(l.grossWeightKg, l.volumeM3);
         await tx.sourcingCommercialProposalLine.create({
           data: {
             proposalId: draft.id,
@@ -298,7 +470,10 @@ export class SourcingCommercialProposalService {
             description: l.description?.trim() || null,
             quantity: Math.max(1, Math.floor(l.quantity)),
             unit: (l.unit?.trim() || 'шт').slice(0, 32),
-            offerUnitPrice: dec(l.offerUnitPrice),
+            costPriceCny: decCny(l.costPriceCny ?? 0),
+            grossWeightKg: dec3(weightKg),
+            volumeM3: dec6(volumeM3),
+            offerUnitPrice: dec(offerUnitPrice),
             deliveryEta: l.deliveryEta?.trim() || null,
             images: { create: lineImageCreates(l.imageUrls) },
           },
@@ -328,6 +503,49 @@ export class SourcingCommercialProposalService {
       throw new BadRequestException('Добавьте хотя бы одну позицию в КП');
     }
 
+    for (const l of draft.lines) {
+      const cny = numFromDecimal(l.costPriceCny);
+      if (cny <= 0) {
+        throw new BadRequestException(`Укажите цену в ¥ для «${l.productName.trim() || 'позиции'}»`);
+      }
+    }
+
+    const calcCtx = await this.requireDefaultProfileCalcContext();
+    const sourceItemIds = draft.lines
+      .map((l) => l.sourceSourcingRequestItemId)
+      .filter((id): id is string => Boolean(id?.trim()));
+    const budgetByItemId = new Map<string, number>();
+    if (sourceItemIds.length > 0) {
+      const requestItems = await this.prisma.sourcingRequestItem.findMany({
+        where: { requestId: sourcingRequestId, id: { in: sourceItemIds } },
+        select: { id: true, expectedBudget: true },
+      });
+      for (const item of requestItems) {
+        const budget = parseExpectedBudgetRetailRub(item.expectedBudget);
+        if (budget != null) budgetByItemId.set(item.id, budget);
+      }
+    }
+
+    const warnings: string[] = [];
+    const snapshotPrices = draft.lines.map((l) => {
+      const offerUnitPrice = this.resolveOfferUnitPriceRubFromCalc(calcCtx.calcIn, {
+        costPriceCny: numFromDecimal(l.costPriceCny),
+        grossWeightKg: l.grossWeightKg != null ? numFromDecimal(l.grossWeightKg) : null,
+        volumeM3: l.volumeM3 != null ? numFromDecimal(l.volumeM3) : null,
+      });
+      const sourceId = l.sourceSourcingRequestItemId?.trim();
+      if (sourceId) {
+        const budget = budgetByItemId.get(sourceId);
+        if (budget != null && offerUnitPrice > budget) {
+          warnings.push(
+            `«${l.productName.trim()}»: цена ${offerUnitPrice} ₽ выше бюджета клиента ${budget} ₽`,
+          );
+        }
+      }
+      return { lineId: l.id, offerUnitPrice };
+    });
+    for (const w of warnings) this.logger.warn(`КП publish ${sourcingRequestId}: ${w}`);
+
     const maxRow = await this.prisma.sourcingCommercialProposal.aggregate({
       where: { sourcingRequestId, versionNumber: { gt: 0 } },
       _max: { versionNumber: true },
@@ -335,6 +553,13 @@ export class SourcingCommercialProposalService {
     const nextVersion = (maxRow._max.versionNumber ?? 0) + 1;
 
     await this.prisma.$transaction(async (tx) => {
+      for (const snap of snapshotPrices) {
+        await tx.sourcingCommercialProposalLine.update({
+          where: { id: snap.lineId },
+          data: { offerUnitPrice: dec(snap.offerUnitPrice) },
+        });
+      }
+
       await tx.sourcingCommercialProposal.update({
         where: { id: draft.id },
         data: {
@@ -342,6 +567,7 @@ export class SourcingCommercialProposalService {
           status: CommercialProposalStatus.PUBLISHED,
           publishedAt: new Date(),
           publishedByUserId: staffUserId,
+          pricingProfileUpdatedAt: calcCtx.profileUpdatedAt,
         },
       });
 
@@ -364,6 +590,9 @@ export class SourcingCommercialProposalService {
               description: l.description,
               quantity: l.quantity,
               unit: l.unit,
+              costPriceCny: l.costPriceCny,
+              grossWeightKg: l.grossWeightKg,
+              volumeM3: l.volumeM3,
               offerUnitPrice: l.offerUnitPrice,
               deliveryEta: l.deliveryEta,
               images: {
@@ -384,7 +613,7 @@ export class SourcingCommercialProposalService {
     });
 
     const summary = await this.getSummary(sourcingRequestId);
-    return { versionNumber: nextVersion, summary };
+    return { versionNumber: nextVersion, summary, warnings };
   }
 
   /** Для клиента: последняя опубликованная версия КП по заявке. */

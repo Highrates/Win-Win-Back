@@ -55,6 +55,9 @@ import {
 import {
   PatchPricingProfileAdminDto,
   PricingPreviewAdminDto,
+  PricingForwardDefaultPreviewAdminDto,
+  PricingForwardDefaultPreviewBatchAdminDto,
+  PricingReversePreviewAdminDto,
   UpsertPricingProfileAdminDto,
 } from './dto/pricing-admin.dto';
 import { PricingAdminService } from './pricing-admin.service';
@@ -379,6 +382,29 @@ export class CatalogAdminController {
       weightKg: dto.weightKg,
       volumeM3: dto.volumeM3,
     });
+  }
+
+  @Post('pricing-reverse-preview')
+  reversePricing(@Body() dto: PricingReversePreviewAdminDto) {
+    return this.pricingAdmin.reverseRetailToCny({
+      retailRub: dto.retailRub,
+      weightKg: dto.weightKg,
+      volumeM3: dto.volumeM3,
+    });
+  }
+
+  @Post('pricing-forward-default-preview')
+  forwardPricingDefault(@Body() dto: PricingForwardDefaultPreviewAdminDto) {
+    return this.pricingAdmin.forwardRetailFromDefaultProfile({
+      costPriceCny: dto.costPriceCny,
+      weightKg: dto.weightKg,
+      volumeM3: dto.volumeM3,
+    });
+  }
+
+  @Post('pricing-forward-default-preview-batch')
+  forwardPricingDefaultBatch(@Body() dto: PricingForwardDefaultPreviewBatchAdminDto) {
+    return this.pricingAdmin.batchForwardRetailFromDefaultProfile(dto.lines);
   }
 
   @Get('curated-collections')

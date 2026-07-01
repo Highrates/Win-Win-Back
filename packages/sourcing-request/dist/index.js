@@ -19,3 +19,4 @@ __exportStar(require("./status"), exports);
 __exportStar(require("./product-validation"), exports);
 __exportStar(require("./product-name"), exports);
 __exportStar(require("./list-filters"), exports);
+__exportStar(require("./sourcing-kp-pricing"), exports);
