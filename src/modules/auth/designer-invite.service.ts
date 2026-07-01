@@ -7,6 +7,7 @@ import { MailService } from './mail.service';
 import { UsersService } from '../users/users.service';
 
 const INVITE_JWT_MAX = 64 * 1024;
+const DESIGNER_INVITE_DAILY_LIMIT = 100;
 
 @Injectable()
 export class DesignerInviteService {
@@ -17,11 +18,6 @@ export class DesignerInviteService {
     private readonly mail: MailService,
     private readonly users: UsersService,
   ) {}
-
-  private secret(): string {
-    return (this.config.get<string>('DESIGNER_INVITE_JWT_SECRET')?.trim() ||
-      this.config.get<string>('JWT_SECRET', 'dev-secret')) as string;
-  }
 
   private publicSiteBase(): string {
     const fromEnv =
@@ -39,7 +35,23 @@ export class DesignerInviteService {
     throw new BadRequestException('Не задан FRONTEND_PUBLIC_URL для ссылки в письме');
   }
 
-  async sendInvite(inviterUserId: string, emailRaw: string) {
+  private secret(): string {
+    return (this.config.get<string>('DESIGNER_INVITE_JWT_SECRET')?.trim() ||
+      this.config.get<string>('JWT_SECRET', 'dev-secret')) as string;
+  }
+
+  private async buildInviteLinkForRow(rowId: string): Promise<string> {
+    const token = await this.jwt.signAsync(
+      { sub: rowId, typ: 'dinv' },
+      { secret: this.secret(), expiresIn: '14d' },
+    );
+    if (token.length > INVITE_JWT_MAX) {
+      throw new BadRequestException('Не удалось сформировать ссылку');
+    }
+    return `${this.publicSiteBase()}/invite/designer?t=${encodeURIComponent(token)}`;
+  }
+
+  private async assertApprovedPartnerInviter(inviterUserId: string) {
     const inviter = await this.prisma.user.findFirst({
       where: { id: inviterUserId, role: UserRole.USER, isActive: true },
       include: {
@@ -49,10 +61,40 @@ export class DesignerInviteService {
       },
     });
     if (!inviter) throw new NotFoundException('Пользователь не найден');
-    const p = inviter.profile;
-    if (!p?.winWinPartnerApproved) {
+    if (!inviter.profile?.winWinPartnerApproved) {
       throw new ForbiddenException('Доступно только одобренным партнёрам Win-Win');
     }
+    return inviter;
+  }
+
+  /** Активные приглашения партнёра: не погашены и не истекли. */
+  async listActiveInvitesForUser(inviterUserId: string) {
+    await this.assertApprovedPartnerInviter(inviterUserId);
+    const now = new Date();
+    const rows = await this.prisma.designerInvite.findMany({
+      where: {
+        inviterId: inviterUserId,
+        consumedAt: null,
+        expiresAt: { gt: now },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, emailNorm: true, createdAt: true, expiresAt: true },
+    });
+    const items = await Promise.all(
+      rows.map(async (row) => ({
+        id: row.id,
+        email: row.emailNorm,
+        createdAt: row.createdAt.toISOString(),
+        expiresAt: row.expiresAt.toISOString(),
+        inviteLink: await this.buildInviteLinkForRow(row.id),
+      })),
+    );
+    return { items };
+  }
+
+  async sendInvite(inviterUserId: string, emailRaw: string) {
+    const inviter = await this.assertApprovedPartnerInviter(inviterUserId);
+    const p = inviter.profile;
     const refCode = await this.users.ensureWinWinReferralCodeForUser(inviterUserId);
     if (!refCode) throw new BadRequestException('Не удалось получить реферальный номер');
     const email = emailRaw.trim().toLowerCase();
@@ -67,31 +109,43 @@ export class DesignerInviteService {
     const dayCount = await this.prisma.designerInvite.count({
       where: { inviterId: inviterUserId, createdAt: { gte: since } },
     });
-    if (dayCount >= 30) {
-      throw new BadRequestException('Слишком много приглашений за сутки. Попробуйте завтра.');
+    if (dayCount >= DESIGNER_INVITE_DAILY_LIMIT) {
+      throw new BadRequestException(
+        `Достигнут лимит: не более ${DESIGNER_INVITE_DAILY_LIMIT} приглашений в сутки. Попробуйте завтра.`,
+      );
     }
 
-    const now = new Date();
     const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+    const now = new Date();
+    await this.prisma.designerInvite.updateMany({
+      where: {
+        inviterId: inviterUserId,
+        emailNorm: email,
+        consumedAt: null,
+        expiresAt: { gt: now },
+      },
+      data: { consumedAt: now },
+    });
     const row = await this.prisma.designerInvite.create({
       data: { inviterId: inviterUserId, emailNorm: email, refCode, expiresAt },
     });
-    const token = await this.jwt.signAsync(
-      { sub: row.id, typ: 'dinv' },
-      { secret: this.secret(), expiresIn: '14d' },
-    );
-    if (token.length > INVITE_JWT_MAX) {
+
+    try {
+      const link = await this.buildInviteLinkForRow(row.id);
+      const invName =
+        [p?.firstName, p?.lastName]
+          .filter((x) => x != null && String(x).trim().length > 0)
+          .map((s) => String(s).trim())
+          .join(' ') || (inviter.email ? inviter.email : 'Партнёр Win-Win');
+      await this.mail.sendDesignerInvite({ to: email, inviteLink: link, inviterLabel: invName, refCode });
+      return { ok: true as const, expiresAt: expiresAt.toISOString(), inviteLink: link };
+    } catch (err) {
       await this.prisma.designerInvite.delete({ where: { id: row.id } }).catch(() => undefined);
-      throw new BadRequestException('Не удалось сформировать ссылку');
+      if (err instanceof BadRequestException || err instanceof ForbiddenException || err instanceof NotFoundException) {
+        throw err;
+      }
+      throw new BadRequestException('Не удалось отправить письмо с приглашением. Повторите позже.');
     }
-    const link = `${this.publicSiteBase()}/invite/designer?t=${encodeURIComponent(token)}`;
-    const invName =
-      [p?.firstName, p?.lastName]
-        .filter((x) => x != null && String(x).trim().length > 0)
-        .map((s) => String(s).trim())
-        .join(' ') || (inviter.email ? inviter.email : 'Партнёр Win-Win');
-    await this.mail.sendDesignerInvite({ to: email, inviteLink: link, inviterLabel: invName, refCode });
-    return { ok: true as const, expiresAt: expiresAt.toISOString(), inviteLink: link };
   }
 
   async verifyToken(token: string) {

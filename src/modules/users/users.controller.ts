@@ -105,6 +105,12 @@ export class UsersController {
     return this.designerInvites.sendInvite(userId, dto.email);
   }
 
+  @Get('me/designer-invites')
+  @Throttle({ default: { ttl: 60_000, limit: 60 } })
+  listDesignerInvites(@CurrentUser('sub') userId: string) {
+    return this.designerInvites.listActiveInvitesForUser(userId);
+  }
+
   @Post('me/designer-invite/claim')
   @Throttle({ default: { ttl: 60_000, limit: 10 } })
   claimDesignerInvite(@CurrentUser('sub') userId: string, @Body() dto: DesignerInviteTokenBodyDto) {
