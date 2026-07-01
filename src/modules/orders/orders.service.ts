@@ -115,7 +115,7 @@ export class OrdersService {
             include: {
               product: {
                 include: {
-                  images: { orderBy: { sortOrder: 'asc' }, take: 1, select: { url: true } },
+                  images: { orderBy: { sortOrder: 'asc' }, select: { url: true } },
                 },
               },
             },

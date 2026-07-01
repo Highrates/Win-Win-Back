@@ -325,7 +325,7 @@ export class SourcingRequestsService {
           items: {
             orderBy: { sortOrder: 'asc' },
             include: {
-              referenceImages: { orderBy: { sortOrder: 'asc' }, take: 1 },
+              referenceImages: { orderBy: { sortOrder: 'asc' } },
             },
           },
           commercialProposals: {
@@ -640,11 +640,17 @@ export class SourcingRequestsService {
       status: row.status,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
-      items: row.items.map((item) => ({
-        id: item.id,
-        name: item.name,
-        referenceImageUrl: item.referenceImages[0]?.url ?? null,
-      })),
+      items: row.items.map((item) => {
+        const referenceImageUrls = item.referenceImages
+          .map((img) => img.url.trim())
+          .filter(Boolean);
+        return {
+          id: item.id,
+          name: item.name,
+          referenceImageUrl: referenceImageUrls[0] ?? null,
+          referenceImageUrls,
+        };
+      }),
     };
   }
 
