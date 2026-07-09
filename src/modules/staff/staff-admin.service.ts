@@ -19,7 +19,14 @@ import { MailService } from '../auth/mail.service';
 import { UsersService } from '../users/users.service';
 import { StaffAccessService } from './staff-access.service';
 import { generateStaffPassword } from './staff-password.util';
-import { rowFromUser, staffUserSelect, type StaffAdminRow } from './staff.types';
+import {
+  rowFromUser,
+  STAFF_DELETED_EMAIL_PREFIX,
+  staffDeletedEmail,
+  staffUserSelect,
+  isStaffDeletedEmail,
+  type StaffAdminRow,
+} from './staff.types';
 
 export type { StaffAdminRow, StaffContext } from './staff.types';
 
@@ -47,7 +54,10 @@ export class StaffAdminService {
 
   async listStaff(): Promise<StaffAdminRow[]> {
     const rows = await this.prisma.user.findMany({
-      where: { role: { in: [UserRole.ADMIN, UserRole.MODERATOR] } },
+      where: {
+        role: { in: [UserRole.ADMIN, UserRole.MODERATOR] },
+        NOT: { email: { startsWith: STAFF_DELETED_EMAIL_PREFIX } },
+      },
       orderBy: [{ role: 'asc' }, { email: 'asc' }],
       select: staffUserSelect,
     });
@@ -328,6 +338,50 @@ export class StaffAdminService {
     }
 
     return { emailSent };
+  }
+
+  async deleteStaff(actorUserId: string, id: string): Promise<void> {
+    if (actorUserId === id) {
+      throw new BadRequestException('Нельзя удалить свою учётную запись');
+    }
+
+    const current = await this.prisma.user.findUnique({
+      where: { id },
+      select: staffUserSelect,
+    });
+    if (!current || current.role !== UserRole.MODERATOR) {
+      throw new NotFoundException('Сотрудник не найден');
+    }
+    if (isStaffDeletedEmail(current.email)) {
+      throw new BadRequestException('Сотрудник уже удалён');
+    }
+
+    await this.prisma.user.update({
+      where: { id },
+      data: {
+        isActive: false,
+        email: staffDeletedEmail(id),
+        passwordHash: null,
+        staffDisplayName: null,
+        staffAvatarUrl: null,
+        adminSections: [],
+      },
+      select: staffUserSelect,
+    });
+
+    await this.audit.log({
+      action: AuditAction.DELETE,
+      entityType: 'StaffUser',
+      entityId: id,
+      path: `/settings/admin/staff/${id}`,
+      actorUserId,
+      metadata: {
+        kind: 'staff_deleted',
+        previousEmail: current.email,
+      },
+    });
+
+    this.staffAccess.invalidateStaffAccessCache(id);
   }
 
   async touchAdminLogin(userId: string): Promise<void> {

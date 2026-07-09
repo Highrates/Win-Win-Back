@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -65,5 +66,10 @@ export class StaffAdminController {
     @UploadedFile() file: Express.Multer.File,
   ) {
     return this.staffAdmin.uploadStaffAvatar(actorUserId, id, file);
+  }
+
+  @Delete(':id')
+  delete(@CurrentUser('sub') actorUserId: string, @Param('id') id: string) {
+    return this.staffAdmin.deleteStaff(actorUserId, id);
   }
 }

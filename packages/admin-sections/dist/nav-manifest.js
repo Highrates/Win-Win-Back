@@ -124,7 +124,7 @@ function collectAdminNavHrefs() {
         hrefs.add(child.href);
     for (const link of exports.ADMIN_DASHBOARD_LINKS)
         hrefs.add(link.href);
-    return [...hrefs];
+    return Array.from(hrefs);
 }
 /** Префиксы pathname → раздел; длинные совпадения проверяются первыми. */
 function collectAdminPathPrefixRules() {

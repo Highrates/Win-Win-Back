@@ -39,12 +39,21 @@ export class BrandsService {
     });
   }
 
-  async findBySlug(slug: string, userId?: string) {
+  async findBySlug(slug: string, userId?: string, categoryId?: string) {
+    const scope = categoryId?.trim() ? await this.categoryScopeIds(categoryId) : [];
+    const productWhere: Prisma.ProductWhereInput = { isActive: true };
+    if (scope.length) {
+      productWhere.OR = [
+        { categoryId: { in: scope } },
+        { productCategories: { some: { categoryId: { in: scope } } } },
+      ];
+    }
+
     const row = await this.prisma.brand.findUnique({
       where: { slug, isActive: true },
       include: {
         products: {
-          where: { isActive: true },
+          where: productWhere,
           orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
           include: {
             images: { orderBy: { sortOrder: 'asc' } },

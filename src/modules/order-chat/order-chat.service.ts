@@ -119,21 +119,29 @@ export class OrderChatService {
 
   private labelAuthor(
     role: ChatMessageAuthorRole,
-    profile: { firstName: string | null; lastName: string | null } | null,
-    email: string | null,
+    author: {
+      staffDisplayName?: string | null;
+      email: string | null;
+      profile: { firstName: string | null; lastName: string | null } | null;
+    },
   ): string {
     if (role === ChatMessageAuthorRole.STAFF) {
-      const n = [profile?.firstName, profile?.lastName]
-        .filter((x): x is string => typeof x === 'string' && Boolean(x.trim()))
-        .join(' ')
-        .trim();
-      return n || 'Менеджер Win-Win';
+      return author.staffDisplayName?.trim() || 'Менеджер Win-Win';
     }
-    const n = [profile?.firstName, profile?.lastName]
+    const n = [author.profile?.firstName, author.profile?.lastName]
       .filter((x): x is string => typeof x === 'string' && Boolean(x.trim()))
       .join(' ')
       .trim();
-    return n || email?.trim() || 'Клиент';
+    return n || author.email?.trim() || 'Клиент';
+  }
+
+  private chatAuthorInclude() {
+    return {
+      email: true,
+      staffDisplayName: true,
+      staffAvatarUrl: true,
+      profile: { select: { firstName: true, lastName: true, avatarUrl: true } },
+    } as const;
   }
 
   private mapMessage(m: {
@@ -153,12 +161,17 @@ export class OrderChatService {
     }[];
     author: {
       email: string | null;
+      staffDisplayName: string | null;
+      staffAvatarUrl: string | null;
       profile: { firstName: string | null; lastName: string | null; avatarUrl: string | null } | null;
     };
   }): OrderChatMessageOut {
     const deleted = !!m.deletedAt;
-    const authorLabel = this.labelAuthor(m.authorRole, m.author.profile, m.author.email);
-    const rawAvatar = m.author.profile?.avatarUrl?.trim();
+    const authorLabel = this.labelAuthor(m.authorRole, m.author);
+    const rawAvatar =
+      m.authorRole === ChatMessageAuthorRole.STAFF
+        ? m.author.staffAvatarUrl?.trim()
+        : m.author.profile?.avatarUrl?.trim();
     return {
       id: m.id,
       conversationId: m.conversationId,
@@ -210,9 +223,7 @@ export class OrderChatService {
 
     const includePayload = {
       attachments: true,
-      author: {
-        select: { email: true, profile: { select: { firstName: true, lastName: true, avatarUrl: true } } },
-      },
+      author: { select: this.chatAuthorInclude() },
     } as const;
 
     let messageWhere: Prisma.ChatMessageWhereInput = { conversationId: conv.id };
@@ -338,9 +349,7 @@ export class OrderChatService {
       },
       include: {
         attachments: true,
-        author: {
-          select: { email: true, profile: { select: { firstName: true, lastName: true, avatarUrl: true } } },
-        },
+        author: { select: this.chatAuthorInclude() },
       },
     });
 
@@ -1083,9 +1092,7 @@ export class OrderChatService {
 
     const includePayload = {
       attachments: true,
-      author: {
-        select: { email: true, profile: { select: { firstName: true, lastName: true, avatarUrl: true } } },
-      },
+      author: { select: this.chatAuthorInclude() },
     } as const;
 
     let messageWhere: Prisma.ChatMessageWhereInput = { conversationId: conv.id };
@@ -1174,9 +1181,7 @@ export class OrderChatService {
       },
       include: {
         attachments: true,
-        author: {
-          select: { email: true, profile: { select: { firstName: true, lastName: true, avatarUrl: true } } },
-        },
+        author: { select: this.chatAuthorInclude() },
       },
     });
 

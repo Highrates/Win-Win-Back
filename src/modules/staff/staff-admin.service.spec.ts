@@ -144,4 +144,47 @@ describe('StaffAdminService', () => {
       }),
     );
   });
+
+  it('soft-deletes moderator and writes audit', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'm1',
+      email: 'mod@test',
+      role: UserRole.MODERATOR,
+      isActive: true,
+      staffDisplayName: 'Mod',
+      staffAvatarUrl: null,
+      adminSections: ['orders'],
+      lastAdminLoginAt: null,
+      createdAt: new Date(),
+    });
+    prisma.user.update.mockResolvedValue({});
+
+    await svc.deleteStaff('actor', 'm1');
+
+    expect(prisma.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'm1' },
+        data: expect.objectContaining({
+          isActive: false,
+          email: 'staff-deleted-m1@invalid.local',
+          passwordHash: null,
+          staffDisplayName: null,
+          staffAvatarUrl: null,
+          adminSections: [],
+        }),
+      }),
+    );
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: AuditAction.DELETE,
+        entityType: 'StaffUser',
+        entityId: 'm1',
+        metadata: expect.objectContaining({ kind: 'staff_deleted', previousEmail: 'mod@test' }),
+      }),
+    );
+  });
+
+  it('blocks self-delete', async () => {
+    await expect(svc.deleteStaff('m1', 'm1')).rejects.toThrow('Нельзя удалить свою учётную запись');
+  });
 });

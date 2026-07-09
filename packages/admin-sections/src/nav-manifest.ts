@@ -177,7 +177,7 @@ export function collectAdminNavHrefs(): string[] {
   for (const link of ADMIN_NAV_MANIFEST.midLinks) hrefs.add(link.href);
   for (const child of ADMIN_NAV_MANIFEST.settings.children) hrefs.add(child.href);
   for (const link of ADMIN_DASHBOARD_LINKS) hrefs.add(link.href);
-  return [...hrefs];
+  return Array.from(hrefs);
 }
 
 export type AdminPathPrefixRule = {

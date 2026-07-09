@@ -22,8 +22,9 @@ export class BrandsController {
   findBySlug(
     @Headers('authorization') authorization: string | undefined,
     @Param('slug') slug: string,
+    @Query('categoryId') categoryId?: string,
   ) {
     const userId = userIdFromBearerHeader(this.jwtService, authorization);
-    return this.brandsService.findBySlug(slug, userId);
+    return this.brandsService.findBySlug(slug, userId, categoryId);
   }
 }

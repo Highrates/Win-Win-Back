@@ -1,6 +1,16 @@
 import { normalizeStoredAdminSections, type AdminSectionId, type ModeratorAssignableSectionId } from '@win-win/admin-sections';
 import { UserRole } from '@prisma/client';
 
+export const STAFF_DELETED_EMAIL_PREFIX = 'staff-deleted-';
+
+export function staffDeletedEmail(userId: string): string {
+  return `${STAFF_DELETED_EMAIL_PREFIX}${userId}@invalid.local`;
+}
+
+export function isStaffDeletedEmail(email: string | null | undefined): boolean {
+  return typeof email === 'string' && email.startsWith(STAFF_DELETED_EMAIL_PREFIX);
+}
+
 export type StaffContext = {
   isSuperAdmin: boolean;
   sections: AdminSectionId[];
