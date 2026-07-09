@@ -328,4 +328,86 @@ export class MailService {
     });
     this.logger.log(`Sourcing submit notify (staff) sent to ${dedup.length} recipient(s)`);
   }
+
+  async sendStaffAdminWelcome(params: {
+    to: string;
+    password: string;
+    loginUrl: string;
+    staffDisplayName?: string | null;
+  }): Promise<void> {
+    const { to, password, loginUrl, staffDisplayName } = params;
+    const from = this.config.get<string>('MAIL_FROM')?.trim() || this.config.get<string>('SMTP_USER');
+    if (!from) throw new Error('MAIL_FROM или SMTP_USER нужен для отправки письма');
+    const configuredHost = this.config.get<string>('SMTP_HOST')?.trim();
+    if (!configuredHost) {
+      throw new Error('SMTP_HOST, SMTP_USER и SMTP_PASSWORD должны быть заданы для отправки почты');
+    }
+    const endpoint = await this.smtpConnectTarget(configuredHost);
+    const transport = this.transporter(endpoint);
+    const hello = staffDisplayName?.trim()
+      ? `Здравствуйте, ${staffDisplayName.trim()}!`
+      : 'Здравствуйте!';
+    const subject = 'Доступ в админ-панель Win-Win';
+    const text = [
+      hello,
+      '',
+      'Вам выдан доступ в админ-панель Win-Win.',
+      '',
+      `Страница входа: ${loginUrl}`,
+      `Email для входа: ${to}`,
+      `Пароль: ${password}`,
+      '',
+      'Сохраните пароль в надёжном месте. Если вы не ожидали это письмо, обратитесь к администратору Win-Win.',
+    ].join('\n');
+    const html = [
+      `<p>${hello}</p>`,
+      `<p>Вам выдан доступ в <strong>админ-панель Win-Win</strong>.</p>`,
+      `<p><a href="${loginUrl}">Войти в админку</a></p>`,
+      `<p>Email: <strong>${to}</strong><br/>Пароль: <strong>${password}</strong></p>`,
+      `<p style="color:#666;font-size:12px">Сохраните пароль в надёжном месте. Если вы не ожидали письмо, обратитесь к администратору Win-Win.</p>`,
+    ].join('');
+    await transport.sendMail({ from, to, subject, text, html });
+    this.logger.log(`Staff admin welcome email sent to ${to}`);
+  }
+
+  async sendStaffAdminPasswordReset(params: {
+    to: string;
+    password: string;
+    loginUrl: string;
+    staffDisplayName?: string | null;
+  }): Promise<void> {
+    const { to, password, loginUrl, staffDisplayName } = params;
+    const from = this.config.get<string>('MAIL_FROM')?.trim() || this.config.get<string>('SMTP_USER');
+    if (!from) throw new Error('MAIL_FROM или SMTP_USER нужен для отправки письма');
+    const configuredHost = this.config.get<string>('SMTP_HOST')?.trim();
+    if (!configuredHost) {
+      throw new Error('SMTP_HOST, SMTP_USER и SMTP_PASSWORD должны быть заданы для отправки почты');
+    }
+    const endpoint = await this.smtpConnectTarget(configuredHost);
+    const transport = this.transporter(endpoint);
+    const hello = staffDisplayName?.trim()
+      ? `Здравствуйте, ${staffDisplayName.trim()}!`
+      : 'Здравствуйте!';
+    const subject = 'Новый пароль админ-панели Win-Win';
+    const text = [
+      hello,
+      '',
+      'Администратор сбросил ваш пароль для входа в админ-панель Win-Win.',
+      '',
+      `Страница входа: ${loginUrl}`,
+      `Email для входа: ${to}`,
+      `Новый пароль: ${password}`,
+      '',
+      'Сохраните пароль в надёжном месте. Если вы не ожидали это письмо, обратитесь к администратору Win-Win.',
+    ].join('\n');
+    const html = [
+      `<p>${hello}</p>`,
+      `<p>Администратор сбросил ваш пароль для входа в <strong>админ-панель Win-Win</strong>.</p>`,
+      `<p><a href="${loginUrl}">Войти в админку</a></p>`,
+      `<p>Email: <strong>${to}</strong><br/>Новый пароль: <strong>${password}</strong></p>`,
+      `<p style="color:#666;font-size:12px">Сохраните пароль в надёжном месте. Если вы не ожидали письмо, обратитесь к администратору Win-Win.</p>`,
+    ].join('');
+    await transport.sendMail({ from, to, subject, text, html });
+    this.logger.log(`Staff admin password reset email sent to ${to}`);
+  }
 }

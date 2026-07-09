@@ -14,6 +14,7 @@ import { UserRole } from '@prisma/client';
 import type { Server, Socket } from 'socket.io';
 import type { JwtPayload } from '../../common/decorators/current-user.decorator';
 import { OrderChatService } from './order-chat.service';
+import { StaffAccessService } from '../staff/staff-access.service';
 import type { OrderChatMessageOut } from './order-chat.types';
 import {
   ORDER_CHAT_SOCKET_NAMESPACE,
@@ -38,13 +39,14 @@ export class OrderChatGateway implements OnGatewayInit, OnGatewayConnection {
   constructor(
     private readonly jwt: JwtService,
     private readonly chat: OrderChatService,
+    private readonly staffAccess: StaffAccessService,
   ) {}
 
   afterInit(): void {
     this.chat.registerGateway(this);
   }
 
-  handleConnection(client: Socket): void {
+  async handleConnection(client: Socket): Promise<void> {
     try {
       const auth = client.handshake.auth as { token?: string } | undefined;
       const headerAuth = client.handshake.headers.authorization;
@@ -56,7 +58,12 @@ export class OrderChatGateway implements OnGatewayInit, OnGatewayConnection {
       client.data.userId = payload.sub;
       client.data.role = payload.role;
       if (payload.role === UserRole.ADMIN || payload.role === UserRole.MODERATOR) {
-        void client.join(ROOM_STAFF_ORDER_CHAT);
+        const canStaffChat = await this.staffAccess.canAccessOrdersSection(
+          payload.sub,
+          payload.role,
+        );
+        if (!canStaffChat) throw new Error('staff orders access denied');
+        await client.join(ROOM_STAFF_ORDER_CHAT);
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

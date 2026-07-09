@@ -64,10 +64,14 @@ export class DesignerProjectsController {
   @Get('admin')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.MODERATOR)
-  listAdmin(@Query() query: DesignerProjectsAdminQueryDto) {
+  listAdmin(
+    @CurrentUser('sub') adminUserId: string,
+    @CurrentUser('role') role: UserRole,
+    @Query() query: DesignerProjectsAdminQueryDto,
+  ) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
-    return this.svc.listForAdmin({
+    return this.svc.listForAdmin(adminUserId, role, {
       page,
       limit,
       q: query.q,
@@ -78,7 +82,11 @@ export class DesignerProjectsController {
   @Get('admin/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.MODERATOR)
-  getAdmin(@CurrentUser('role') role: UserRole, @Param('id') id: string) {
-    return this.svc.getForAdmin(role, id);
+  getAdmin(
+    @CurrentUser('sub') adminUserId: string,
+    @CurrentUser('role') role: UserRole,
+    @Param('id') id: string,
+  ) {
+    return this.svc.getForAdmin(adminUserId, role, id);
   }
 }

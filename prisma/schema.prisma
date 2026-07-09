@@ -18,6 +18,14 @@ model User {
   passwordHash String?
   role      UserRole @default(USER)
   isActive  Boolean  @default(true)
+  /// Отображаемое имя сотрудника в админке (ADMIN / MODERATOR).
+  staffDisplayName String?
+  /// URL аватара сотрудника в админке.
+  staffAvatarUrl   String?
+  /// Разделы админки для MODERATOR; ADMIN игнорирует (полный доступ).
+  adminSections  String[] @default([])
+  /// Последний успешный вход в админ-панель.
+  lastAdminLoginAt DateTime?
   /// Согласие на обработку ПДн (отметка времени при регистрации).
   consentPersonalDataAcceptedAt DateTime?
   /// Согласие на SMS-уведомления/рассылку (не транзакционный OTP).

@@ -63,3 +63,44 @@ describe('UsersService (referrals)', () => {
   });
 });
 
+describe('UsersService (admin delete)', () => {
+  it('deleteRetailUserForAdmin deactivates and anonymizes retail user', async () => {
+    const userUpdate = vi.fn();
+    const prisma = {
+      user: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'u1', isActive: true }),
+        update: userUpdate,
+      },
+      $transaction: vi.fn(async (fn: (tx: unknown) => Promise<void>) =>
+        fn({
+          userGroupMember: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+          userProfile: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+          designer: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
+          user: { update: userUpdate },
+        }),
+      ),
+    };
+    const svc = new UsersService(prisma as never, {} as never, {} as never);
+
+    await svc.deleteRetailUserForAdmin('admin1', 'u1');
+
+    expect(userUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'u1' },
+        data: expect.objectContaining({ isActive: false, email: null, phone: null }),
+      }),
+    );
+  });
+
+  it('deleteRetailUserForAdmin rejects already deleted user', async () => {
+    const prisma = {
+      user: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'u1', isActive: false }),
+      },
+    };
+    const svc = new UsersService(prisma as never, {} as never, {} as never);
+
+    await expect(svc.deleteRetailUserForAdmin('admin1', 'u1')).rejects.toBeInstanceOf(BadRequestException);
+  });
+});
+

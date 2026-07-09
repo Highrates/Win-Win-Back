@@ -43,12 +43,14 @@ export class AuditAdminController {
   list(
     @Query('page') pageRaw?: string,
     @Query('limit') limitRaw?: string,
+    @Query('entityType') entityType?: string,
   ) {
     const page = pageRaw ? parseInt(pageRaw, 10) : 1;
     const limit = limitRaw ? parseInt(limitRaw, 10) : 50;
     return this.audit.listForAdmin(
       Number.isFinite(page) ? page : 1,
       Number.isFinite(limit) ? limit : 50,
+      entityType?.trim() ? { entityType: entityType.trim() } : undefined,
     );
   }
 }

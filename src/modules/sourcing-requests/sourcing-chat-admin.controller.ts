@@ -33,11 +33,12 @@ export class SourcingChatAdminController {
 
   @Get(':id/chat/messages')
   messages(
+    @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
     @Query('limit') limitRaw?: string,
     @Query('before') beforeMessageIdRaw?: string,
   ) {
-    return this.chat.listSourcingMessagesForStaff(id, {
+    return this.chat.listSourcingMessagesForStaff(id, user.sub, user.role, {
       limit: limitRaw ? parseInt(limitRaw, 10) : undefined,
       beforeMessageId: beforeMessageIdRaw?.trim() || undefined,
     });

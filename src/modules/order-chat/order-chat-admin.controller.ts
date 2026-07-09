@@ -45,7 +45,7 @@ export class OrderChatAdminController {
     @Query('before') beforeMessageIdRaw?: string,
     @Query('cursor') cursorMessageIdRaw?: string,
   ) {
-    await this.chat.assertStaffCanAccess(orderId);
+    await this.chat.assertStaffCanAccess(orderId, user.sub, user.role);
     let limitParsed: number | undefined;
     if (limitRaw != null && limitRaw.trim() !== '') {
       const n = parseInt(limitRaw, 10);
@@ -71,13 +71,13 @@ export class OrderChatAdminController {
     @Param('orderId') orderId: string,
     @Body() dto: PostOrderChatMessageDto,
   ) {
-    await this.chat.assertStaffCanAccess(orderId);
+    await this.chat.assertStaffCanAccess(orderId, user.sub, user.role);
     return this.chat.postMessage(orderId, user.sub, user.role, dto);
   }
 
   @Post(':orderId/chat/read')
   async read(@CurrentUser() user: JwtPayload, @Param('orderId') orderId: string) {
-    await this.chat.assertStaffCanAccess(orderId);
+    await this.chat.assertStaffCanAccess(orderId, user.sub, user.role);
     await this.chat.markRead(orderId, user.sub, user.role);
     return { ok: true as const };
   }
@@ -94,7 +94,7 @@ export class OrderChatAdminController {
     @Param('orderId') orderId: string,
     @UploadedFile() file: Express.Multer.File,
   ) {
-    await this.chat.assertStaffCanAccess(orderId);
+    await this.chat.assertStaffCanAccess(orderId, user.sub, user.role);
     if (!file?.buffer?.length) throw new BadRequestException('Файл не передан');
     return this.chat.uploadAttachment(orderId, user.sub, user.role, file);
   }
@@ -105,7 +105,7 @@ export class OrderChatAdminController {
     @Param('orderId') orderId: string,
     @Param('messageId') messageId: string,
   ) {
-    await this.chat.assertStaffCanAccess(orderId);
+    await this.chat.assertStaffCanAccess(orderId, user.sub, user.role);
     await this.chat.deleteMessage(orderId, messageId, user.sub, user.role);
     return { ok: true as const };
   }

@@ -661,7 +661,7 @@ export class CatalogService {
           include: {
             product: {
               include: {
-                images: { orderBy: { sortOrder: 'asc' } },
+                images: { orderBy: { sortOrder: 'asc' }, take: 6 },
                 variants: {
                   where: { isActive: true },
                   orderBy: [{ isDefault: 'desc' }, { sortOrder: 'asc' }],

@@ -1,4 +1,4 @@
-import { Controller, Get, Headers, Param } from '@nestjs/common';
+import { Controller, Get, Headers, Param, Query } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { BrandsService } from './brands.service';
 import { Public } from '../../common/decorators/public.decorator';
@@ -13,8 +13,8 @@ export class BrandsController {
 
   @Public()
   @Get()
-  findAll() {
-    return this.brandsService.findAll();
+  findAll(@Query('categoryId') categoryId?: string) {
+    return this.brandsService.findAll(categoryId);
   }
 
   @Public()

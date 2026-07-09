@@ -19,6 +19,7 @@ import { randomBytes } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ObjectStorageService } from '../storage/object-storage.service';
 import { MailService } from '../auth/mail.service';
+import { StaffAccessService } from '../staff/staff-access.service';
 import type { PostOrderChatMessageDto } from './dto/order-chat.dto';
 import type {
   OrderChatMessageOut,
@@ -60,6 +61,7 @@ export class OrderChatService {
     private readonly storage: ObjectStorageService,
     private readonly mail: MailService,
     private readonly config: ConfigService,
+    private readonly staffAccess: StaffAccessService,
   ) {}
 
   registerGateway(g: OrderChatRealtimeEmitter): void {
@@ -93,7 +95,8 @@ export class OrderChatService {
     if (!o) throw new ForbiddenException('Нет доступа к заказу');
   }
 
-  async assertStaffCanAccess(orderId: string): Promise<void> {
+  async assertStaffCanAccess(orderId: string, userId: string, role: string): Promise<void> {
+    await this.staffAccess.assertStaffCanAccessSection(userId, role as UserRole, 'orders');
     await this.assertOrderNonDraft(orderId);
   }
 
@@ -287,7 +290,7 @@ export class OrderChatService {
     if (authorRole === ChatMessageAuthorRole.CUSTOMER) {
       await this.assertCustomerCanAccess(orderId, jwtUserId);
     } else {
-      await this.assertStaffCanAccess(orderId);
+      await this.assertStaffCanAccess(orderId, jwtUserId, jwtRole);
     }
 
     const body = dto.body?.trim() ?? '';
@@ -357,7 +360,7 @@ export class OrderChatService {
     if (authorRole === ChatMessageAuthorRole.CUSTOMER) {
       await this.assertCustomerCanAccess(orderId, jwtUserId);
     } else {
-      await this.assertStaffCanAccess(orderId);
+      await this.assertStaffCanAccess(orderId, jwtUserId, jwtRole);
     }
 
     const conv = await this.prisma.chatConversation.findUnique({
@@ -397,7 +400,7 @@ export class OrderChatService {
     if (authorRole === ChatMessageAuthorRole.CUSTOMER) {
       await this.assertCustomerCanAccess(orderId, jwtUserId);
     } else {
-      await this.assertStaffCanAccess(orderId);
+      await this.assertStaffCanAccess(orderId, jwtUserId, jwtRole);
     }
 
     const conv = await this.prisma.chatConversation.findUnique({
@@ -427,7 +430,7 @@ export class OrderChatService {
     if (authorRole === ChatMessageAuthorRole.CUSTOMER) {
       await this.assertCustomerCanAccess(orderId, jwtUserId);
     } else {
-      await this.assertStaffCanAccess(orderId);
+      await this.assertStaffCanAccess(orderId, jwtUserId, jwtRole);
     }
 
     const safeName = decodeUploadOriginalName(file.originalname);
@@ -739,14 +742,7 @@ export class OrderChatService {
     if (raw) {
       return [...new Set(raw.split(/[,;]/).map((s) => s.trim()).filter(Boolean))];
     }
-    const rows = await this.prisma.user.findMany({
-      where: {
-        role: { in: [UserRole.ADMIN, UserRole.MODERATOR] },
-        email: { not: null },
-      },
-      select: { email: true },
-    });
-    return [...new Set(rows.map((r) => r.email!.trim()).filter(Boolean))];
+    return this.staffAccess.listOrderNotifyStaffEmails();
   }
 
   /** Перед удалением заказа: файлы вложений чата из S3 (БД удалит сообщения каскадом). */
@@ -978,7 +974,7 @@ export class OrderChatService {
   async verifyJoinRoom(userId: string, role: string, orderId: string): Promise<void> {
     const ar = this.authorRoleFromJwt(role);
     if (ar === ChatMessageAuthorRole.STAFF) {
-      await this.assertStaffCanAccess(orderId);
+      await this.assertStaffCanAccess(orderId, userId, role);
       return;
     }
     await this.assertCustomerCanAccess(orderId, userId);
@@ -997,8 +993,13 @@ export class OrderChatService {
     }
   }
 
-  async assertSourcingStaffCanAccess(_sourcingRequestId: string): Promise<void> {
-    /* staff: любая заявка */
+  async assertSourcingStaffCanAccess(
+    _sourcingRequestId: string,
+    userId: string,
+    role: string,
+  ): Promise<void> {
+    const allowed = await this.staffAccess.canAccessOrdersSection(userId, role as UserRole);
+    if (!allowed) throw new ForbiddenException('Нет доступа к разделу «Заказы»');
   }
 
   private async assertSourcingConversationActive(
@@ -1034,9 +1035,11 @@ export class OrderChatService {
 
   async listSourcingMessagesForStaff(
     sourcingRequestId: string,
+    userId: string,
+    role: string,
     opts?: { limit?: number; beforeMessageId?: string | null },
   ) {
-    await this.assertSourcingStaffCanAccess(sourcingRequestId);
+    await this.assertSourcingStaffCanAccess(sourcingRequestId, userId, role);
     return this.listSourcingMessagesInternal(sourcingRequestId, opts);
   }
 
@@ -1050,7 +1053,7 @@ export class OrderChatService {
     if (authorRole === ChatMessageAuthorRole.CUSTOMER) {
       await this.assertSourcingCustomerCanAccess(sourcingRequestId, jwtUserId);
     } else {
-      await this.assertSourcingStaffCanAccess(sourcingRequestId);
+      await this.assertSourcingStaffCanAccess(sourcingRequestId, jwtUserId, jwtRole);
     }
     return this.listSourcingMessagesInternal(sourcingRequestId, opts);
   }
@@ -1129,7 +1132,7 @@ export class OrderChatService {
     if (authorRole === ChatMessageAuthorRole.CUSTOMER) {
       await this.assertSourcingCustomerCanAccess(sourcingRequestId, jwtUserId);
     } else {
-      await this.assertSourcingStaffCanAccess(sourcingRequestId);
+      await this.assertSourcingStaffCanAccess(sourcingRequestId, jwtUserId, jwtRole);
     }
 
     const body = dto.body?.trim() ?? '';
@@ -1196,7 +1199,7 @@ export class OrderChatService {
     if (authorRole === ChatMessageAuthorRole.CUSTOMER) {
       await this.assertSourcingCustomerCanAccess(sourcingRequestId, jwtUserId);
     } else {
-      await this.assertSourcingStaffCanAccess(sourcingRequestId);
+      await this.assertSourcingStaffCanAccess(sourcingRequestId, jwtUserId, jwtRole);
     }
 
     const conv = await this.prisma.chatConversation.findUnique({
@@ -1228,7 +1231,7 @@ export class OrderChatService {
     if (authorRole === ChatMessageAuthorRole.CUSTOMER) {
       await this.assertSourcingCustomerCanAccess(sourcingRequestId, jwtUserId);
     } else {
-      await this.assertSourcingStaffCanAccess(sourcingRequestId);
+      await this.assertSourcingStaffCanAccess(sourcingRequestId, jwtUserId, jwtRole);
     }
     const conv = await this.prisma.chatConversation.findUnique({
       where: { sourcingRequestId },
@@ -1254,7 +1257,7 @@ export class OrderChatService {
     if (authorRole === ChatMessageAuthorRole.CUSTOMER) {
       await this.assertSourcingCustomerCanAccess(sourcingRequestId, jwtUserId);
     } else {
-      await this.assertSourcingStaffCanAccess(sourcingRequestId);
+      await this.assertSourcingStaffCanAccess(sourcingRequestId, jwtUserId, jwtRole);
     }
 
     const safeName = decodeUploadOriginalName(file.originalname);
@@ -1281,7 +1284,7 @@ export class OrderChatService {
   async verifyJoinSourcingRoom(userId: string, role: string, sourcingRequestId: string): Promise<void> {
     const ar = this.authorRoleFromJwt(role);
     if (ar === ChatMessageAuthorRole.STAFF) {
-      await this.assertSourcingStaffCanAccess(sourcingRequestId);
+      await this.assertSourcingStaffCanAccess(sourcingRequestId, userId, role);
       return;
     }
     await this.assertSourcingCustomerCanAccess(sourcingRequestId, userId);

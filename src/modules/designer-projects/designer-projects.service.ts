@@ -3,9 +3,10 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { priceToNumber } from '../../meilisearch/product-search-doc';
+import { StaffAccessService } from '../staff/staff-access.service';
 import type {
   CreateDesignerProjectDto,
   DesignerProjectLineInputDto,
@@ -51,7 +52,10 @@ export function mergeDesignerProjectLines(lines: DesignerProjectLineInputDto[]):
 
 @Injectable()
 export class DesignerProjectsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly staffAccess: StaffAccessService,
+  ) {}
 
   async listMine(userId: string) {
     const rows = await this.prisma.designerProject.findMany({
@@ -410,7 +414,12 @@ export class DesignerProjectsService {
 
   // --- Admin ---
 
-  async listForAdmin(opts: { page: number; limit: number; q?: string; userId?: string }) {
+  async listForAdmin(
+    adminUserId: string,
+    role: UserRole,
+    opts: { page: number; limit: number; q?: string; userId?: string },
+  ) {
+    await this.staffAccess.assertStaffCanAccessSection(adminUserId, role, 'clients');
     const take = Math.min(Math.max(opts.limit, 1), 100);
     const skip = Math.max(opts.page - 1, 0) * take;
 
@@ -463,7 +472,8 @@ export class DesignerProjectsService {
     };
   }
 
-  async getForAdmin(actorRole: string, projectId: string) {
+  async getForAdmin(adminUserId: string, role: UserRole, projectId: string) {
+    await this.staffAccess.assertStaffCanAccessSection(adminUserId, role, 'clients');
     const project = await this.prisma.designerProject.findFirst({
       where: { id: projectId },
       include: {
@@ -473,7 +483,6 @@ export class DesignerProjectsService {
       },
     });
     if (!project) throw new NotFoundException();
-    void actorRole;
     const formatted = await this.formatProjectResponse(project);
     return {
       ...formatted,

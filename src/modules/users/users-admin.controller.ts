@@ -2,7 +2,9 @@ import {
   Body,
   Controller,
   DefaultValuePipe,
+  Delete,
   Get,
+  HttpCode,
   Param,
   ParseIntPipe,
   Post,
@@ -100,5 +102,11 @@ export class UsersAdminController {
   @Get(':id')
   one(@Param('id') id: string) {
     return this.users.findRetailUserByIdForAdmin(id);
+  }
+
+  @Delete(':id')
+  @HttpCode(204)
+  deleteRetail(@CurrentUser('sub') actorUserId: string, @Param('id') id: string) {
+    return this.users.deleteRetailUserForAdmin(actorUserId, id);
   }
 }

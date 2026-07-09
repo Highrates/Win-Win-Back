@@ -16,7 +16,7 @@ import {
   AccountContactPhoneVerifyDto,
 } from './dto/account-contact.dto';
 import type { Request } from 'express';
-import { AuditAction } from '@prisma/client';
+import { AuditAction, UserRole } from '@prisma/client';
 import { AuthService } from './auth.service';
 import { UsersService } from '../users/users.service';
 import { AuditService } from '../audit/audit.service';
@@ -40,6 +40,8 @@ import {
   PasswordResetRequestDto,
   PasswordResetTokenBodyDto,
 } from './dto/password-reset.dto';
+import { StaffAccessService } from '../staff/staff-access.service';
+import { StaffAdminService } from '../staff/staff-admin.service';
 import { Throttle } from '@nestjs/throttler';
 
 /** Per-IP лимиты на чувствительных auth-ручках (перекрывают глобальные 100 req/min). */
@@ -58,6 +60,8 @@ export class AuthController {
     private accountContact: AccountContactService,
     private designerInvites: DesignerInviteService,
     private passwordReset: PasswordResetService,
+    private staffAccess: StaffAccessService,
+    private staffAdmin: StaffAdminService,
   ) {}
 
   private authPath(req: Request, fallback: string): string {
@@ -237,14 +241,20 @@ export class AuthController {
       actorRole: user.role,
       metadata: { channel: 'admin' },
     });
+    await this.staffAdmin.touchAdminLogin(user.id);
     return this.authService.login(user);
   }
 
   @UseGuards(JwtAuthGuard)
   @Get('me')
-  async me(@CurrentUser('sub') userId: string) {
+  async me(@CurrentUser('sub') userId: string, @CurrentUser('role') role: string) {
     const user = await this.usersService.findByIdPublic(userId);
     if (!user) throw new UnauthorizedException();
+    if (role === UserRole.ADMIN || role === UserRole.MODERATOR) {
+      const staff = await this.staffAccess.getStaffContext(userId, user.role);
+      const publicUser = this.staffAccess.stripStaffFieldsFromPublicUser(user);
+      return { ...publicUser, staff };
+    }
     return user;
   }
 

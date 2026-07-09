@@ -5,6 +5,7 @@ import { MediaLibraryService } from '../media-library/media-library.service';
 import { sanitizeProfileAboutHtml } from '../blog/blog-html.util';
 import { AuditService } from '../audit/audit.service';
 import { ProductSearchIndexService } from '../../meilisearch/product-search-index.service';
+import { StaffAccessService } from '../staff/staff-access.service';
 
 function parseStringArray(v: unknown, max: number): string[] {
   if (v === null || v === undefined) return [];
@@ -55,6 +56,7 @@ export class CasesService {
     private readonly media: MediaLibraryService,
     private readonly audit: AuditService,
     private readonly productSearchIndex: ProductSearchIndexService,
+    private readonly staffAccess: StaffAccessService,
   ) {}
 
   private async filterExistingProductIds(ids: string[]): Promise<string[]> {
@@ -323,9 +325,7 @@ export class CasesService {
     id: string,
     likesAdminBoost: number,
   ) {
-    if (role !== UserRole.ADMIN && role !== UserRole.MODERATOR) {
-      throw new ForbiddenException('Forbidden');
-    }
+    await this.staffAccess.assertStaffCanAccessSection(adminUserId, role, 'clients');
     const n = Math.floor(Number(likesAdminBoost));
     const boost = Number.isFinite(n) ? Math.max(0, Math.min(10_000_000, n)) : 0;
     const row = await this.prisma.case.findUnique({ where: { id }, select: { id: true, userId: true } });
@@ -347,9 +347,7 @@ export class CasesService {
   }
 
   async getCaseForAdmin(adminUserId: string, role: UserRole, id: string) {
-    if (role !== UserRole.ADMIN && role !== UserRole.MODERATOR) {
-      throw new ForbiddenException('Forbidden');
-    }
+    await this.staffAccess.assertStaffCanAccessSection(adminUserId, role, 'clients');
     const row = await this.prisma.case.findUnique({ where: { id } });
     if (!row) throw new NotFoundException('Кейс не найден');
     await this.audit.log({
@@ -364,7 +362,8 @@ export class CasesService {
     return row;
   }
 
-  async listCasesByUserForAdmin(adminUserId: string, targetUserId: string) {
+  async listCasesByUserForAdmin(adminUserId: string, role: UserRole, targetUserId: string) {
+    await this.staffAccess.assertStaffCanAccessSection(adminUserId, role, 'clients');
     const rows = await this.prisma.case.findMany({
       where: { userId: targetUserId },
       orderBy: { createdAt: 'desc' },
@@ -381,9 +380,7 @@ export class CasesService {
   }
 
   async deleteCaseForAdmin(adminUserId: string, role: UserRole, id: string) {
-    if (role !== UserRole.ADMIN && role !== UserRole.MODERATOR) {
-      throw new ForbiddenException('Forbidden');
-    }
+    await this.staffAccess.assertStaffCanAccessSection(adminUserId, role, 'clients');
     const row = await this.prisma.case.findUnique({
       where: { id },
       select: { id: true, userId: true, coverImageUrls: true, descriptionHtml: true },

@@ -22,6 +22,7 @@
     "seed": "ts-node --compiler-options {\"module\":\"CommonJS\"} prisma/seed.ts"
   },
   "dependencies": {
+    "@win-win/admin-sections": "file:./packages/admin-sections",
     "@win-win/order-item-snapshot": "file:./packages/order-item-snapshot",
     "@win-win/order-status": "file:./packages/order-status",
     "@win-win/sourcing-request": "file:./packages/sourcing-request",

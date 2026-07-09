@@ -31,6 +31,7 @@ import { UserGroupProfilesModule } from './modules/user-group-profiles/user-grou
 import { UserGroupsModule } from './modules/user-groups/user-groups.module';
 import { SourcingRequestsModule } from './modules/sourcing-requests/sourcing-requests.module';
 import { LikesModule } from './modules/likes/likes.module';
+import { StaffModule } from './modules/staff/staff.module';
 
 @Module({
   imports: [
@@ -50,6 +51,7 @@ import { LikesModule } from './modules/likes/likes.module';
     UsersModule,
     CatalogModule,
     OrderChatModule,
+    StaffModule,
     OrdersModule,
     CollectionsModule,
     ReferralsModule,

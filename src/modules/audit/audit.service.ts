@@ -338,16 +338,21 @@ export class AuditService implements OnModuleInit, OnModuleDestroy {
     return { ok: true, deleted: res.count };
   }
 
-  async listForAdmin(page = 1, limit = 50) {
+  async listForAdmin(page = 1, limit = 50, filters?: { entityType?: string }) {
     const take = Math.min(Math.max(limit, 1), 100);
     const skip = (Math.max(page, 1) - 1) * take;
+    const where: Prisma.AuditLogWhereInput = {};
+    const entityType = filters?.entityType?.trim();
+    if (entityType) where.entityType = entityType;
+
     const [items, total] = await Promise.all([
       this.prisma.auditLog.findMany({
+        where,
         orderBy: { createdAt: 'desc' },
         skip,
         take,
       }),
-      this.prisma.auditLog.count(),
+      this.prisma.auditLog.count({ where }),
     ]);
     return { items, total, page: Math.max(page, 1), limit: take };
   }

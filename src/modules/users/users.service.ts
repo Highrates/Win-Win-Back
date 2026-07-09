@@ -322,6 +322,7 @@ export class UsersService {
     const digits = q?.replace(/\D/g, '') ?? '';
     const where: Prisma.UserWhereInput = {
       role: UserRole.USER,
+      isActive: true,
       ...(q
         ? {
             OR: [
@@ -1253,5 +1254,64 @@ export class UsersService {
       ...safe,
       referralInviteCodeExempt: this.isReferralInviteCodeExempt(safe.email),
     };
+  }
+
+  /** Мягкое удаление клиента: деактивация + анонимизация (заказы и история сохраняются). */
+  async deleteRetailUserForAdmin(_actorUserId: string, id: string): Promise<void> {
+    const user = await this.prisma.user.findFirst({
+      where: { id, role: UserRole.USER },
+      select: { id: true, isActive: true },
+    });
+    if (!user) throw new NotFoundException('User not found');
+    if (!user.isActive) throw new BadRequestException('Пользователь уже удалён');
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.userGroupMember.deleteMany({ where: { userId: id } });
+
+      await tx.userProfile.updateMany({
+        where: { userId: id },
+        data: {
+          firstName: null,
+          lastName: null,
+          avatarUrl: null,
+          city: null,
+          services: Prisma.DbNull,
+          aboutHtml: null,
+          coverLayout: null,
+          coverImageUrls: Prisma.DbNull,
+          winWinReferralCode: null,
+          winWinPartnerApproved: false,
+          partnerApplicationCoverLetter: null,
+          partnerApplicationCvUrl: null,
+          partnerApplicationSubmittedAt: null,
+          partnerApplicationRejectedAt: null,
+          partnerApplicationReferralCode: null,
+          companyName: null,
+          inn: null,
+          kpp: null,
+          legalAddress: null,
+          bankName: null,
+          bankAccount: null,
+          kycData: Prisma.DbNull,
+        },
+      });
+
+      await tx.designer.updateMany({
+        where: { userId: id },
+        data: { isPublic: false },
+      });
+
+      await tx.user.update({
+        where: { id },
+        data: {
+          isActive: false,
+          email: null,
+          phone: null,
+          passwordHash: null,
+          consentPersonalDataAcceptedAt: null,
+          consentSmsMarketingAcceptedAt: null,
+        },
+      });
+    });
   }
 }

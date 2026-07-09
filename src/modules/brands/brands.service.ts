@@ -1,14 +1,39 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { enrichProductsWithLikedByMe } from '../../common/utils/enrich-products-liked-by-me';
+import { collectCategoryAndDescendantIds } from '../catalog/category-scope';
 
 @Injectable()
 export class BrandsService {
   constructor(private prisma: PrismaService) {}
 
-  async findAll() {
-    return this.prisma.brand.findMany({
+  private async categoryScopeIds(categoryId: string): Promise<string[]> {
+    const trimmed = categoryId.trim();
+    if (!trimmed) return [];
+    const rows = await this.prisma.category.findMany({
       where: { isActive: true },
+      select: { id: true, parentId: true },
+    });
+    return collectCategoryAndDescendantIds(trimmed, rows);
+  }
+
+  async findAll(categoryId?: string) {
+    const where: Prisma.BrandWhereInput = { isActive: true };
+    const scope = categoryId?.trim() ? await this.categoryScopeIds(categoryId) : [];
+    if (scope.length) {
+      where.products = {
+        some: {
+          isActive: true,
+          OR: [
+            { categoryId: { in: scope } },
+            { productCategories: { some: { categoryId: { in: scope } } } },
+          ],
+        },
+      };
+    }
+    return this.prisma.brand.findMany({
+      where,
       orderBy: { sortOrder: 'asc' },
       include: { _count: { select: { products: true } } },
     });

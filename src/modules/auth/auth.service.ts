@@ -24,6 +24,7 @@ export class AuthService {
   async validateStaffUser(emailOrPhone: string, password: string) {
     const user = await this.validateUser(emailOrPhone, password);
     if (!user) return null;
+    if (!user.isActive) return null;
     if (user.role !== UserRole.ADMIN && user.role !== UserRole.MODERATOR) return null;
     return user;
   }

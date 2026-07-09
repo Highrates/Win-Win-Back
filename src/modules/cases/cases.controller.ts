@@ -72,9 +72,10 @@ export class CasesController {
   @Roles(UserRole.ADMIN, UserRole.MODERATOR)
   listForUserAdmin(
     @CurrentUser('sub') adminUserId: string,
+    @CurrentUser('role') role: UserRole,
     @Param('userId') userId: string,
   ) {
-    return this.svc.listCasesByUserForAdmin(adminUserId, userId);
+    return this.svc.listCasesByUserForAdmin(adminUserId, role, userId);
   }
 
   @Get('admin/:id')
