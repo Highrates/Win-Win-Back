@@ -16,7 +16,11 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
     "prisma:seed": "prisma db seed",
-    "meili:reindex": "ts-node --compiler-options {\"module\":\"CommonJS\"} scripts/reindex-products-meilisearch.ts"
+    "meili:reindex": "ts-node --compiler-options '{\"module\":\"CommonJS\"}' scripts/reindex-products-meilisearch.ts",
+    "catalog:seed-v1": "ts-node --compiler-options '{\"module\":\"CommonJS\"}' scripts/catalog/seed-catalog-v1-categories.ts",
+    "catalog:seed-tags": "ts-node --compiler-options '{\"module\":\"CommonJS\"}' scripts/catalog/seed-catalog-tags.ts",
+    "catalog:audit-export": "ts-node --compiler-options '{\"module\":\"CommonJS\"}' scripts/catalog/export-catalog-audit.ts",
+    "catalog:apply-batch": "ts-node --compiler-options '{\"module\":\"CommonJS\"}' scripts/catalog/apply-batch-migration.ts"
   },
   "prisma": {
     "seed": "ts-node --compiler-options {\"module\":\"CommonJS\"} prisma/seed.ts"

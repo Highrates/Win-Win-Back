@@ -476,6 +476,28 @@ model ProductCategory {
   @@index([categoryId])
 }
 
+/// Контекстные теги витрины (офис, HoReCa, сад…) — не путать с Category.
+model CatalogTag {
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  name      String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products ProductCatalogTag[]
+}
+
+model ProductCatalogTag {
+  productId String
+  tagId     String
+  product   Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  tag       CatalogTag @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([productId, tagId])
+  @@index([tagId])
+}
+
 model Product {
   id          String   @id @default(cuid())
   slug        String   @unique
@@ -517,6 +539,7 @@ model Product {
   cartItems        CartItem[]
   publicCollectionItems PublicCollectionItem[]
   productCategories ProductCategory[]
+  catalogTags         ProductCatalogTag[]
   curatedCollectionProductItems CuratedCollectionProductItem[]
   curatedProductSetItems      CuratedProductSetItem[]
   modifications    ProductModification[]

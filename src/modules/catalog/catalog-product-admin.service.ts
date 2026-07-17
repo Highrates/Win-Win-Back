@@ -183,6 +183,28 @@ export class CatalogProductAdminService {
     }
   }
 
+  private async syncProductCatalogTags(
+    tx: Prisma.TransactionClient,
+    productId: string,
+    rawIds: string[] | undefined,
+  ): Promise<void> {
+    if (rawIds === undefined) return;
+    const desired = this.dedupeIdList(rawIds);
+    if (desired.length) {
+      const n = await tx.catalogTag.count({ where: { id: { in: desired } } });
+      if (n !== desired.length) {
+        throw new BadRequestException('Один из тегов контекста не найден');
+      }
+    }
+    await tx.productCatalogTag.deleteMany({ where: { productId } });
+    if (desired.length) {
+      await tx.productCatalogTag.createMany({
+        data: desired.map((tagId) => ({ productId, tagId })),
+        skipDuplicates: true,
+      });
+    }
+  }
+
   private async syncProductGallery(
     tx: Prisma.TransactionClient,
     productId: string,
@@ -412,6 +434,7 @@ export class CatalogProductAdminService {
 
         await this.syncProductCuratedCollections(tx, product.id, dto.curatedCollectionIds ?? []);
         await this.syncProductCuratedSets(tx, product.id, dto.curatedProductSetIds ?? []);
+        await this.syncProductCatalogTags(tx, product.id, dto.catalogTagIds ?? []);
 
         const created = await tx.product.findUnique({
           where: { id: product.id },
@@ -524,6 +547,11 @@ export class CatalogProductAdminService {
             },
           },
         },
+        catalogTags: {
+          include: {
+            tag: { select: { id: true, slug: true, name: true, sortOrder: true } },
+          },
+        },
         variants: {
           orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
           include: {
@@ -559,6 +587,10 @@ export class CatalogProductAdminService {
       additionalCategoryIds: row.productCategories.map((p) => p.categoryId),
       curatedCollectionIds: colLinks.map((r) => r.collectionId),
       curatedProductSetIds: setLinks.map((r) => r.setId),
+      catalogTagIds: row.catalogTags.map((t) => t.tagId),
+      catalogTags: row.catalogTags
+        .map((t) => t.tag)
+        .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, 'ru')),
       brandId: row.brandId,
       shortDescription: row.shortDescription,
       isActive: row.isActive,
@@ -685,6 +717,9 @@ export class CatalogProductAdminService {
         if (dto.curatedProductSetIds !== undefined) {
           await this.syncProductCuratedSets(tx, id, dto.curatedProductSetIds);
         }
+        if (dto.catalogTagIds !== undefined) {
+          await this.syncProductCatalogTags(tx, id, dto.catalogTagIds);
+        }
 
         if (dto.gallery !== undefined) {
           await this.syncProductGallery(tx, id, dto.gallery);
@@ -722,5 +757,12 @@ export class CatalogProductAdminService {
   /** Проксирование на variantAdmin для обратной совместимости контроллера. */
   get variantsAdmin() {
     return this.variantAdmin;
+  }
+
+  async listCatalogTags() {
+    return this.prisma.catalogTag.findMany({
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+      select: { id: true, slug: true, name: true, sortOrder: true },
+    });
   }
 }

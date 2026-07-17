@@ -408,6 +408,12 @@ export class CreateProductAdminDto {
   curatedProductSetIds?: string[];
 
   @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(16)
+  @IsString({ each: true })
+  catalogTagIds?: string[];
+
+  @IsOptional()
   @ValidateIf((_, v) => v != null && v !== '')
   @IsString()
   @MinLength(1)
@@ -489,6 +495,12 @@ export class UpdateProductShellAdminDto {
   @ArrayMaxSize(80)
   @IsString({ each: true })
   curatedProductSetIds?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(16)
+  @IsString({ each: true })
+  catalogTagIds?: string[];
 
   @IsOptional()
   @ValidateIf((_, v) => v != null && v !== '')

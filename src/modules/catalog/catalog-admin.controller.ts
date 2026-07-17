@@ -251,6 +251,11 @@ export class CatalogAdminController {
     return { slug: slugifyVariantLabel(q ?? '') };
   }
 
+  @Get('catalog-tags')
+  listCatalogTags() {
+    return this.catalogAdmin.listCatalogTags();
+  }
+
   @Get('products')
   listProducts(
     @Query('q') q?: string,

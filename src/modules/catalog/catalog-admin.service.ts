@@ -714,6 +714,10 @@ export class CatalogAdminService {
     return this.productAdmin.getProductForAdmin(id);
   }
 
+  listCatalogTags() {
+    return this.productAdmin.listCatalogTags();
+  }
+
   /** Кейсы партнёров, в которых указан этот товар. */
   async listCasesForProduct(productId: string) {
     const product = await this.prisma.product.findUnique({
