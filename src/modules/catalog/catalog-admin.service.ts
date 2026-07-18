@@ -698,8 +698,20 @@ export class CatalogAdminService {
     return { url };
   }
 
-  async listProductsForAdmin(q?: string, pageRaw?: number, limitRaw?: number) {
-    return this.productAdmin.listProductsForAdmin(q, pageRaw, limitRaw);
+  async listProductsForAdmin(
+    q?: string,
+    pageRaw?: number,
+    limitRaw?: number,
+    visibility?: string,
+    filters?: {
+      brandId?: string;
+      categoryId?: string;
+      tagId?: string;
+      collectionId?: string;
+      productSetId?: string;
+    },
+  ) {
+    return this.productAdmin.listProductsForAdmin(q, pageRaw, limitRaw, visibility, filters);
   }
 
   async deleteProducts(ids: string[]) {

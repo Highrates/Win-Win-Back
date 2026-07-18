@@ -19,6 +19,95 @@ import { CatalogVariantAdminService } from './catalog-variant-admin.service';
 import { slugifyProductBase } from './slug-transliteration';
 import { buildCategoryPathLabel } from './catalog-category-path';
 
+function parseProductVisibilityFilter(raw?: string): boolean | undefined {
+  const v = raw?.trim().toLowerCase();
+  if (!v || v === 'all') return undefined;
+  if (v === 'catalog' || v === 'active' || v === 'published' || v === 'true' || v === '1') {
+    return true;
+  }
+  if (v === 'hidden' || v === 'inactive' || v === 'false' || v === '0') {
+    return false;
+  }
+  return undefined;
+}
+
+export type AdminProductListQueryFilters = {
+  brandId?: string;
+  categoryId?: string;
+  tagId?: string;
+  collectionId?: string;
+  productSetId?: string;
+};
+
+function buildProductAdminListWhere(
+  q?: string,
+  visibility?: string,
+  filters: AdminProductListQueryFilters = {},
+): Prisma.ProductWhereInput {
+  const and: Prisma.ProductWhereInput[] = [];
+  const trim = q?.trim();
+  if (trim) {
+    and.push({
+      OR: [
+        { name: { contains: trim, mode: 'insensitive' } },
+        { slug: { contains: trim, mode: 'insensitive' } },
+        {
+          variants: {
+            some: { sku: { contains: trim, mode: 'insensitive' } },
+          },
+        },
+      ],
+    });
+  }
+
+  const visibilityFilter = parseProductVisibilityFilter(visibility);
+  if (visibilityFilter !== undefined) {
+    and.push({ isActive: visibilityFilter });
+  }
+
+  const brandRaw = filters.brandId?.trim();
+  if (brandRaw) {
+    if (brandRaw === '_none') {
+      and.push({ brandId: null });
+    } else {
+      and.push({ brandId: brandRaw });
+    }
+  }
+
+  const categoryId = filters.categoryId?.trim();
+  if (categoryId) {
+    and.push({
+      OR: [
+        { categoryId },
+        { productCategories: { some: { categoryId } } },
+      ],
+    });
+  }
+
+  const tagId = filters.tagId?.trim();
+  if (tagId) {
+    and.push({ catalogTags: { some: { tagId } } });
+  }
+
+  const collectionId = filters.collectionId?.trim();
+  if (collectionId) {
+    and.push({
+      curatedCollectionProductItems: { some: { collectionId } },
+    });
+  }
+
+  const productSetId = filters.productSetId?.trim();
+  if (productSetId) {
+    and.push({
+      curatedProductSetItems: { some: { setId: productSetId } },
+    });
+  }
+
+  if (and.length === 0) return {};
+  if (and.length === 1) return and[0]!;
+  return { AND: and };
+}
+
 @Injectable()
 export class CatalogProductAdminService {
   private readonly logger = new Logger(CatalogProductAdminService.name);
@@ -245,21 +334,14 @@ export class CatalogProductAdminService {
     }
   }
 
-  async listProductsForAdmin(q?: string, pageRaw?: number, limitRaw?: number) {
-    const trim = q?.trim();
-    const where: Prisma.ProductWhereInput = trim
-      ? {
-          OR: [
-            { name: { contains: trim, mode: 'insensitive' } },
-            { slug: { contains: trim, mode: 'insensitive' } },
-            {
-              variants: {
-                some: { sku: { contains: trim, mode: 'insensitive' } },
-              },
-            },
-          ],
-        }
-      : {};
+  async listProductsForAdmin(
+    q?: string,
+    pageRaw?: number,
+    limitRaw?: number,
+    visibility?: string,
+    filters: AdminProductListQueryFilters = {},
+  ) {
+    const where = buildProductAdminListWhere(q, visibility, filters);
     const { page, limit, skip } = parseAdminListQuery(pageRaw, limitRaw);
     const [rows, total, cats] = await Promise.all([
       this.prisma.product.findMany({
@@ -287,7 +369,7 @@ export class CatalogProductAdminService {
             },
           },
         },
-        orderBy: [{ updatedAt: 'desc' }],
+        orderBy: [{ isActive: 'desc' }, { updatedAt: 'desc' }],
       }),
       this.prisma.product.count({ where }),
       this.prisma.category.findMany({

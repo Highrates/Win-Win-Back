@@ -14,8 +14,12 @@ describe('CatalogAdminService', () => {
       {} as never,
       {} as never,
     );
-    const r = await svc.listProductsForAdmin('диван', 2, 50);
-    expect(listProductsForAdmin).toHaveBeenCalledWith('диван', 2, 50);
+    const r = await svc.listProductsForAdmin('диван', 2, 50, 'catalog', {
+      brandId: 'b1',
+    });
+    expect(listProductsForAdmin).toHaveBeenCalledWith('диван', 2, 50, 'catalog', {
+      brandId: 'b1',
+    });
     expect(r).toEqual([{ id: '1' }]);
   });
 

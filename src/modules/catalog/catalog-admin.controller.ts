@@ -261,11 +261,19 @@ export class CatalogAdminController {
     @Query('q') q?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('visibility') visibility?: string,
+    @Query('brandId') brandId?: string,
+    @Query('categoryId') categoryId?: string,
+    @Query('tagId') tagId?: string,
+    @Query('collectionId') collectionId?: string,
+    @Query('productSetId') productSetId?: string,
   ) {
     return this.catalogAdmin.listProductsForAdmin(
       q,
       page ? parseInt(page, 10) : undefined,
       limit ? parseInt(limit, 10) : undefined,
+      visibility,
+      { brandId, categoryId, tagId, collectionId, productSetId },
     );
   }
 
