@@ -133,14 +133,12 @@ export class CatalogService {
     });
     const byId = new Map(categories.map((c) => [c.id, c]));
 
-    const stripNodeForCategory = (categoryId: string) => {
+    const rootCategoryFor = (categoryId: string) => {
       let cur = byId.get(categoryId);
       if (!cur) return null;
-      if (cur.parentId === null) return cur;
       while (cur.parentId !== null) {
         const parent = byId.get(cur.parentId);
-        if (!parent) return cur;
-        if (parent.parentId === null) return cur;
+        if (!parent) return null;
         cur = parent;
       }
       return cur;
@@ -165,7 +163,7 @@ export class CatalogService {
         link.product.productCategories,
       );
       for (const cid of ids) {
-        const node = stripNodeForCategory(cid);
+        const node = rootCategoryFor(cid);
         if (node) stripIds.add(node.id);
       }
     }
@@ -178,16 +176,12 @@ export class CatalogService {
     });
 
     let rows = categories
-      .filter((c) => stripIds.has(c.id))
+      .filter((c) => c.parentId === null && stripIds.has(c.id))
       .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, 'ru'));
 
     if (!rows.length) {
       rows = categories
-        .filter((c) => {
-          if (!c.parentId) return false;
-          const parent = byId.get(c.parentId);
-          return parent?.parentId === null;
-        })
+        .filter((c) => c.parentId === null)
         .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, 'ru'));
     }
 
