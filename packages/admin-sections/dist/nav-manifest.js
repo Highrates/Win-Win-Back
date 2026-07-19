@@ -20,6 +20,11 @@ exports.ADMIN_NAV_MANIFEST = {
             { href: '/admin/catalog/products', labelKey: 'products' },
             { href: '/admin/catalog/categories', labelKey: 'categories' },
             {
+                href: '/admin/catalog/tags',
+                labelKey: 'contextTags',
+                activeMatch: 'contextTags',
+            },
+            {
                 href: '/admin/collections',
                 labelKey: 'collections',
                 activeMatch: 'collections',
@@ -104,6 +109,8 @@ function isAdminNavSettingsPath(pathname) {
 function isAdminNavChildActive(pathname, child) {
     if (child.activeMatch === 'collections')
         return pathname.startsWith('/admin/collections');
+    if (child.activeMatch === 'contextTags')
+        return pathname.startsWith('/admin/catalog/tags');
     if (child.activeMatch === 'productSets')
         return pathname.startsWith('/admin/product-sets');
     if (child.activeMatch === 'referrals')

@@ -133,10 +133,29 @@ export class CuratedCollectionsAdminService {
   }
 
   async listForAdmin(q?: string, pageRaw?: number, limitRaw?: number) {
+    const trim = q?.trim();
     const where =
-      q && q.trim()
-        ? { name: { contains: q.trim(), mode: 'insensitive' as const } }
-        : {};
+      trim ? { name: { contains: trim, mode: 'insensitive' as const } } : {};
+
+    if (!trim) {
+      const rows = await this.prisma.curatedCollection.findMany({
+        where,
+        orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+        include: {
+          _count: { select: { productItems: true, brandItems: true } },
+        },
+      });
+      return rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        slug: r.slug,
+        kind: r.kind,
+        isActive: r.isActive,
+        sortOrder: r.sortOrder,
+        itemCount: r.kind === CuratedCollectionKind.PRODUCT ? r._count.productItems : r._count.brandItems,
+      }));
+    }
+
     const { page, limit, skip } = parseAdminListQuery(pageRaw, limitRaw);
     const [rows, total] = await Promise.all([
       this.prisma.curatedCollection.findMany({
@@ -156,6 +175,7 @@ export class CuratedCollectionsAdminService {
       slug: r.slug,
       kind: r.kind,
       isActive: r.isActive,
+      sortOrder: r.sortOrder,
       itemCount: r.kind === CuratedCollectionKind.PRODUCT ? r._count.productItems : r._count.brandItems,
     }));
     return adminListResult(items, total, page, limit);
@@ -422,5 +442,22 @@ export class CuratedCollectionsAdminService {
       await this.mediaLibrary.deleteMediaObjectIfUnreferenced(mid);
     }
     return { deleted: foundIds };
+  }
+
+  async reorder(orderedIds: string[]) {
+    const rows = await this.prisma.curatedCollection.findMany({ select: { id: true } });
+    const set = new Set(rows.map((r) => r.id));
+    if (orderedIds.length !== set.size || !orderedIds.every((id) => set.has(id))) {
+      throw new BadRequestException('orderedIds must list every collection exactly once');
+    }
+    await this.prisma.$transaction(async (tx) => {
+      for (let index = 0; index < orderedIds.length; index++) {
+        await tx.curatedCollection.update({
+          where: { id: orderedIds[index] },
+          data: { sortOrder: index },
+        });
+      }
+    });
+    return { ok: true as const };
   }
 }

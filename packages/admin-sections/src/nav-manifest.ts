@@ -8,6 +8,7 @@ export type AdminNavLabelKey =
   | 'products'
   | 'categories'
   | 'collections'
+  | 'contextTags'
   | 'productSets'
   | 'pricing'
   | 'staff'
@@ -20,7 +21,7 @@ export type AdminNavChild = {
   labelKey: AdminNavLabelKey;
   section?: AdminNavAccessSection;
   /** Спец-логика подсветки активного пункта в сайдбаре. */
-  activeMatch?: 'collections' | 'productSets' | 'referrals' | 'userGroups';
+  activeMatch?: 'collections' | 'contextTags' | 'productSets' | 'referrals' | 'userGroups';
 };
 
 export type AdminNavGroup = {
@@ -65,6 +66,11 @@ export const ADMIN_NAV_MANIFEST = {
     children: [
       { href: '/admin/catalog/products', labelKey: 'products' as const },
       { href: '/admin/catalog/categories', labelKey: 'categories' as const },
+      {
+        href: '/admin/catalog/tags',
+        labelKey: 'contextTags' as const,
+        activeMatch: 'contextTags' as const,
+      },
       {
         href: '/admin/collections',
         labelKey: 'collections' as const,
@@ -163,6 +169,7 @@ export function isAdminNavSettingsPath(pathname: string): boolean {
 
 export function isAdminNavChildActive(pathname: string, child: AdminNavChild): boolean {
   if (child.activeMatch === 'collections') return pathname.startsWith('/admin/collections');
+  if (child.activeMatch === 'contextTags') return pathname.startsWith('/admin/catalog/tags');
   if (child.activeMatch === 'productSets') return pathname.startsWith('/admin/product-sets');
   if (child.activeMatch === 'referrals') return pathname.startsWith('/admin/referrals');
   if (child.activeMatch === 'userGroups') return pathname.startsWith('/admin/user-groups');

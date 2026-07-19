@@ -1,6 +1,7 @@
 import { CuratedCollectionKind } from '@prisma/client';
 import {
   ArrayMaxSize,
+  ArrayMinSize,
   IsArray,
   IsBoolean,
   IsEnum,
@@ -137,4 +138,11 @@ export class BulkDeleteCuratedCollectionsDto {
   @ArrayMaxSize(200)
   @IsString({ each: true })
   ids!: string[];
+}
+
+export class ReorderCuratedCollectionsDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsString({ each: true })
+  orderedIds!: string[];
 }

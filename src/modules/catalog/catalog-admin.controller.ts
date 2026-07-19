@@ -27,6 +27,7 @@ import { CuratedCollectionsAdminService } from './curated-collections-admin.serv
 import {
   BulkDeleteCuratedCollectionsDto,
   CreateCuratedCollectionAdminDto,
+  ReorderCuratedCollectionsDto,
   UpdateCuratedCollectionAdminDto,
 } from './dto/curated-collections-admin.dto';
 import { ProductSetsAdminService } from './product-sets-admin.service';
@@ -62,6 +63,13 @@ import {
 } from './dto/pricing-admin.dto';
 import { PricingAdminService } from './pricing-admin.service';
 import { slugifyVariantLabel } from './slug-transliteration';
+import { CatalogTagsAdminService } from './catalog-tags-admin.service';
+import {
+  BulkDeleteCatalogTagsDto,
+  CreateCatalogTagAdminDto,
+  ReorderCatalogTagsDto,
+  UpdateCatalogTagAdminDto,
+} from './dto/catalog-tags-admin.dto';
 
 const uploadStorage = memoryStorage();
 const RICH_MEDIA_MAX_BYTES = 100 * 1024 * 1024;
@@ -74,6 +82,7 @@ export class CatalogAdminController {
     private readonly catalogAdmin: CatalogAdminService,
     private readonly curatedCollections: CuratedCollectionsAdminService,
     private readonly productSets: ProductSetsAdminService,
+    private readonly catalogTags: CatalogTagsAdminService,
     private readonly pricingAdmin: PricingAdminService,
     private readonly audit: AuditService,
   ) {}
@@ -252,8 +261,45 @@ export class CatalogAdminController {
   }
 
   @Get('catalog-tags')
-  listCatalogTags() {
-    return this.catalogAdmin.listCatalogTags();
+  listCatalogTags(
+    @Query('all') all?: string,
+    @Query('q') q?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    if (all === '1' || all === 'true') {
+      return this.catalogTags.listAllOptions();
+    }
+    return this.catalogTags.listForAdmin(
+      q,
+      page ? parseInt(page, 10) : undefined,
+      limit ? parseInt(limit, 10) : undefined,
+    );
+  }
+
+  @Post('catalog-tags/bulk-delete')
+  bulkDeleteCatalogTags(@Body() dto: BulkDeleteCatalogTagsDto) {
+    return this.catalogTags.deleteMany(dto.ids);
+  }
+
+  @Post('catalog-tags/reorder')
+  reorderCatalogTags(@Body() dto: ReorderCatalogTagsDto) {
+    return this.catalogTags.reorder(dto.orderedIds);
+  }
+
+  @Post('catalog-tags')
+  createCatalogTag(@Body() dto: CreateCatalogTagAdminDto) {
+    return this.catalogTags.create(dto);
+  }
+
+  @Get('catalog-tags/:id')
+  getCatalogTag(@Param('id') id: string) {
+    return this.catalogTags.getForAdmin(id);
+  }
+
+  @Patch('catalog-tags/:id')
+  updateCatalogTag(@Param('id') id: string, @Body() dto: UpdateCatalogTagAdminDto) {
+    return this.catalogTags.update(id, dto);
   }
 
   @Get('products')
@@ -436,6 +482,11 @@ export class CatalogAdminController {
   @Post('curated-collections/bulk-delete')
   bulkDeleteCuratedCollections(@Body() dto: BulkDeleteCuratedCollectionsDto) {
     return this.curatedCollections.deleteMany(dto.ids);
+  }
+
+  @Post('curated-collections/reorder')
+  reorderCuratedCollections(@Body() dto: ReorderCuratedCollectionsDto) {
+    return this.curatedCollections.reorder(dto.orderedIds);
   }
 
   @Post('curated-collections')

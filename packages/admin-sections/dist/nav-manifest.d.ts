@@ -1,13 +1,13 @@
 import type { AdminSectionId } from './constants';
 /** Раздел или pseudo-раздел «staff» (только суперадмин). */
 export type AdminNavAccessSection = AdminSectionId | 'staff';
-export type AdminNavLabelKey = AdminSectionId | 'products' | 'categories' | 'collections' | 'productSets' | 'pricing' | 'staff' | 'userGroups' | 'referrals' | 'site';
+export type AdminNavLabelKey = AdminSectionId | 'products' | 'categories' | 'collections' | 'contextTags' | 'productSets' | 'pricing' | 'staff' | 'userGroups' | 'referrals' | 'site';
 export type AdminNavChild = {
     href: string;
     labelKey: AdminNavLabelKey;
     section?: AdminNavAccessSection;
     /** Спец-логика подсветки активного пункта в сайдбаре. */
-    activeMatch?: 'collections' | 'productSets' | 'referrals' | 'userGroups';
+    activeMatch?: 'collections' | 'contextTags' | 'productSets' | 'referrals' | 'userGroups';
 };
 export type AdminNavGroup = {
     section: AdminNavAccessSection;
@@ -44,6 +44,10 @@ export declare const ADMIN_NAV_MANIFEST: {
             href: string;
             labelKey: "categories";
             activeMatch?: undefined;
+        } | {
+            href: string;
+            labelKey: "contextTags";
+            activeMatch: "contextTags";
         } | {
             href: string;
             labelKey: "collections";
@@ -125,6 +129,10 @@ export declare const ADMIN_NAV_CATALOG_CHILDREN: ({
     href: string;
     labelKey: "categories";
     activeMatch?: undefined;
+} | {
+    href: string;
+    labelKey: "contextTags";
+    activeMatch: "contextTags";
 } | {
     href: string;
     labelKey: "collections";

@@ -83,6 +83,117 @@ export class CatalogService {
     return { items: rows };
   }
 
+  /** Контекстные теги витрины (офис, HoReCa, …) для навигации. */
+  async getCatalogTagsNav() {
+    const rows = await this.prisma.catalogTag.findMany({
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+      select: {
+        slug: true,
+        name: true,
+        sortOrder: true,
+        products: {
+          take: 1,
+          orderBy: { product: { updatedAt: 'desc' } },
+          select: {
+            product: {
+              select: {
+                images: { take: 1, orderBy: { sortOrder: 'asc' }, select: { url: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+    return {
+      items: rows.map((r) => ({
+        slug: r.slug,
+        name: r.name,
+        sortOrder: r.sortOrder,
+        coverImageUrl: r.products[0]?.product?.images[0]?.url ?? null,
+      })),
+    };
+  }
+
+  /** Категории для полосы на главной при выбранном контекстном теге. */
+  async getTagStripCategories(tagSlug: string) {
+    const slug = tagSlug.trim();
+    const tag = await this.prisma.catalogTag.findUnique({ where: { slug } });
+    if (!tag) throw new NotFoundException('Tag not found');
+
+    const categories = await this.prisma.category.findMany({
+      where: { isActive: true },
+      select: {
+        id: true,
+        parentId: true,
+        slug: true,
+        name: true,
+        sortOrder: true,
+        backgroundImageUrl: true,
+      },
+    });
+    const byId = new Map(categories.map((c) => [c.id, c]));
+
+    const stripNodeForCategory = (categoryId: string) => {
+      let cur = byId.get(categoryId);
+      if (!cur) return null;
+      if (cur.parentId === null) return cur;
+      while (cur.parentId !== null) {
+        const parent = byId.get(cur.parentId);
+        if (!parent) return cur;
+        if (parent.parentId === null) return cur;
+        cur = parent;
+      }
+      return cur;
+    };
+
+    const links = await this.prisma.productCatalogTag.findMany({
+      where: { tagId: tag.id, product: { isActive: true } },
+      select: {
+        product: {
+          select: {
+            categoryId: true,
+            productCategories: { select: { categoryId: true } },
+          },
+        },
+      },
+    });
+
+    const stripIds = new Set<string>();
+    for (const link of links) {
+      const ids = collectProductCategoryIds(
+        link.product.categoryId,
+        link.product.productCategories,
+      );
+      for (const cid of ids) {
+        const node = stripNodeForCategory(cid);
+        if (node) stripIds.add(node.id);
+      }
+    }
+
+    const mapRow = (c: (typeof categories)[number]) => ({
+      slug: c.slug,
+      name: c.name,
+      sortOrder: c.sortOrder,
+      backgroundImageUrl: c.backgroundImageUrl,
+    });
+
+    let rows = categories
+      .filter((c) => stripIds.has(c.id))
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, 'ru'));
+
+    if (!rows.length) {
+      rows = categories
+        .filter((c) => {
+          if (!c.parentId) return false;
+          const parent = byId.get(c.parentId);
+          return parent?.parentId === null;
+        })
+        .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, 'ru'));
+    }
+
+    return { items: rows.map(mapRow) };
+  }
+
   /**
    * Дерево для витрины: активные корни и полное поддерево активных потомков (произвольная глубина).
    */

@@ -15,6 +15,10 @@
  *   variantSkus: [{ variantId, sku }] — артикул варианта; при коллизии → sku.1, sku.2, …
  *   shortDescription — короткое описание (plain); "" → null
  *   technicalSpecs — технические параметры (plain); "" → null
+ *
+ * После патчей: модификации с именем «Стандарт» (без учёта регистра) удаляются
+ * вместе с их вариантами (dump-моды импорта). В JSON dump → «Стандарт»;
+ * sku на эти варианты не ставить.
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -263,6 +267,54 @@ async function main() {
           })),
           skipDuplicates: true,
         });
+      }
+    }
+
+    // Dump-моды «Стандарт»: удалить варианты, затем саму модификацию
+    const renameById = new Map<string, string>();
+    if (item.proposed.modifications?.length) {
+      for (const patch of item.proposed.modifications) {
+        renameById.set(patch.id, patch.name.trim());
+      }
+    } else if (item.proposed.modificationName?.trim()) {
+      for (const mod of existing.modifications) {
+        renameById.set(mod.id, item.proposed.modificationName.trim());
+      }
+    }
+
+    const modsLive = dryRun
+      ? existing.modifications.map((m) => ({
+          id: m.id,
+          name: renameById.get(m.id) ?? m.name,
+        }))
+      : await prisma.productModification.findMany({
+          where: { productId: item.productId },
+          select: { id: true, name: true },
+          orderBy: { sortOrder: 'asc' },
+        });
+
+    const standartModIds = modsLive
+      .filter((m) => m.name.trim().toLowerCase() === 'стандарт')
+      .map((m) => m.id);
+
+    if (standartModIds.length) {
+      const variantsOnStandart = await prisma.productVariant.findMany({
+        where: { modificationId: { in: standartModIds } },
+        select: { id: true, sku: true, modificationId: true },
+      });
+      for (const v of variantsOnStandart) {
+        console.log(
+          `      del variant ${v.id.slice(-6)} (sku "${v.sku ?? '—'}") on mod "Стандарт"`,
+        );
+        if (!dryRun) {
+          await prisma.productVariant.delete({ where: { id: v.id } });
+        }
+      }
+      for (const modId of standartModIds) {
+        console.log(`      del mod: "Стандарт" (${modId.slice(-6)})`);
+        if (!dryRun) {
+          await prisma.productModification.delete({ where: { id: modId } });
+        }
       }
     }
 

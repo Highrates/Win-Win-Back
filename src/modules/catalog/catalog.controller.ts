@@ -26,6 +26,20 @@ export class CatalogController {
     return this.catalogService.getCategoryRootsNav();
   }
 
+  /** Контекстные теги каталога для навигации. */
+  @Public()
+  @Get('tags')
+  catalogTagsNav() {
+    return this.catalogService.getCatalogTagsNav();
+  }
+
+  /** Категории для полосы ScrollCatalog на главной при выбранном теге. */
+  @Public()
+  @Get('tags/:slug/strip-categories')
+  tagStripCategories(@Param('slug') slug: string) {
+    return this.catalogService.getTagStripCategories(slug);
+  }
+
   /** Активные подкатегории у корня с данным slug. */
   @Public()
   @Get('categories/:parentSlug/children')

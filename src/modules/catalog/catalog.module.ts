@@ -7,6 +7,7 @@ import { CatalogProductAdminService } from './catalog-product-admin.service';
 import { CatalogVariantAdminService } from './catalog-variant-admin.service';
 import { CatalogVariantPricingService } from './catalog-variant-pricing.service';
 import { CuratedCollectionsAdminService } from './curated-collections-admin.service';
+import { CatalogTagsAdminService } from './catalog-tags-admin.service';
 import { ProductSetsAdminService } from './product-sets-admin.service';
 import { PricingAdminService } from './pricing-admin.service';
 import { BrandMaterialsAdminService } from './brand-materials-admin.service';
@@ -27,6 +28,7 @@ import { CatalogTierPricingService } from './catalog-tier-pricing.service';
     CatalogProductAdminService,
     CatalogAdminService,
     CuratedCollectionsAdminService,
+    CatalogTagsAdminService,
     ProductSetsAdminService,
     PricingAdminService,
     BrandMaterialsAdminService,
