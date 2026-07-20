@@ -340,6 +340,8 @@ model Brand {
   siteUrl     String?
   coverImageUrl       String?
   backgroundImageUrl  String?
+  /// Превью товара для блока Best Brands на главной (левая колонка)
+  productPreviewImageUrl String?
   galleryImageUrls    Json? // до 3 URL доп. изображений (массив строк)
   seoTitle            String?
   seoDescription      String?   @db.Text

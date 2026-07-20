@@ -616,6 +616,8 @@ export class CatalogAdminService {
           ? null
           : dto.logoUrl.trim() || null;
     const bg = dto.backgroundImageUrl?.trim() || null;
+    const productPreview =
+      dto.productPreviewImageUrl == null ? null : dto.productPreviewImageUrl.trim() || null;
     return this.prisma.brand.create({
       data: {
         name: dto.name.trim(),
@@ -625,6 +627,7 @@ export class CatalogAdminService {
         coverImageUrl: cover,
         logoUrl: logo,
         backgroundImageUrl: bg,
+        productPreviewImageUrl: productPreview,
         galleryImageUrls: this.galleryToPrisma(dto.galleryImageUrls),
         description: dto.description?.trim() || null,
         shortDescription: this.normBrandShortDescription(dto.shortDescription),
@@ -658,6 +661,12 @@ export class CatalogAdminService {
     }
     if (dto.backgroundImageUrl !== undefined) {
       data.backgroundImageUrl = dto.backgroundImageUrl?.trim() || null;
+    }
+    if (dto.productPreviewImageUrl !== undefined) {
+      data.productPreviewImageUrl =
+        dto.productPreviewImageUrl === null
+          ? null
+          : dto.productPreviewImageUrl.trim() || null;
     }
     if (dto.galleryImageUrls !== undefined) {
       data.galleryImageUrls = this.galleryToPrisma(dto.galleryImageUrls);

@@ -146,6 +146,10 @@ export class CreateBrandAdminDto {
   backgroundImageUrl?: string | null;
 
   @IsOptional()
+  @IsString()
+  productPreviewImageUrl?: string | null;
+
+  @IsOptional()
   @IsArray()
   @ArrayMaxSize(3)
   @IsString({ each: true })
@@ -195,6 +199,10 @@ export class UpdateBrandAdminDto {
   @IsOptional()
   @IsString()
   backgroundImageUrl?: string | null;
+
+  @IsOptional()
+  @IsString()
+  productPreviewImageUrl?: string | null;
 
   @IsOptional()
   @IsArray()

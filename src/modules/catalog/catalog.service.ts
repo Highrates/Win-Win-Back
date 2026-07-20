@@ -734,11 +734,19 @@ export class CatalogService {
     const brands = active.map((b) => {
       const logo = b.logoUrl?.trim() || null;
       const t = triples.get(b.id) ?? ['', '', ''];
+      const lifestyle =
+        b.backgroundImageUrl?.trim() ||
+        b.coverImageUrl?.trim() ||
+        t[0] ||
+        null;
+      const productPreview = b.productPreviewImageUrl?.trim() || null;
       return {
         slug: b.slug,
         name: b.name,
         logoUrl: logo,
         shortDescription: b.shortDescription?.trim() || null,
+        productPreviewImageUrl: productPreview,
+        lifestyleImageUrl: lifestyle,
         galleryMain: t[0] || null,
         gallerySide1: t[1] || null,
         gallerySide2: t[2] || null,
