@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { CuratedCollectionKind, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MeilisearchService, PRODUCTS_INDEX } from '../../meilisearch/meilisearch.service';
+import { ProductSearchIndexService } from '../../meilisearch/product-search-index.service';
 import {
   buildProductSearchDocument,
   collectProductCategoryIds,
@@ -13,6 +14,16 @@ import {
   collectCategoryAndDescendantIds,
   meilisearchCategoryScopeFilter,
 } from './category-scope';
+import {
+  meilisearchOrEquals,
+  parseCsvIds,
+  parseFlagParam,
+  parseSizeBound,
+} from './catalog-product-filters';
+import {
+  collectBrandMaterialIdsFromElements,
+  collectSizeLabelsFromModifications,
+} from '../../meilisearch/product-search-doc';
 import { CatalogTierPricingService } from './catalog-tier-pricing.service';
 
 /**
@@ -31,6 +42,77 @@ function dedupeProductHitsById<T extends Record<string, unknown>>(hits: T[]): T[
   return out;
 }
 
+/** Фасеты публичного поиска / filter-options. */
+type CatalogSearchFacets = {
+  brandIds: string[];
+  materialIds: string[];
+  widthFrom?: number;
+  widthTo?: number;
+  heightFrom?: number;
+  heightTo?: number;
+  hasCase: boolean;
+  hasModel3d: boolean;
+  hasDrawing: boolean;
+};
+
+const EMPTY_SEARCH_FACETS: CatalogSearchFacets = {
+  brandIds: [],
+  materialIds: [],
+  hasCase: false,
+  hasModel3d: false,
+  hasDrawing: false,
+};
+
+/** Сортировка публичного `GET /catalog/products/search`. */
+export type ProductSearchSort = 'popular' | 'price_asc' | 'price_desc' | 'newest';
+
+const PRODUCT_SEARCH_SORTS = new Set<ProductSearchSort>([
+  'popular',
+  'price_asc',
+  'price_desc',
+  'newest',
+]);
+
+export function parseProductSearchSort(raw?: string | ProductSearchSort): ProductSearchSort {
+  const v = (typeof raw === 'string' ? raw.trim() : raw) as ProductSearchSort | undefined;
+  return v && PRODUCT_SEARCH_SORTS.has(v) ? v : 'popular';
+}
+
+/** Границы цены для search (min цена товара / поле `price` в Meili). */
+function parsePriceBound(raw: number | string | undefined): number | undefined {
+  if (raw == null || raw === '') return undefined;
+  const n = typeof raw === 'number' ? raw : Number(String(raw).trim());
+  if (!Number.isFinite(n) || n < 0) return undefined;
+  return n;
+}
+
+/** Meilisearch `sort` (поля уже в индексе: likesDisplayCount, price, updatedAt). */
+function meilisearchSortFor(sort: ProductSearchSort): string[] {
+  switch (sort) {
+    case 'price_asc':
+      return ['price:asc', 'updatedAt:desc'];
+    case 'price_desc':
+      return ['price:desc', 'updatedAt:desc'];
+    case 'newest':
+      return ['updatedAt:desc'];
+    case 'popular':
+    default:
+      return ['likesDisplayCount:desc', 'updatedAt:desc'];
+  }
+}
+
+/** Prisma orderBy для сортировок без агрегации по вариантам. */
+function prismaOrderByFor(sort: ProductSearchSort): Prisma.ProductOrderByWithRelationInput[] {
+  switch (sort) {
+    case 'newest':
+      return [{ updatedAt: 'desc' }, { id: 'desc' }];
+    case 'popular':
+    default:
+      // Близко к likesDisplayCount = likesUserCount + likesAdminBoost (без expression-orderBy).
+      return [{ likesUserCount: 'desc' }, { likesAdminBoost: 'desc' }, { updatedAt: 'desc' }];
+  }
+}
+
 /** Публичное дерево каталога: корни и рекурсивные активные потомки (без дублирования узлов между ветками). */
 export type PublicCategoryTreeChild = {
   id: string;
@@ -38,6 +120,7 @@ export type PublicCategoryTreeChild = {
   name: string;
   sortOrder: number;
   backgroundImageUrl: string | null;
+  productCount?: number;
   children?: PublicCategoryTreeChild[];
 };
 
@@ -52,6 +135,7 @@ export class CatalogService {
   constructor(
     private prisma: PrismaService,
     private meilisearch: MeilisearchService,
+    private productSearchIndex: ProductSearchIndexService,
     private tierPricing: CatalogTierPricingService,
   ) {}
 
@@ -91,6 +175,8 @@ export class CatalogService {
         slug: true,
         name: true,
         sortOrder: true,
+        coverImageUrl: true,
+        _count: { select: { products: true } },
         products: {
           take: 1,
           orderBy: { product: { updatedAt: 'desc' } },
@@ -109,8 +195,47 @@ export class CatalogService {
         slug: r.slug,
         name: r.name,
         sortOrder: r.sortOrder,
-        coverImageUrl: r.products[0]?.product?.images[0]?.url ?? null,
+        productCount: r._count.products,
+        coverImageUrl:
+          r.coverImageUrl?.trim() ||
+          r.products[0]?.product?.images[0]?.url ||
+          null,
       })),
+    };
+  }
+
+  /** Контекстный тег по slug для страницы `/catalog?tag=`. */
+  async getCatalogTagBySlug(tagSlug: string) {
+    const slug = tagSlug.trim();
+    const row = await this.prisma.catalogTag.findUnique({
+      where: { slug },
+      select: {
+        slug: true,
+        name: true,
+        sortOrder: true,
+        coverImageUrl: true,
+        products: {
+          take: 1,
+          orderBy: { product: { updatedAt: 'desc' } },
+          select: {
+            product: {
+              select: {
+                images: { take: 1, orderBy: { sortOrder: 'asc' }, select: { url: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!row) throw new NotFoundException('Tag not found');
+    return {
+      slug: row.slug,
+      name: row.name,
+      sortOrder: row.sortOrder,
+      coverImageUrl:
+        row.coverImageUrl?.trim() ||
+        row.products[0]?.product?.images[0]?.url ||
+        null,
     };
   }
 
@@ -201,12 +326,15 @@ export class CatalogService {
         name: true,
         sortOrder: true,
         backgroundImageUrl: true,
+        _count: { select: { primaryProducts: true, productCategories: true } },
       },
     });
     const roots: PublicCategoryTreeRoot[] = [];
     for (const r of rootsRows) {
+      const { _count, ...rest } = r;
       roots.push({
-        ...r,
+        ...rest,
+        productCount: _count.primaryProducts + _count.productCategories,
         children: await this.buildPublicCategorySubtree(r.id),
       });
     }
@@ -469,34 +597,146 @@ export class CatalogService {
   async searchProducts(params: {
     q?: string;
     categoryId?: string;
+    /** Один id или CSV (`id1,id2`). */
     brandId?: string;
+    tagSlug?: string;
     page?: number;
     limit?: number;
     userId?: string;
+    sort?: ProductSearchSort | string;
+    priceFrom?: number | string;
+    priceTo?: number | string;
+    /** Ширина / высота варианта, мм. */
+    widthFrom?: number | string;
+    widthTo?: number | string;
+    heightFrom?: number | string;
+    heightTo?: number | string;
+    /** Материалы бренда CSV. */
+    materialId?: string;
+    hasCase?: string | boolean;
+    has3d?: string | boolean;
+    hasDrawing?: string | boolean;
   }) {
     const page = params.page ?? 1;
     const limit = Math.min(params.limit ?? 20, 100);
+    const sort = parseProductSearchSort(params.sort);
+    let priceFrom = parsePriceBound(params.priceFrom);
+    let priceTo = parsePriceBound(params.priceTo);
+    if (priceFrom != null && priceTo != null && priceFrom > priceTo) {
+      const tmp = priceFrom;
+      priceFrom = priceTo;
+      priceTo = tmp;
+    }
+    let widthFrom = parseSizeBound(params.widthFrom);
+    let widthTo = parseSizeBound(params.widthTo);
+    if (widthFrom != null && widthTo != null && widthFrom > widthTo) {
+      const tmp = widthFrom;
+      widthFrom = widthTo;
+      widthTo = tmp;
+    }
+    let heightFrom = parseSizeBound(params.heightFrom);
+    let heightTo = parseSizeBound(params.heightTo);
+    if (heightFrom != null && heightTo != null && heightFrom > heightTo) {
+      const tmp = heightFrom;
+      heightFrom = heightTo;
+      heightTo = tmp;
+    }
+    const brandIds = parseCsvIds(params.brandId);
+    const materialIds = parseCsvIds(params.materialId);
+    const hasCase =
+      typeof params.hasCase === 'boolean' ? params.hasCase : parseFlagParam(String(params.hasCase ?? ''));
+    const hasModel3d =
+      typeof params.has3d === 'boolean' ? params.has3d : parseFlagParam(String(params.has3d ?? ''));
+    const hasDrawing =
+      typeof params.hasDrawing === 'boolean'
+        ? params.hasDrawing
+        : parseFlagParam(String(params.hasDrawing ?? ''));
+
     const categoryScope = params.categoryId?.trim()
       ? await this.categoryScopeIds(params.categoryId)
       : null;
 
-    if (!this.meilisearch.isEnabled()) {
-      return this.searchProductsViaPrisma(params, page, limit, params.userId, categoryScope);
+    const hasDimensionFilter =
+      widthFrom != null || widthTo != null || heightFrom != null || heightTo != null;
+
+    const facetFilters = {
+      brandIds,
+      materialIds,
+      widthFrom,
+      widthTo,
+      heightFrom,
+      heightTo,
+      hasCase,
+      hasModel3d,
+      hasDrawing,
+    };
+
+    let tagIds: string[] = [];
+    if (params.tagSlug?.trim()) {
+      const slugs = [
+        ...new Set(
+          params.tagSlug
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean),
+        ),
+      ];
+      if (slugs.length) {
+        const tags = await this.prisma.catalogTag.findMany({
+          where: { slug: { in: slugs } },
+          select: { id: true },
+        });
+        if (!tags.length) {
+          return { hits: [], total: 0, page, limit };
+        }
+        tagIds = tags.map((t) => t.id);
+      }
+    }
+
+    /** Габариты пока только в Prisma (точные widthMm/heightMm вариантов). */
+    if (!this.meilisearch.isEnabled() || hasDimensionFilter) {
+      return this.searchProductsViaPrisma(
+        params,
+        page,
+        limit,
+        params.userId,
+        categoryScope,
+        tagIds,
+        sort,
+        priceFrom,
+        priceTo,
+        facetFilters,
+      );
     }
 
     try {
       const index = this.meilisearch.getIndex(PRODUCTS_INDEX);
+      await this.productSearchIndex.ensureIndexSettings();
       const filters: string[] = ['isActive = true'];
       if (categoryScope?.length) {
         const catFilter = meilisearchCategoryScopeFilter(categoryScope);
         if (catFilter) filters.push(catFilter);
       }
-      if (params.brandId) filters.push(`brandId = "${params.brandId}"`);
+      const brandFilter = meilisearchOrEquals('brandId', brandIds);
+      if (brandFilter) filters.push(brandFilter);
+      if (tagIds.length === 1) {
+        filters.push(`catalogTagIds = "${tagIds[0]}"`);
+      } else if (tagIds.length > 1) {
+        filters.push(`(${tagIds.map((id) => `catalogTagIds = "${id}"`).join(' OR ')})`);
+      }
+      if (priceFrom != null) filters.push(`price >= ${priceFrom}`);
+      if (priceTo != null) filters.push(`price <= ${priceTo}`);
+      const materialFilter = meilisearchOrEquals('brandMaterialIds', materialIds);
+      if (materialFilter) filters.push(materialFilter);
+      if (hasCase) filters.push('casesLinkedCount > 0');
+      if (hasModel3d) filters.push('hasModel3d = true');
+      if (hasDrawing) filters.push('hasDrawing = true');
       const filter = filters.join(' AND ');
       const result = await index.search(params.q ?? '', {
         filter,
         limit,
         offset: (page - 1) * limit,
+        sort: meilisearchSortFor(sort),
       });
       const rawHits = result.hits as Record<string, unknown>[];
       const deduped = dedupeProductHitsById(rawHits).filter(
@@ -514,8 +754,319 @@ export class CatalogService {
       this.log.warn(
         `Meilisearch недоступен, поиск через БД: ${e instanceof Error ? e.message : String(e)}`,
       );
-      return this.searchProductsViaPrisma(params, page, limit, params.userId, categoryScope);
+      return this.searchProductsViaPrisma(
+        params,
+        page,
+        limit,
+        params.userId,
+        categoryScope,
+        tagIds,
+        sort,
+        priceFrom,
+        priceTo,
+        facetFilters,
+      );
     }
+  }
+
+  /** Опции панели «Фильтры»: бренды / материалы с учётом уже выбранных фильтров (faceted). */
+  async getProductFilterOptions(params: {
+    categoryId?: string;
+    brandId?: string;
+    tagSlug?: string;
+    priceFrom?: number | string;
+    priceTo?: number | string;
+    widthFrom?: number | string;
+    widthTo?: number | string;
+    heightFrom?: number | string;
+    heightTo?: number | string;
+    materialId?: string;
+    hasCase?: string | boolean;
+    has3d?: string | boolean;
+    hasDrawing?: string | boolean;
+  }) {
+    let priceFrom = parsePriceBound(params.priceFrom);
+    let priceTo = parsePriceBound(params.priceTo);
+    if (priceFrom != null && priceTo != null && priceFrom > priceTo) {
+      const tmp = priceFrom;
+      priceFrom = priceTo;
+      priceTo = tmp;
+    }
+    let widthFrom = parseSizeBound(params.widthFrom);
+    let widthTo = parseSizeBound(params.widthTo);
+    if (widthFrom != null && widthTo != null && widthFrom > widthTo) {
+      const tmp = widthFrom;
+      widthFrom = widthTo;
+      widthTo = tmp;
+    }
+    let heightFrom = parseSizeBound(params.heightFrom);
+    let heightTo = parseSizeBound(params.heightTo);
+    if (heightFrom != null && heightTo != null && heightFrom > heightTo) {
+      const tmp = heightFrom;
+      heightFrom = heightTo;
+      heightTo = tmp;
+    }
+    const brandIds = parseCsvIds(params.brandId);
+    const materialIds = parseCsvIds(params.materialId);
+    const hasCase =
+      typeof params.hasCase === 'boolean' ? params.hasCase : parseFlagParam(String(params.hasCase ?? ''));
+    const hasModel3d =
+      typeof params.has3d === 'boolean' ? params.has3d : parseFlagParam(String(params.has3d ?? ''));
+    const hasDrawing =
+      typeof params.hasDrawing === 'boolean'
+        ? params.hasDrawing
+        : parseFlagParam(String(params.hasDrawing ?? ''));
+
+    const facets: CatalogSearchFacets = {
+      brandIds,
+      materialIds,
+      widthFrom,
+      widthTo,
+      heightFrom,
+      heightTo,
+      hasCase,
+      hasModel3d,
+      hasDrawing,
+    };
+
+    const categoryScope = params.categoryId?.trim()
+      ? await this.categoryScopeIds(params.categoryId)
+      : null;
+
+    let tagIds: string[] = [];
+    if (params.tagSlug?.trim()) {
+      const slugs = [
+        ...new Set(
+          params.tagSlug
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean),
+        ),
+      ];
+      if (slugs.length) {
+        const tags = await this.prisma.catalogTag.findMany({
+          where: { slug: { in: slugs } },
+          select: { id: true },
+        });
+        tagIds = tags.map((t) => t.id);
+        if (!tagIds.length) {
+          return { materials: [], brands: [] };
+        }
+      }
+    }
+
+    const baseOpts = {
+      categoryScope,
+      tagIds,
+      priceFrom,
+      priceTo,
+      facets,
+    };
+
+    const brandWhere = this.buildProductFilterWhere({
+      ...baseOpts,
+      omitBrandFilter: true,
+    });
+    const materialWhere = this.buildProductFilterWhere({
+      ...baseOpts,
+      omitMaterialFilter: true,
+    });
+
+    const [brandRows, materialRows] = await Promise.all([
+      this.prisma.product.findMany({
+        where: brandWhere,
+        select: {
+          brandId: true,
+          brand: { select: { id: true, name: true } },
+        },
+      }),
+      this.prisma.product.findMany({
+        where: materialWhere,
+        select: {
+          elements: {
+            select: {
+              availabilities: {
+                select: {
+                  brandMaterialColor: {
+                    select: {
+                      brandMaterial: { select: { id: true, name: true } },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+    ]);
+
+    const brandsMap = new Map<string, string>();
+    const materialsMap = new Map<string, string>();
+
+    for (const p of brandRows) {
+      if (p.brand?.id) brandsMap.set(p.brand.id, p.brand.name);
+    }
+    for (const p of materialRows) {
+      for (const el of p.elements) {
+        for (const a of el.availabilities) {
+          const m = a.brandMaterialColor.brandMaterial;
+          if (m?.id) materialsMap.set(m.id, m.name);
+        }
+      }
+    }
+
+    /** Выбранные значения остаются в списке, даже если после других фильтров hit=0. */
+    const missingBrandIds = brandIds.filter((id) => !brandsMap.has(id));
+    if (missingBrandIds.length) {
+      const extra = await this.prisma.brand.findMany({
+        where: { id: { in: missingBrandIds } },
+        select: { id: true, name: true },
+      });
+      for (const b of extra) brandsMap.set(b.id, b.name);
+    }
+    const missingMaterialIds = materialIds.filter((id) => !materialsMap.has(id));
+    if (missingMaterialIds.length) {
+      const extra = await this.prisma.brandMaterial.findMany({
+        where: { id: { in: missingMaterialIds } },
+        select: { id: true, name: true },
+      });
+      for (const m of extra) materialsMap.set(m.id, m.name);
+    }
+
+    const materials = [...materialsMap.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+    const brands = [...brandsMap.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+
+    return { materials, brands };
+  }
+
+  /**
+   * Общий WHERE витрины (категория / зона / цена / габариты / флаги / бренд / материал).
+   * Для faceted options можно опустить собственный фильтр измерения.
+   */
+  private buildProductFilterWhere(opts: {
+    categoryScope?: string[] | null;
+    tagIds?: string[] | null;
+    q?: string;
+    priceFrom?: number;
+    priceTo?: number;
+    facets: CatalogSearchFacets;
+    omitBrandFilter?: boolean;
+    omitMaterialFilter?: boolean;
+  }): Prisma.ProductWhereInput {
+    const facets = opts.facets ?? EMPTY_SEARCH_FACETS;
+    const and: Prisma.ProductWhereInput[] = [{ isActive: true }];
+    const scope = opts.categoryScope;
+    if (scope?.length) {
+      and.push({
+        OR: [
+          { categoryId: { in: scope } },
+          { productCategories: { some: { categoryId: { in: scope } } } },
+        ],
+      });
+    }
+    if (!opts.omitBrandFilter) {
+      if (facets.brandIds.length === 1) {
+        and.push({ brandId: facets.brandIds[0] });
+      } else if (facets.brandIds.length > 1) {
+        and.push({ brandId: { in: facets.brandIds } });
+      }
+    }
+    const tagIds = opts.tagIds;
+    if (tagIds?.length === 1) {
+      and.push({ catalogTags: { some: { tagId: tagIds[0] } } });
+    } else if (tagIds && tagIds.length > 1) {
+      and.push({
+        OR: tagIds.map((tagId) => ({ catalogTags: { some: { tagId } } })),
+      });
+    }
+    const q = opts.q?.trim();
+    if (q) {
+      and.push({
+        OR: [
+          { name: { contains: q, mode: 'insensitive' } },
+          { slug: { contains: q, mode: 'insensitive' } },
+          { shortDescription: { contains: q, mode: 'insensitive' } },
+        ],
+      });
+    }
+    if (opts.priceFrom != null) {
+      and.push({
+        variants: {
+          some: { isActive: true, price: { gte: opts.priceFrom } },
+        },
+      });
+      and.push({
+        NOT: {
+          variants: {
+            some: {
+              isActive: true,
+              price: { gt: 0, lt: opts.priceFrom },
+            },
+          },
+        },
+      });
+    }
+    if (opts.priceTo != null) {
+      and.push({
+        variants: {
+          some: { isActive: true, price: { gt: 0, lte: opts.priceTo } },
+        },
+      });
+    }
+    if (
+      facets.widthFrom != null ||
+      facets.widthTo != null ||
+      facets.heightFrom != null ||
+      facets.heightTo != null
+    ) {
+      const variantSome: Prisma.ProductVariantWhereInput = { isActive: true };
+      if (facets.widthFrom != null || facets.widthTo != null) {
+        const widthMm: Prisma.IntNullableFilter = { not: null };
+        if (facets.widthFrom != null) widthMm.gte = facets.widthFrom;
+        if (facets.widthTo != null) widthMm.lte = facets.widthTo;
+        variantSome.widthMm = widthMm;
+      }
+      if (facets.heightFrom != null || facets.heightTo != null) {
+        const heightMm: Prisma.IntNullableFilter = { not: null };
+        if (facets.heightFrom != null) heightMm.gte = facets.heightFrom;
+        if (facets.heightTo != null) heightMm.lte = facets.heightTo;
+        variantSome.heightMm = heightMm;
+      }
+      and.push({ variants: { some: variantSome } });
+    }
+    if (!opts.omitMaterialFilter && facets.materialIds.length) {
+      and.push({
+        elements: {
+          some: {
+            availabilities: {
+              some: {
+                brandMaterialColor: { brandMaterialId: { in: facets.materialIds } },
+              },
+            },
+          },
+        },
+      });
+    }
+    if (facets.hasCase) {
+      and.push({ casesLinkedCount: { gt: 0 } });
+    }
+    if (facets.hasModel3d) {
+      and.push({
+        variants: { some: { isActive: true, model3dUrl: { not: null } } },
+      });
+    }
+    if (facets.hasDrawing) {
+      and.push({
+        variants: { some: { isActive: true, drawingUrl: { not: null } } },
+      });
+    }
+    return {
+      AND: [...and, { variants: { some: { isActive: true } } }],
+    };
   }
 
   private async searchProductsViaPrisma(
@@ -528,68 +1079,93 @@ export class CatalogService {
     limit: number,
     userId?: string,
     categoryScope?: string[] | null,
+    tagIds?: string[] | null,
+    sort: ProductSearchSort = 'popular',
+    priceFrom?: number,
+    priceTo?: number,
+    facets: CatalogSearchFacets = EMPTY_SEARCH_FACETS,
   ) {
-    const and: Prisma.ProductWhereInput[] = [{ isActive: true }];
-    const scope =
-      categoryScope ??
-      (params.categoryId?.trim() ? await this.categoryScopeIds(params.categoryId) : null);
-    if (scope?.length) {
-      and.push({
-        OR: [
-          { categoryId: { in: scope } },
-          { productCategories: { some: { categoryId: { in: scope } } } },
-        ],
-      });
-    }
-    if (params.brandId) and.push({ brandId: params.brandId });
-    const q = params.q?.trim();
-    if (q) {
-      and.push({
-        OR: [
-          { name: { contains: q, mode: 'insensitive' } },
-          { slug: { contains: q, mode: 'insensitive' } },
-          { shortDescription: { contains: q, mode: 'insensitive' } },
-        ],
-      });
-    }
-    const productWhere: Prisma.ProductWhereInput = {
-      AND: [...and, { variants: { some: { isActive: true } } }],
-    };
+    const productWhere = this.buildProductFilterWhere({
+      categoryScope:
+        categoryScope ??
+        (params.categoryId?.trim() ? await this.categoryScopeIds(params.categoryId) : null),
+      tagIds,
+      q: params.q,
+      priceFrom,
+      priceTo,
+      facets,
+    });
     const skip = (page - 1) * limit;
-    const [products, total] = await Promise.all([
-      this.prisma.product.findMany({
+    const needsInMemoryPriceSort = sort === 'price_asc' || sort === 'price_desc';
+
+    const productSelect = {
+      id: true,
+      slug: true,
+      name: true,
+      shortDescription: true,
+      categoryId: true,
+      brandId: true,
+      isActive: true,
+      updatedAt: true,
+      casesLinkedCount: true,
+      likesUserCount: true,
+      likesAdminBoost: true,
+      category: { select: { name: true } },
+      productCategories: { select: { categoryId: true } },
+      brand: { select: { name: true } },
+      images: {
+        take: 6,
+        orderBy: { sortOrder: 'asc' as const },
+        select: { url: true },
+      },
+      variants: {
+        where: { isActive: true },
+        select: { price: true, model3dUrl: true, drawingUrl: true },
+      },
+      modifications: { select: { name: true } },
+      elements: {
+        select: {
+          availabilities: {
+            select: {
+              brandMaterialColor: { select: { brandMaterialId: true } },
+            },
+          },
+        },
+      },
+    } satisfies Prisma.ProductSelect;
+
+    const total = await this.prisma.product.count({ where: productWhere });
+
+    let products: Prisma.ProductGetPayload<{ select: typeof productSelect }>[];
+    if (needsInMemoryPriceSort) {
+      // Fallback без Meili: цена только на вариантах — сортируем всю выборку, затем пагинируем.
+      const all = await this.prisma.product.findMany({
+        where: productWhere,
+        select: productSelect,
+      });
+      const dir = sort === 'price_asc' ? 1 : -1;
+      all.sort((a, b) => {
+        const priceA = (() => {
+          const prices = a.variants.map((v) => priceToNumber(v.price)).filter((n) => n > 0);
+          return prices.length ? Math.min(...prices) : 0;
+        })();
+        const priceB = (() => {
+          const prices = b.variants.map((v) => priceToNumber(v.price)).filter((n) => n > 0);
+          return prices.length ? Math.min(...prices) : 0;
+        })();
+        if (priceA !== priceB) return (priceA - priceB) * dir;
+        return b.updatedAt.getTime() - a.updatedAt.getTime();
+      });
+      products = all.slice(skip, skip + limit);
+    } else {
+      products = await this.prisma.product.findMany({
         where: productWhere,
         skip,
         take: limit,
-        orderBy: { updatedAt: 'desc' },
-        select: {
-          id: true,
-          slug: true,
-          name: true,
-          shortDescription: true,
-          categoryId: true,
-          brandId: true,
-          isActive: true,
-          updatedAt: true,
-          casesLinkedCount: true,
-          likesUserCount: true,
-          likesAdminBoost: true,
-          category: { select: { name: true } },
-          productCategories: { select: { categoryId: true } },
-          brand: { select: { name: true } },
-          images: {
-            take: 6,
-            orderBy: { sortOrder: 'asc' },
-            select: { url: true },
-          },
-          variants: {
-            where: { isActive: true },
-            select: { price: true },
-          },
-        },
-      }),
-      this.prisma.product.count({ where: productWhere }),
-    ]);
+        orderBy: prismaOrderByFor(sort),
+        select: productSelect,
+      });
+    }
     const rawHits = dedupeProductHitsById(
       products.map((p) => {
         const prices = p.variants.map((v) => priceToNumber(v.price)).filter((n) => n > 0);
@@ -616,6 +1192,10 @@ export class CatalogService {
           casesLinkedCount: p.casesLinkedCount,
           likesUserCount: p.likesUserCount,
           likesAdminBoost: p.likesAdminBoost,
+          sizeLabels: collectSizeLabelsFromModifications(p.modifications),
+          brandMaterialIds: collectBrandMaterialIdsFromElements(p.elements),
+          hasModel3d: p.variants.some((v) => Boolean(v.model3dUrl?.trim())),
+          hasDrawing: p.variants.some((v) => Boolean(v.drawingUrl?.trim())),
         }) as Record<string, unknown> & { id: string };
       }),
     );
@@ -839,6 +1419,145 @@ export class CatalogService {
       name: col.name,
       kind: 'PRODUCT' as const,
       products: productsWithLikes,
+    };
+  }
+
+  /**
+   * Все активные товарные коллекции и наборы для витрины каталога (полный состав, без лимита).
+   * Сначала коллекции (`kind: PRODUCT`), затем наборы — по `sortOrder`.
+   */
+  async listPublicCollectionsAndSets(userId?: string) {
+    const productInclude = {
+      images: { orderBy: { sortOrder: 'asc' as const }, take: 6 },
+      variants: {
+        where: { isActive: true },
+        orderBy: [{ isDefault: 'desc' as const }, { sortOrder: 'asc' as const }],
+        take: 1,
+        select: {
+          id: true,
+          variantLabel: true,
+          price: true,
+          currency: true,
+        },
+      },
+    };
+
+    const [collections, sets] = await Promise.all([
+      this.prisma.curatedCollection.findMany({
+        where: { isActive: true, kind: CuratedCollectionKind.PRODUCT },
+        orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+        include: {
+          productItems: {
+            where: { product: { isActive: true } },
+            orderBy: { sortOrder: 'asc' },
+            include: { product: { include: productInclude } },
+          },
+        },
+      }),
+      this.prisma.curatedProductSet.findMany({
+        where: { isActive: true },
+        orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+        include: {
+          items: {
+            where: { product: { isActive: true } },
+            orderBy: { sortOrder: 'asc' },
+            include: { product: { include: productInclude } },
+          },
+        },
+      }),
+    ]);
+
+    type RawProduct = {
+      id: string;
+      slug: string;
+      name: string;
+      casesLinkedCount: number;
+      likesUserCount: number;
+      likesAdminBoost: number;
+      images: { url: string }[];
+      variants: {
+        id: string;
+        variantLabel: string | null;
+        price: Prisma.Decimal | number | null;
+        currency: string;
+      }[];
+    };
+
+    const mapProducts = (products: RawProduct[]) =>
+      products.map((p) => {
+        const dv = p.variants[0];
+        const images = p.images.map((im, i) => ({ url: im.url, sortOrder: i }));
+        return {
+          id: p.id,
+          slug: p.slug,
+          name: p.name,
+          displayName: dv?.variantLabel?.trim() || p.name,
+          variantId: dv?.id ?? null,
+          price: dv?.price ?? null,
+          currency: dv?.currency ?? 'RUB',
+          images,
+          casesLinkedCount: p.casesLinkedCount,
+          likesDisplayCount: Math.max(0, p.likesUserCount + p.likesAdminBoost),
+        };
+      });
+
+    type SectionDraft = {
+      kind: 'collection' | 'set';
+      slug: string;
+      name: string;
+      products: ReturnType<typeof mapProducts>;
+    };
+
+    const drafts: SectionDraft[] = [];
+    for (const col of collections) {
+      const products = mapProducts(col.productItems.map((pi) => pi.product));
+      if (!products.length) continue;
+      drafts.push({ kind: 'collection', slug: col.slug, name: col.name, products });
+    }
+    for (const set of sets) {
+      const products = mapProducts(set.items.map((it) => it.product));
+      if (!products.length) continue;
+      drafts.push({ kind: 'set', slug: set.slug, name: set.name, products });
+    }
+
+    const allProducts = drafts.flatMap((d) => d.products);
+    if (!allProducts.length) return { items: [] as SectionDraft[] };
+
+    const tierHits = allProducts.map((p) => {
+      const priceNum = p.price != null ? priceToNumber(p.price) : 0;
+      return {
+        id: p.id,
+        price: priceNum,
+        priceMin: priceNum,
+        priceMax: priceNum,
+        sortPrice: priceNum,
+      };
+    });
+    const enrichedTierHits = await this.tierPricing.enrichSearchHits(tierHits, userId);
+    const tierPriceByProductId = new Map(
+      enrichedTierHits.map((h) => [h.id, h.price as number]),
+    );
+
+    const withTiers = drafts.map((d) => ({
+      ...d,
+      products: d.products.map((p) => {
+        const tierPrice = tierPriceByProductId.get(p.id);
+        if (tierPrice == null || !Number.isFinite(tierPrice) || tierPrice <= 0) return p;
+        return { ...p, price: tierPrice };
+      }),
+    }));
+
+    const flatForLikes = withTiers.flatMap((d) => d.products);
+    const likedFlat = await enrichProductsWithLikedByMe(this.prisma, flatForLikes, userId);
+    const likedById = new Map(likedFlat.map((p) => [p.id, p]));
+
+    return {
+      items: withTiers.map((d) => ({
+        kind: d.kind,
+        slug: d.slug,
+        name: d.name,
+        products: d.products.map((p) => likedById.get(p.id) ?? p),
+      })),
     };
   }
 

@@ -6,6 +6,7 @@ import {
   IsString,
   MaxLength,
   MinLength,
+  ValidateIf,
 } from 'class-validator';
 
 export class CreateCatalogTagAdminDto {
@@ -19,6 +20,16 @@ export class CreateCatalogTagAdminDto {
   @MinLength(1)
   @MaxLength(160)
   slug?: string;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v !== undefined && v !== null && String(v).trim() !== '')
+  @IsString()
+  @MinLength(1)
+  coverImageUrl?: string | null;
+
+  @IsOptional()
+  @IsString()
+  coverMediaObjectId?: string;
 
   @IsOptional()
   @IsArray()
@@ -39,6 +50,18 @@ export class UpdateCatalogTagAdminDto {
   @MinLength(1)
   @MaxLength(160)
   slug?: string;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v !== undefined && v !== null && String(v).trim() !== '')
+  @IsString()
+  @MinLength(1)
+  coverImageUrl?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v !== undefined && v !== null && String(v).trim() !== '')
+  @IsString()
+  @MinLength(1)
+  coverMediaObjectId?: string | null;
 
   @IsOptional()
   @IsArray()

@@ -33,6 +33,13 @@ export class CatalogController {
     return this.catalogService.getCatalogTagsNav();
   }
 
+  /** Контекстный тег по slug (обложка и название). */
+  @Public()
+  @Get('tags/:slug')
+  catalogTagBySlug(@Param('slug') slug: string) {
+    return this.catalogService.getCatalogTagBySlug(slug);
+  }
+
   /** Категории для полосы ScrollCatalog на главной при выбранном теге. */
   @Public()
   @Get('tags/:slug/strip-categories')
@@ -58,6 +65,14 @@ export class CatalogController {
   @Get('categories/:slug')
   category(@Param('slug') slug: string) {
     return this.catalogService.getCategoryBySlug(slug);
+  }
+
+  /** Все активные товарные коллекции и наборы (полный состав). */
+  @Public()
+  @Get('collections-and-sets')
+  async collectionsAndSets(@Headers('authorization') authorization: string | undefined) {
+    const userId = userIdFromBearerHeader(this.jwtService, authorization);
+    return this.catalogService.listPublicCollectionsAndSets(userId);
   }
 
   /** Кураторская коллекция по slug: бренды (`kind: BRAND`) или товары (`kind: PRODUCT`). */
@@ -88,17 +103,76 @@ export class CatalogController {
     @Query('q') q?: string,
     @Query('categoryId') categoryId?: string,
     @Query('brandId') brandId?: string,
+    @Query('tag') tag?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('sort') sort?: string,
+    @Query('priceFrom') priceFrom?: string,
+    @Query('priceTo') priceTo?: string,
+    @Query('widthFrom') widthFrom?: string,
+    @Query('widthTo') widthTo?: string,
+    @Query('heightFrom') heightFrom?: string,
+    @Query('heightTo') heightTo?: string,
+    @Query('materialId') materialId?: string,
+    @Query('hasCase') hasCase?: string,
+    @Query('has3d') has3d?: string,
+    @Query('hasDrawing') hasDrawing?: string,
   ) {
     const userId = userIdFromBearerHeader(this.jwtService, authorization);
     return this.catalogService.searchProducts({
       q,
       categoryId,
       brandId,
+      tagSlug: tag,
       page: page ? parseInt(page, 10) : undefined,
       limit: limit ? parseInt(limit, 10) : undefined,
       userId,
+      sort,
+      priceFrom: priceFrom != null && priceFrom !== '' ? Number(priceFrom) : undefined,
+      priceTo: priceTo != null && priceTo !== '' ? Number(priceTo) : undefined,
+      widthFrom,
+      widthTo,
+      heightFrom,
+      heightTo,
+      materialId,
+      hasCase,
+      has3d,
+      hasDrawing,
+    });
+  }
+
+  /** Опции панели фильтров (материалы / бренды) с учётом активных фильтров. */
+  @Public()
+  @Get('products/filter-options')
+  productFilterOptions(
+    @Query('categoryId') categoryId?: string,
+    @Query('brandId') brandId?: string,
+    @Query('tag') tag?: string,
+    @Query('priceFrom') priceFrom?: string,
+    @Query('priceTo') priceTo?: string,
+    @Query('widthFrom') widthFrom?: string,
+    @Query('widthTo') widthTo?: string,
+    @Query('heightFrom') heightFrom?: string,
+    @Query('heightTo') heightTo?: string,
+    @Query('materialId') materialId?: string,
+    @Query('hasCase') hasCase?: string,
+    @Query('has3d') has3d?: string,
+    @Query('hasDrawing') hasDrawing?: string,
+  ) {
+    return this.catalogService.getProductFilterOptions({
+      categoryId,
+      brandId,
+      tagSlug: tag,
+      priceFrom: priceFrom != null && priceFrom !== '' ? Number(priceFrom) : undefined,
+      priceTo: priceTo != null && priceTo !== '' ? Number(priceTo) : undefined,
+      widthFrom,
+      widthTo,
+      heightFrom,
+      heightTo,
+      materialId,
+      hasCase,
+      has3d,
+      hasDrawing,
     });
   }
 

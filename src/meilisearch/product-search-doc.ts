@@ -1,3 +1,5 @@
+import { parseModificationSizeLabel } from './parse-modification-size';
+
 /** Строка для индекса: один документ = один товар (карточка витрины). */
 export type ProductVariantSearchIndexRow = {
   /** id товара — primary key в Meilisearch */
@@ -23,6 +25,13 @@ export type ProductVariantSearchIndexRow = {
   casesLinkedCount?: number;
   likesUserCount?: number;
   likesAdminBoost?: number;
+  catalogTagIds?: string[];
+  /** Размеры из названий модификаций (до « · »). */
+  sizeLabels?: string[];
+  /** Id материалов бренда, доступных на элементах товара. */
+  brandMaterialIds?: string[];
+  hasModel3d?: boolean;
+  hasDrawing?: boolean;
 };
 
 /** @deprecated используйте ProductVariantSearchIndexRow */
@@ -46,6 +55,41 @@ export function priceToNumber(price: unknown): number {
   }
   const n = Number(price);
   return Number.isFinite(n) ? n : 0;
+}
+
+export function collectSizeLabelsFromModifications(
+  modifications: { name: string }[] | undefined,
+): string[] {
+  if (!modifications?.length) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const m of modifications) {
+    const label = parseModificationSizeLabel(m.name);
+    if (!label || seen.has(label)) continue;
+    seen.add(label);
+    out.push(label);
+  }
+  return out;
+}
+
+export function collectBrandMaterialIdsFromElements(
+  elements:
+    | {
+        availabilities: {
+          brandMaterialColor: { brandMaterialId: string };
+        }[];
+      }[]
+    | undefined,
+): string[] {
+  if (!elements?.length) return [];
+  const ids = new Set<string>();
+  for (const el of elements) {
+    for (const a of el.availabilities) {
+      const id = a.brandMaterialColor.brandMaterialId?.trim();
+      if (id) ids.add(id);
+    }
+  }
+  return [...ids];
 }
 
 const CARD_GALLERY_IMAGE_MAX = 6;
@@ -90,5 +134,10 @@ export function buildProductSearchDocument(row: ProductVariantSearchIndexRow): R
     imageUrls,
     casesLinkedCount: row.casesLinkedCount ?? 0,
     likesDisplayCount,
+    sizeLabels: row.sizeLabels ?? [],
+    brandMaterialIds: row.brandMaterialIds ?? [],
+    hasModel3d: Boolean(row.hasModel3d),
+    hasDrawing: Boolean(row.hasDrawing),
+    ...(row.catalogTagIds?.length ? { catalogTagIds: row.catalogTagIds } : {}),
   };
 }

@@ -7,6 +7,8 @@ import {
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { adminListResult, parseAdminListQuery } from '../../common/admin-list-pagination';
+import { ObjectStorageService } from '../storage/object-storage.service';
+import { MediaLibraryService } from '../media-library/media-library.service';
 import { slugifyProductBase } from './slug-transliteration';
 import {
   CreateCatalogTagAdminDto,
@@ -15,7 +17,36 @@ import {
 
 @Injectable()
 export class CatalogTagsAdminService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly objectStorage: ObjectStorageService,
+    private readonly mediaLibrary: MediaLibraryService,
+  ) {}
+
+  private normUrl(u: string): string {
+    return u.trim().replace(/\/+$/, '');
+  }
+
+  private async resolveCoverMediaId(
+    url: string,
+    explicitMediaObjectId?: string | null,
+  ): Promise<string | null> {
+    const u = url.trim();
+    if (!u) return null;
+    if (explicitMediaObjectId) {
+      const mo = await this.prisma.mediaObject.findUnique({ where: { id: explicitMediaObjectId } });
+      if (!mo) throw new BadRequestException('Объект медиатеки не найден');
+      const expected = this.objectStorage.getPublicUrlForKey(mo.storageKey);
+      if (this.normUrl(expected) !== this.normUrl(u)) {
+        throw new BadRequestException('URL обложки не совпадает с объектом медиатеки');
+      }
+      return mo.id;
+    }
+    const key = this.objectStorage.tryPublicUrlToKey(u);
+    if (!key?.startsWith('objects/')) return null;
+    const mo = await this.prisma.mediaObject.findUnique({ where: { storageKey: key } });
+    return mo?.id ?? null;
+  }
 
   private dedupeIdsPreserveOrder(ids: string[]): string[] {
     const seen = new Set<string>();
@@ -134,6 +165,8 @@ export class CatalogTagsAdminService {
       name: row.name,
       slug: row.slug,
       sortOrder: row.sortOrder,
+      coverImageUrl: row.coverImageUrl,
+      coverMediaObjectId: row.coverMediaObjectId,
       productItems,
     };
   }
@@ -146,10 +179,24 @@ export class CatalogTagsAdminService {
     const productIds = this.dedupeIdsPreserveOrder(dto.productIds ?? []);
     await this.assertProductsExist(productIds);
 
+    const bgRaw = (dto.coverImageUrl ?? '').trim();
+    let coverUrl: string | null = null;
+    let coverMediaId: string | null = null;
+    if (bgRaw) {
+      coverUrl = bgRaw;
+      coverMediaId = await this.resolveCoverMediaId(bgRaw, dto.coverMediaObjectId ?? null);
+    }
+
     try {
       const createdId = await this.prisma.$transaction(async (tx) => {
         const tag = await tx.catalogTag.create({
-          data: { slug, name: dto.name.trim(), sortOrder },
+          data: {
+            slug,
+            name: dto.name.trim(),
+            sortOrder,
+            coverImageUrl: coverUrl,
+            coverMediaObjectId: coverMediaId,
+          },
         });
         await this.syncTagProducts(tx, tag.id, productIds);
         return tag.id;
@@ -172,6 +219,25 @@ export class CatalogTagsAdminService {
       nextSlug = await this.ensureUniqueSlug(dto.slug.trim(), id);
     }
 
+    let coverPatch:
+      | { coverImageUrl: string | null; coverMediaObjectId: string | null }
+      | undefined;
+    if (dto.coverImageUrl !== undefined) {
+      const raw = dto.coverImageUrl;
+      if (raw === null || (typeof raw === 'string' && !raw.trim())) {
+        coverPatch = { coverImageUrl: null, coverMediaObjectId: null };
+      } else {
+        const url = String(raw).trim();
+        const mid = await this.resolveCoverMediaId(
+          url,
+          dto.coverMediaObjectId !== undefined ? dto.coverMediaObjectId : undefined,
+        );
+        coverPatch = { coverImageUrl: url, coverMediaObjectId: mid };
+      }
+    }
+
+    const prevCoverMediaId = existing.coverMediaObjectId;
+
     const productIds =
       dto.productIds !== undefined ? this.dedupeIdsPreserveOrder(dto.productIds) : undefined;
     if (productIds !== undefined) await this.assertProductsExist(productIds);
@@ -183,12 +249,23 @@ export class CatalogTagsAdminService {
           data: {
             ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
             slug: nextSlug,
+            ...coverPatch,
           },
         });
         if (productIds !== undefined) {
           await this.syncTagProducts(tx, id, productIds);
         }
       });
+
+      const updated = await this.prisma.catalogTag.findUnique({ where: { id } });
+      if (
+        coverPatch &&
+        prevCoverMediaId &&
+        prevCoverMediaId !== updated?.coverMediaObjectId
+      ) {
+        await this.mediaLibrary.deleteMediaObjectIfUnreferenced(prevCoverMediaId);
+      }
+
       return this.getForAdmin(id);
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
@@ -201,7 +278,19 @@ export class CatalogTagsAdminService {
   async deleteMany(ids: string[]) {
     const unique = [...new Set(ids.filter(Boolean))];
     if (!unique.length) return { deleted: [] as string[] };
+
+    const rows = await this.prisma.catalogTag.findMany({
+      where: { id: { in: unique } },
+      select: { id: true, coverMediaObjectId: true },
+    });
+    const mediaIds = rows.map((r) => r.coverMediaObjectId).filter(Boolean) as string[];
+
     await this.prisma.catalogTag.deleteMany({ where: { id: { in: unique } } });
+
+    for (const mid of mediaIds) {
+      await this.mediaLibrary.deleteMediaObjectIfUnreferenced(mid);
+    }
+
     return { deleted: unique };
   }
 

@@ -9,7 +9,9 @@ import { PrismaClient } from '@prisma/client';
 import { MeiliSearch } from 'meilisearch';
 import {
   buildProductSearchDocument,
+  collectBrandMaterialIdsFromElements,
   collectProductCategoryIds,
+  collectSizeLabelsFromModifications,
   priceToNumber,
   type ProductVariantSearchIndexRow,
 } from '../src/meilisearch/product-search-doc';
@@ -84,8 +86,22 @@ async function main() {
         },
         variants: {
           where: { isActive: true },
-          select: { price: true },
+          select: { price: true, model3dUrl: true, drawingUrl: true },
         },
+        modifications: { select: { name: true } },
+        elements: {
+          select: {
+            availabilities: {
+              select: {
+                brandMaterialColor: { select: { brandMaterialId: true } },
+              },
+            },
+          },
+        },
+        casesLinkedCount: true,
+        likesUserCount: true,
+        likesAdminBoost: true,
+        catalogTags: { select: { tagId: true } },
       },
     });
 
@@ -113,6 +129,14 @@ async function main() {
         priceMin,
         priceMax,
         images: shared,
+        casesLinkedCount: row.casesLinkedCount,
+        likesUserCount: row.likesUserCount,
+        likesAdminBoost: row.likesAdminBoost,
+        catalogTagIds: row.catalogTags.map((t) => t.tagId),
+        sizeLabels: collectSizeLabelsFromModifications(row.modifications),
+        brandMaterialIds: collectBrandMaterialIdsFromElements(row.elements),
+        hasModel3d: row.variants.some((v) => Boolean(v.model3dUrl?.trim())),
+        hasDrawing: row.variants.some((v) => Boolean(v.drawingUrl?.trim())),
       };
       flat.push(buildProductSearchDocument(r));
     }

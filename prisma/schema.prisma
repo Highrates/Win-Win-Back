@@ -480,12 +480,15 @@ model ProductCategory {
 
 /// Контекстные теги витрины (офис, HoReCa, сад…) — не путать с Category.
 model CatalogTag {
-  id        String   @id @default(cuid())
-  slug      String   @unique
-  name      String
-  sortOrder Int      @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                 String   @id @default(cuid())
+  slug               String   @unique
+  name               String
+  sortOrder          Int      @default(0)
+  coverImageUrl      String?
+  coverMediaObjectId String?
+  coverMediaObject   MediaObject? @relation(fields: [coverMediaObjectId], references: [id], onDelete: SetNull)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   products ProductCatalogTag[]
 }
@@ -1278,6 +1281,7 @@ model MediaObject {
   categoryBackgrounds Category[]
   curatedCollectionCovers CuratedCollection[]
   curatedProductSetCovers CuratedProductSet[]
+  catalogTagCovers CatalogTag[]
 }
 
 // --- Блог ---
