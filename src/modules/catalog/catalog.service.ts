@@ -1354,16 +1354,34 @@ export class CatalogService {
           include: {
             product: {
               include: {
+                brand: { select: { id: true, name: true } },
+                catalogTags: { select: { tag: { select: { slug: true, name: true } } } },
                 images: { orderBy: { sortOrder: 'asc' }, take: 6 },
                 variants: {
                   where: { isActive: true },
                   orderBy: [{ isDefault: 'desc' }, { sortOrder: 'asc' }],
-                  take: 1,
                   select: {
                     id: true,
                     variantLabel: true,
                     price: true,
                     currency: true,
+                    widthMm: true,
+                    heightMm: true,
+                    model3dUrl: true,
+                    drawingUrl: true,
+                  },
+                },
+                elements: {
+                  select: {
+                    availabilities: {
+                      select: {
+                        brandMaterialColor: {
+                          select: {
+                            brandMaterial: { select: { id: true, name: true } },
+                          },
+                        },
+                      },
+                    },
                   },
                 },
               },
@@ -1378,6 +1396,15 @@ export class CatalogService {
       const p = pi.product;
       const dv = p.variants[0];
       const images = p.images.map((im, i) => ({ url: im.url, sortOrder: i }));
+      const materialById = new Map<string, string>();
+      for (const el of p.elements) {
+        for (const av of el.availabilities) {
+          const m = av.brandMaterialColor?.brandMaterial;
+          if (m?.id && m.name) materialById.set(m.id, m.name);
+        }
+      }
+      const widths = p.variants.map((v) => v.widthMm).filter((n): n is number => n != null);
+      const heights = p.variants.map((v) => v.heightMm).filter((n): n is number => n != null);
       return {
         id: p.id,
         slug: p.slug,
@@ -1387,6 +1414,16 @@ export class CatalogService {
         price: dv?.price ?? null,
         currency: dv?.currency ?? 'RUB',
         images,
+        categoryId: p.categoryId,
+        brandId: p.brandId ?? p.brand?.id ?? null,
+        brandName: p.brand?.name ?? null,
+        tagSlugs: p.catalogTags.map((t) => t.tag.slug).filter(Boolean),
+        materials: Array.from(materialById.entries()).map(([id, name]) => ({ id, name })),
+        widthMm: widths.length ? Math.min(...widths) : null,
+        heightMm: heights.length ? Math.min(...heights) : null,
+        hasCase: p.casesLinkedCount > 0,
+        has3d: p.variants.some((v) => Boolean(v.model3dUrl?.trim())),
+        hasDrawing: p.variants.some((v) => Boolean(v.drawingUrl?.trim())),
         casesLinkedCount: p.casesLinkedCount,
         likesDisplayCount: Math.max(0, p.likesUserCount + p.likesAdminBoost),
       };
@@ -1418,6 +1455,7 @@ export class CatalogService {
       slug: col.slug,
       name: col.name,
       kind: 'PRODUCT' as const,
+      coverImageUrl: col.coverImageUrl,
       products: productsWithLikes,
     };
   }
@@ -1444,7 +1482,12 @@ export class CatalogService {
 
     const [collections, sets] = await Promise.all([
       this.prisma.curatedCollection.findMany({
-        where: { isActive: true, kind: CuratedCollectionKind.PRODUCT },
+        where: {
+          isActive: true,
+          kind: CuratedCollectionKind.PRODUCT,
+          /** Главная «Рекомендации» — не дублируем на вкладке каталога. */
+          NOT: { slug: 'rekomendatsii' },
+        },
         orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
         include: {
           productItems: {

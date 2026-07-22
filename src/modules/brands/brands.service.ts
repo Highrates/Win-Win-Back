@@ -56,16 +56,33 @@ export class BrandsService {
           where: productWhere,
           orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
           include: {
+            catalogTags: { select: { tag: { select: { slug: true, name: true } } } },
             images: { orderBy: { sortOrder: 'asc' } },
             variants: {
               where: { isActive: true },
               orderBy: [{ isDefault: 'desc' }, { sortOrder: 'asc' }],
-              take: 1,
               select: {
                 id: true,
                 variantLabel: true,
                 price: true,
                 currency: true,
+                widthMm: true,
+                heightMm: true,
+                model3dUrl: true,
+                drawingUrl: true,
+              },
+            },
+            elements: {
+              select: {
+                availabilities: {
+                  select: {
+                    brandMaterialColor: {
+                      select: {
+                        brandMaterial: { select: { id: true, name: true } },
+                      },
+                    },
+                  },
+                },
               },
             },
           },
@@ -79,6 +96,15 @@ export class BrandsService {
       const dv = p.variants[0];
       /** Как в каталоге (Meilisearch): общая галерея товара, не снимки варианта. */
       const images = p.images.map((im, i) => ({ url: im.url, sortOrder: i }));
+      const materialById = new Map<string, string>();
+      for (const el of p.elements) {
+        for (const av of el.availabilities) {
+          const m = av.brandMaterialColor?.brandMaterial;
+          if (m?.id && m.name) materialById.set(m.id, m.name);
+        }
+      }
+      const widths = p.variants.map((v) => v.widthMm).filter((n): n is number => n != null);
+      const heights = p.variants.map((v) => v.heightMm).filter((n): n is number => n != null);
       return {
         id: p.id,
         slug: p.slug,
@@ -88,6 +114,16 @@ export class BrandsService {
         price: dv?.price ?? null,
         currency: dv?.currency ?? 'RUB',
         images,
+        categoryId: p.categoryId,
+        brandId: p.brandId ?? row.id,
+        brandName: row.name,
+        tagSlugs: p.catalogTags.map((t) => t.tag.slug).filter(Boolean),
+        materials: Array.from(materialById.entries()).map(([id, name]) => ({ id, name })),
+        widthMm: widths.length ? Math.min(...widths) : null,
+        heightMm: heights.length ? Math.min(...heights) : null,
+        hasCase: p.casesLinkedCount > 0,
+        has3d: p.variants.some((v) => Boolean(v.model3dUrl?.trim())),
+        hasDrawing: p.variants.some((v) => Boolean(v.drawingUrl?.trim())),
         casesLinkedCount: p.casesLinkedCount,
         likesDisplayCount: Math.max(0, p.likesUserCount + p.likesAdminBoost),
       };
