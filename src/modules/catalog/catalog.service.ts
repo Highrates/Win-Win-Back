@@ -176,7 +176,7 @@ export class CatalogService {
         name: true,
         sortOrder: true,
         coverImageUrl: true,
-        _count: { select: { products: true } },
+        _count: { select: { products: { where: { product: { isActive: true } } } } },
         products: {
           take: 1,
           orderBy: { product: { updatedAt: 'desc' } },
@@ -326,7 +326,12 @@ export class CatalogService {
         name: true,
         sortOrder: true,
         backgroundImageUrl: true,
-        _count: { select: { primaryProducts: true, productCategories: true } },
+        _count: {
+          select: {
+            primaryProducts: { where: { isActive: true } },
+            productCategories: { where: { product: { isActive: true } } },
+          },
+        },
       },
     });
     const roots: PublicCategoryTreeRoot[] = [];
@@ -1108,6 +1113,7 @@ export class CatalogService {
       isActive: true,
       updatedAt: true,
       casesLinkedCount: true,
+      qaMessageCountPublic: true,
       likesUserCount: true,
       likesAdminBoost: true,
       category: { select: { name: true } },
@@ -1190,6 +1196,7 @@ export class CatalogService {
           priceMax,
           images: shared,
           casesLinkedCount: p.casesLinkedCount,
+          qaMessageCountPublic: p.qaMessageCountPublic,
           likesUserCount: p.likesUserCount,
           likesAdminBoost: p.likesAdminBoost,
           sizeLabels: collectSizeLabelsFromModifications(p.modifications),
@@ -1425,6 +1432,7 @@ export class CatalogService {
         has3d: p.variants.some((v) => Boolean(v.model3dUrl?.trim())),
         hasDrawing: p.variants.some((v) => Boolean(v.drawingUrl?.trim())),
         casesLinkedCount: p.casesLinkedCount,
+        qaMessageCountPublic: p.qaMessageCountPublic,
         likesDisplayCount: Math.max(0, p.likesUserCount + p.likesAdminBoost),
       };
     });
@@ -1515,6 +1523,7 @@ export class CatalogService {
       slug: string;
       name: string;
       casesLinkedCount: number;
+      qaMessageCountPublic: number;
       likesUserCount: number;
       likesAdminBoost: number;
       images: { url: string }[];
@@ -1540,6 +1549,7 @@ export class CatalogService {
           currency: dv?.currency ?? 'RUB',
           images,
           casesLinkedCount: p.casesLinkedCount,
+          qaMessageCountPublic: p.qaMessageCountPublic,
           likesDisplayCount: Math.max(0, p.likesUserCount + p.likesAdminBoost),
         };
       });
@@ -1634,6 +1644,10 @@ export class CatalogService {
             id: true,
             slug: true,
             name: true,
+            casesLinkedCount: true,
+            qaMessageCountPublic: true,
+            likesUserCount: true,
+            likesAdminBoost: true,
             images: {
               take: 6,
               orderBy: { sortOrder: 'asc' },
@@ -1682,6 +1696,9 @@ export class CatalogService {
         price: dv?.price != null ? priceToNumber(dv.price) : 0,
         thumbUrl: imageUrls[0] ?? null,
         imageUrls,
+        casesLinkedCount: pr.casesLinkedCount,
+        qaMessageCountPublic: pr.qaMessageCountPublic,
+        likesDisplayCount: Math.max(0, pr.likesUserCount + pr.likesAdminBoost),
       });
     }
 
@@ -1729,6 +1746,7 @@ export class CatalogService {
       /** До 6 URL общей галереи товара (как на PDP). */
       imageUrls: string[];
       casesLinkedCount: number;
+      qaMessageCountPublic: number;
       likesDisplayCount: number;
     };
     if (!ids.length) return { items: [] as Item[] };
@@ -1739,6 +1757,7 @@ export class CatalogService {
         slug: true,
         name: true,
         casesLinkedCount: true,
+        qaMessageCountPublic: true,
         likesUserCount: true,
         likesAdminBoost: true,
         images: {
@@ -1769,6 +1788,7 @@ export class CatalogService {
           imageUrl: null,
           imageUrls: [],
           casesLinkedCount: 0,
+          qaMessageCountPublic: 0,
           likesDisplayCount: 0,
         };
       const dv = r.variants[0];
@@ -1782,8 +1802,9 @@ export class CatalogService {
         price: priceToNumber(dv?.price ?? 0),
         imageUrl: galleryUrls[0] ?? null,
         imageUrls: galleryUrls,
-        casesLinkedCount: r.casesLinkedCount,
-        likesDisplayCount: Math.max(0, r.likesUserCount + r.likesAdminBoost),
+          casesLinkedCount: r.casesLinkedCount,
+          qaMessageCountPublic: r.qaMessageCountPublic,
+          likesDisplayCount: Math.max(0, r.likesUserCount + r.likesAdminBoost),
       };
     });
     return { items };
@@ -1799,5 +1820,8 @@ export type PublicSetSiblingProduct = {
   price: unknown;
   thumbUrl: string | null;
   imageUrls: string[];
+  casesLinkedCount?: number;
+  qaMessageCountPublic?: number;
+  likesDisplayCount?: number;
   likedByMe?: boolean;
 };

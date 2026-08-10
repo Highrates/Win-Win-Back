@@ -6,6 +6,7 @@ import { mkdirSync } from 'fs';
 import { join } from 'path';
 import { AppModule } from './app.module';
 import { ConfigService } from '@nestjs/config';
+import { assertProductionAuthSecrets } from './config/resolve-secret';
 
 function repoRootDir(): string {
   const cwd = process.cwd().replace(/\/+$/, '');
@@ -43,6 +44,8 @@ async function bootstrap() {
   app.use(urlencoded({ extended: true, limit: JSON_BODY_LIMIT }));
 
   const config = app.get(ConfigService);
+  assertProductionAuthSecrets();
+  app.set('trust proxy', true);
   const port = config.get('PORT', 3001);
   const prefix = config.get('API_PREFIX', 'api/v1');
 

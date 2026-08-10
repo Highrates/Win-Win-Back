@@ -236,8 +236,14 @@ export class MediaLibraryService {
    */
   async sweepOrphanObjectKeysUnderPrefix(
     prefix: string,
+    opts?: { skipKeyPrefixes?: string[] },
   ): Promise<{ scanned: number; deleted: number }> {
     const p = prefix.replace(/^\/+/, '');
+    const skip = opts?.skipKeyPrefixes ?? [
+      'objects/product-qa/',
+      'objects/chat/',
+      'objects/sourcing-requests/',
+    ];
     const listed = await this.storage.listObjectKeysWithPrefix(p);
     const inDb = new Set(
       (
@@ -248,6 +254,7 @@ export class MediaLibraryService {
     );
     let deleted = 0;
     for (const key of listed) {
+      if (skip.some((sp) => key.startsWith(sp))) continue;
       if (!inDb.has(key)) {
         await this.storage.removeObjectKey(key);
         deleted += 1;

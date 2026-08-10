@@ -1,6 +1,7 @@
 import {
   BadRequestException,
-  ConflictException,
+  HttpException,
+  HttpStatus,
   Injectable,
   InternalServerErrorException,
   Logger,
@@ -9,12 +10,13 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { RegistrationOtpChannel } from '@prisma/client';
 import { DesignerInviteService } from './designer-invite.service';
-import { randomInt } from 'crypto';
+import { randomInt, randomUUID } from 'crypto';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { MailService } from './mail.service';
 import { UnimtxOtpService } from './unimtx-otp.service';
+import { resolveSecret } from '../../config/resolve-secret';
 import {
   RegisterCompleteDto,
   RegisterEmailStartDto,
@@ -25,6 +27,10 @@ import {
 
 const OTP_TTL_MS = 10 * 60 * 1000;
 const MAX_OTP_ATTEMPTS = 5;
+const COMPLETION_TOKEN_TTL_MS = 60 * 60 * 1000;
+/** Сколько раз за окно можно запросить OTP на один email/телефон (регистрация). */
+const OTP_START_MAX_PER_DESTINATION = 5;
+const OTP_START_WINDOW_MS = 15 * 60 * 1000;
 
 /** Детали ошибки nodemailer/SMTP для логов (в UI не отдаём). */
 function formatMailSendError(e: unknown): string {
@@ -40,8 +46,14 @@ function formatMailSendError(e: unknown): string {
   return parts.join(' | ');
 }
 
+function formatSmsSendError(e: unknown): string {
+  if (!(e instanceof Error)) return String(e);
+  return e.message;
+}
+
 export interface RegistrationCompletionJwtPayload {
   purpose: 'register_complete';
+  jti: string;
   phone: string | null;
   email: string | null;
   consentPersonalData: boolean;
@@ -51,6 +63,8 @@ export interface RegistrationCompletionJwtPayload {
 @Injectable()
 export class RegistrationService {
   private readonly logger = new Logger(RegistrationService.name);
+
+  private readonly startLimitByDestination = new Map<string, { count: number; windowEnd: number }>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -65,8 +79,34 @@ export class RegistrationService {
   private regTokenSecret(): string {
     return (
       this.config.get<string>('REGISTRATION_TOKEN_SECRET')?.trim() ||
-      this.config.get<string>('JWT_SECRET', 'dev-secret')
+      resolveSecret('JWT_SECRET', this.config.get<string>('JWT_SECRET'))
     );
+  }
+
+  /** Снижает риск SMS/email bombing по одному destination. */
+  private consumeRegistrationOtpStartSlot(destinationKey: string): void {
+    const now = Date.now();
+    const row = this.startLimitByDestination.get(destinationKey);
+    if (!row || row.windowEnd < now) {
+      this.startLimitByDestination.set(destinationKey, {
+        count: 1,
+        windowEnd: now + OTP_START_WINDOW_MS,
+      });
+      return;
+    }
+    if (row.count >= OTP_START_MAX_PER_DESTINATION) {
+      throw new HttpException(
+        'Слишком много запросов кода за короткое время. Подождите около 15 минут и попробуйте снова.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+    row.count += 1;
+  }
+
+  /** Нейтральный ответ без OTP — не палим наличие аккаунта и выравниваем тайминг. */
+  private async neutralOtpStartResponse(message: string): Promise<{ message: string }> {
+    await new Promise((r) => setTimeout(r, 200 + randomInt(0, 300)));
+    return { message };
   }
 
   /** Только цифры страны и абонента, без «+». */
@@ -92,15 +132,15 @@ export class RegistrationService {
 
   async startPhone(dto: RegisterPhoneStartDto): Promise<{ message: string }> {
     const phone = this.normalizePhoneE164(dto.phone);
+    this.consumeRegistrationOtpStartSlot(`phone:${phone}`);
 
     const taken = await this.users.existsByPhoneOrEmail(phone, null);
     if (taken) {
-      throw new ConflictException('Пользователь с таким телефоном уже зарегистрирован');
+      return this.neutralOtpStartResponse('Код отправлен в SMS');
     }
 
     await this.prisma.registrationChallenge.deleteMany({ where: { phone } });
 
-    // Код генерируем у нас, а доставку делаем через Unimatrix sms.message.send (с signature).
     const code = this.generateOtp();
     const codeHash = await bcrypt.hash(code, 8);
     const expiresAt = new Date(Date.now() + OTP_TTL_MS);
@@ -121,11 +161,8 @@ export class RegistrationService {
       await this.smsOtp.sendSmsOtp(this.phoneDigitsToE164(phone), code, OTP_TTL_MS / 60000);
     } catch (e) {
       await this.prisma.registrationChallenge.delete({ where: { id: challenge.id } }).catch(() => {});
-      this.logger.error(e);
-      const details = e instanceof Error ? e.message : 'Unknown error';
-      throw new InternalServerErrorException(
-        `Не удалось отправить SMS. ${details}`,
-      );
+      this.logger.error(`sendSmsOtp: ${formatSmsSendError(e)}`);
+      throw new InternalServerErrorException('Не удалось отправить SMS. Попробуйте позже.');
     }
 
     return { message: 'Код отправлен в SMS' };
@@ -133,10 +170,11 @@ export class RegistrationService {
 
   async startEmail(dto: RegisterEmailStartDto): Promise<{ message: string }> {
     const email = this.normalizeEmail(dto.email);
+    this.consumeRegistrationOtpStartSlot(`email:${email}`);
 
     const taken = await this.users.existsByPhoneOrEmail(null, email);
     if (taken) {
-      throw new ConflictException('Пользователь с таким email уже зарегистрирован');
+      return this.neutralOtpStartResponse('Код отправлен на email');
     }
 
     await this.prisma.registrationChallenge.deleteMany({ where: { email } });
@@ -209,8 +247,23 @@ export class RegistrationService {
   }): Promise<{ completionToken: string }> {
     await this.prisma.registrationChallenge.delete({ where: { id: challenge.id } });
 
+    const jti = randomUUID();
+    const expiresAt = new Date(Date.now() + COMPLETION_TOKEN_TTL_MS);
+
+    await this.prisma.registrationCompletionToken.create({
+      data: {
+        id: jti,
+        phone: challenge.phone,
+        email: challenge.email,
+        consentPersonalData: challenge.consentPersonalData,
+        consentSms: challenge.consentSms,
+        expiresAt,
+      },
+    });
+
     const payload: RegistrationCompletionJwtPayload = {
       purpose: 'register_complete',
+      jti,
       phone: challenge.phone,
       email: challenge.email,
       consentPersonalData: challenge.consentPersonalData,
@@ -241,21 +294,34 @@ export class RegistrationService {
       throw new BadRequestException('Код устарел или не найден. Запросите новый.');
     }
 
-    if (challenge.attempts >= MAX_OTP_ATTEMPTS) {
-      await this.prisma.registrationChallenge.delete({ where: { id: challenge.id } });
+    const ok = await bcrypt.compare(code, challenge.codeHash);
+    if (ok) {
+      return this.issueCompletionTokenFromChallenge(challenge);
+    }
+
+    const inc = await this.prisma.registrationChallenge.updateMany({
+      where: { id: challenge.id, attempts: { lt: MAX_OTP_ATTEMPTS } },
+      data: { attempts: { increment: 1 } },
+    });
+    if (inc.count === 0) {
+      await this.prisma.registrationChallenge.delete({ where: { id: challenge.id } }).catch(() => {});
       throw new BadRequestException('Превышено число попыток. Запросите код заново.');
     }
+    throw new BadRequestException('Неверный код');
+  }
 
-    const ok = await bcrypt.compare(code, challenge.codeHash);
-    if (!ok) {
-      await this.prisma.registrationChallenge.update({
-        where: { id: challenge.id },
-        data: { attempts: { increment: 1 } },
-      });
-      throw new BadRequestException('Неверный код');
+  private async consumeCompletionToken(jti: string): Promise<void> {
+    const consumed = await this.prisma.registrationCompletionToken.updateMany({
+      where: {
+        id: jti,
+        usedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      data: { usedAt: new Date() },
+    });
+    if (consumed.count === 0) {
+      throw new BadRequestException('Ссылка подтверждения недействительна или истекла');
     }
-
-    return this.issueCompletionTokenFromChallenge(challenge);
   }
 
   async complete(dto: RegisterCompleteDto) {
@@ -269,13 +335,15 @@ export class RegistrationService {
       throw new BadRequestException('Ссылка подтверждения недействительна или истекла');
     }
 
-    if (payload.purpose !== 'register_complete') {
+    if (payload.purpose !== 'register_complete' || !payload.jti?.trim()) {
       throw new BadRequestException('Неверный токен регистрации');
     }
 
     if (!payload.phone && !payload.email) {
       throw new BadRequestException('Неверный токен регистрации');
     }
+
+    await this.consumeCompletionToken(payload.jti);
 
     if (dto.designerInviteToken?.trim() && !payload.email) {
       throw new BadRequestException('Приглашение дизайнера доступно только при регистрации по email');

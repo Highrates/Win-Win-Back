@@ -58,6 +58,7 @@ export type CaseProductSummaryDto = {
   imageUrl: string | null;
   imageUrls: string[];
   casesLinkedCount: number;
+  qaMessageCountPublic: number;
   likesDisplayCount: number;
 };
 
@@ -89,6 +90,7 @@ const emptyProductSlot = (id: string): CaseProductSummaryDto => ({
   imageUrl: null,
   imageUrls: [],
   casesLinkedCount: 0,
+  qaMessageCountPublic: 0,
   likesDisplayCount: 0,
 });
 
@@ -108,6 +110,7 @@ function mapProductsFromIds(
       imageUrl: p.imageUrl,
       imageUrls: p.imageUrls ?? [],
       casesLinkedCount: p.casesLinkedCount,
+      qaMessageCountPublic: p.qaMessageCountPublic,
       likesDisplayCount: p.likesDisplayCount,
     };
   });

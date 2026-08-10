@@ -46,6 +46,7 @@ const PRODUCT_INDEX_SELECT = {
     },
   },
   casesLinkedCount: true,
+  qaMessageCountPublic: true,
   likesUserCount: true,
   likesAdminBoost: true,
   catalogTags: { select: { tagId: true } },
@@ -70,6 +71,7 @@ function rowToSearchDocument(row: {
     availabilities: { brandMaterialColor: { brandMaterialId: string } }[];
   }[];
   casesLinkedCount: number;
+  qaMessageCountPublic: number;
   likesUserCount: number;
   likesAdminBoost: number;
   catalogTags: { tagId: string }[];
@@ -98,6 +100,7 @@ function rowToSearchDocument(row: {
     priceMax,
     images: shared,
     casesLinkedCount: row.casesLinkedCount,
+    qaMessageCountPublic: row.qaMessageCountPublic,
     likesUserCount: row.likesUserCount,
     likesAdminBoost: row.likesAdminBoost,
     catalogTagIds,
@@ -121,24 +124,29 @@ export class ProductSearchIndexService {
 
   /** После изменения товара переиндексируются все его варианты. */
   async syncProduct(productId: string): Promise<void> {
-    if (!this.meili.isEnabled()) return;
     try {
-      const index = this.meili.getIndex(PRODUCTS_INDEX);
-      await this.ensureSettingsOnce(index);
-      await index.deleteDocuments({ filter: `productId = "${productId}"` });
-
-      const row = await this.prisma.product.findUnique({
-        where: { id: productId },
-        select: PRODUCT_INDEX_SELECT,
-      });
-      if (!row) return;
-
-      await index.addDocuments([rowToSearchDocument(row)], { primaryKey: 'id' });
+      await this.syncProductStrict(productId);
     } catch (e) {
       this.log.warn(
         `Meilisearch: не удалось проиндексировать товар ${productId}: ${e instanceof Error ? e.message : String(e)}`,
       );
     }
+  }
+
+  /** То же, что syncProduct, но пробрасывает ошибку (для retry-обёрток). */
+  async syncProductStrict(productId: string): Promise<void> {
+    if (!this.meili.isEnabled()) return;
+    const index = this.meili.getIndex(PRODUCTS_INDEX);
+    await this.ensureSettingsOnce(index);
+    await index.deleteDocuments({ filter: `productId = "${productId}"` });
+
+    const row = await this.prisma.product.findUnique({
+      where: { id: productId },
+      select: PRODUCT_INDEX_SELECT,
+    });
+    if (!row) return;
+
+    await index.addDocuments([rowToSearchDocument(row)], { primaryKey: 'id' });
   }
 
   async removeProducts(productIds: string[]): Promise<void> {

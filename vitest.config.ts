@@ -6,4 +6,12 @@ export default defineConfig({
     include: ['src/**/*.spec.ts'],
     passWithNoTests: true,
   },
+  esbuild: {
+    tsconfigRaw: {
+      compilerOptions: {
+        experimentalDecorators: true,
+        emitDecoratorMetadata: true,
+      },
+    },
+  },
 });

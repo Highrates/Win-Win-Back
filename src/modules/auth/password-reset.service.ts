@@ -1,16 +1,26 @@
-import { BadRequestException, Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { resolveSecret } from '../../config/resolve-secret';
 import { JwtService } from '@nestjs/jwt';
+import { UserRole } from '@prisma/client';
+import { randomInt, randomUUID } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { MailService } from './mail.service';
 
 const RESET_JWT_MAX = 64 * 1024;
 const RESET_TTL = '1h';
+const RESET_TOKEN_TTL_MS = 60 * 60 * 1000;
 
 export interface PasswordResetJwtPayload {
   purpose: 'password_reset';
   typ: 'pwreset';
+  jti: string;
   email: string;
 }
 
@@ -44,7 +54,7 @@ export class PasswordResetService {
     return (
       this.config.get<string>('PASSWORD_RESET_JWT_SECRET')?.trim() ||
       this.config.get<string>('REGISTRATION_TOKEN_SECRET')?.trim() ||
-      this.config.get<string>('JWT_SECRET', 'dev-secret')
+      resolveSecret('JWT_SECRET', this.config.get<string>('JWT_SECRET'))
     );
   }
 
@@ -66,30 +76,55 @@ export class PasswordResetService {
     return raw.trim().toLowerCase();
   }
 
-  /** Всегда один и тот же ответ — не раскрываем, есть ли аккаунт (кроме dev-hint). */
-  async requestReset(emailRaw: string): Promise<{ message: string; sent?: boolean; devHint?: string }> {
+  private sentMessage(): string {
+    return 'Мы отправили письмо со ссылкой для сброса пароля. Проверьте «Входящие» и «Спам».';
+  }
+
+  /** Нейтральный ответ без письма — не палим наличие аккаунта. */
+  private async neutralResetResponse(): Promise<{ message: string; sent: true }> {
+    await new Promise((r) => setTimeout(r, 200 + randomInt(0, 300)));
+    return { message: this.sentMessage(), sent: true };
+  }
+
+  /**
+   * Сброс пароля только для розничных покупателей (`USER`).
+   * Staff (ADMIN/MODERATOR) — через админку, иначе попадали бы в ЛК, но не в «Клиенты».
+   */
+  async requestReset(emailRaw: string): Promise<{ message: string; sent: true }> {
     const email = this.normalizeEmail(emailRaw);
     const user = await this.prisma.user.findFirst({
-      where: { email, isActive: true },
+      where: { email, isActive: true, role: UserRole.USER },
       select: { id: true, email: true, passwordHash: true },
     });
 
     if (!user?.email || !user.passwordHash) {
-      this.logger.warn(`Password reset skipped: no active user with password for ${email}`);
-      return this.buildRequestResponse(false);
+      this.logger.warn(`Password reset skipped: no active USER with password for ${email}`);
+      return this.neutralResetResponse();
     }
+
+    const jti = randomUUID();
+    const expiresAt = new Date(Date.now() + RESET_TOKEN_TTL_MS);
+
+    await this.prisma.passwordResetToken.deleteMany({
+      where: { userId: user.id, usedAt: null },
+    });
+    await this.prisma.passwordResetToken.create({
+      data: { id: jti, userId: user.id, expiresAt },
+    });
 
     const payload: PasswordResetJwtPayload & { sub: string } = {
       sub: user.id,
       purpose: 'password_reset',
       typ: 'pwreset',
+      jti,
       email,
     };
 
     const token = await this.jwt.signAsync(payload, { secret: this.secret(), expiresIn: RESET_TTL });
     if (token.length > RESET_JWT_MAX) {
+      await this.prisma.passwordResetToken.delete({ where: { id: jti } }).catch(() => {});
       this.logger.error(`Password reset JWT too long for user ${user.id}`);
-      return this.buildRequestResponse(false);
+      throw new InternalServerErrorException('Не удалось подготовить ссылку. Попробуйте позже.');
     }
 
     const link = `${this.publicSiteBase()}/login/reset-password?t=${encodeURIComponent(token)}`;
@@ -97,6 +132,7 @@ export class PasswordResetService {
     try {
       await this.mail.sendPasswordResetLink({ to: email, resetLink: link });
     } catch (e) {
+      await this.prisma.passwordResetToken.delete({ where: { id: jti } }).catch(() => {});
       this.logger.error(`sendPasswordResetLink: ${formatMailSendError(e)}`);
       throw new InternalServerErrorException(
         'Не удалось отправить письмо. Проверьте настройки SMTP или попробуйте позже.',
@@ -104,53 +140,50 @@ export class PasswordResetService {
     }
 
     this.logger.log(`Password reset email sent to ${email}`);
-    return this.buildRequestResponse(true);
+    return { message: this.sentMessage(), sent: true };
   }
 
-  private isDev(): boolean {
-    const nodeEnv = this.config.get<string>('NODE_ENV') || process.env.NODE_ENV;
-    return !nodeEnv || nodeEnv === 'development';
-  }
-
-  private buildRequestResponse(sent: boolean): { message: string; sent?: boolean; devHint?: string } {
-    const message = this.genericRequestMessage();
-    if (!this.isDev()) {
-      return { message };
-    }
-    return {
-      message,
-      sent,
-      devHint: sent
-        ? 'Письмо отправлено (режим разработки). Проверьте «Входящие» и «Спам».'
-        : 'Письмо не отправлено: email не найден в БД или у аккаунта нет пароля. Используйте тот же email, что при регистрации.',
-    };
-  }
-
-  async verifyToken(token: string): Promise<{ valid: true } | { valid: false; message: string }> {
+  async verifyToken(
+    token: string,
+  ): Promise<{ valid: true; email: string } | { valid: false; message: string }> {
     const parsed = await this.parseToken(token);
     if (!parsed.ok) {
       return { valid: false, message: parsed.message };
     }
-    return { valid: true };
+    return { valid: true, email: parsed.email };
   }
 
-  async confirmReset(token: string, newPassword: string): Promise<{ ok: true }> {
+  async confirmReset(token: string, newPassword: string): Promise<{ ok: true; email: string }> {
     const parsed = await this.parseToken(token);
     if (!parsed.ok) {
       throw new BadRequestException(parsed.message);
     }
 
+    await this.consumeResetToken(parsed.jti);
+
     await this.users.setPasswordWithoutCurrent(parsed.userId, newPassword);
-    return { ok: true };
+    return { ok: true, email: parsed.email };
   }
 
-  private genericRequestMessage(): string {
-    return 'Если аккаунт с таким email существует, мы отправили письмо со ссылкой для сброса пароля.';
+  private async consumeResetToken(jti: string): Promise<void> {
+    const consumed = await this.prisma.passwordResetToken.updateMany({
+      where: {
+        id: jti,
+        usedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      data: { usedAt: new Date() },
+    });
+    if (consumed.count === 0) {
+      throw new BadRequestException('Ссылка недействительна или истекла');
+    }
   }
 
   private async parseToken(
     token: string,
-  ): Promise<{ ok: true; userId: string; email: string } | { ok: false; message: string }> {
+  ): Promise<
+    { ok: true; userId: string; email: string; jti: string } | { ok: false; message: string }
+  > {
     const raw = token?.trim();
     if (!raw) {
       return { ok: false, message: 'Ссылка недействительна или истекла' };
@@ -165,7 +198,12 @@ export class PasswordResetService {
       return { ok: false, message: 'Ссылка недействительна или истекла' };
     }
 
-    if (payload.purpose !== 'password_reset' || payload.typ !== 'pwreset' || !payload.sub) {
+    if (
+      payload.purpose !== 'password_reset' ||
+      payload.typ !== 'pwreset' ||
+      !payload.sub ||
+      !payload.jti?.trim()
+    ) {
       return { ok: false, message: 'Ссылка недействительна или истекла' };
     }
 
@@ -174,8 +212,21 @@ export class PasswordResetService {
       return { ok: false, message: 'Ссылка недействительна или истекла' };
     }
 
+    const row = await this.prisma.passwordResetToken.findFirst({
+      where: {
+        id: payload.jti,
+        userId: payload.sub,
+        usedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      select: { id: true },
+    });
+    if (!row) {
+      return { ok: false, message: 'Ссылка недействительна или истекла' };
+    }
+
     const user = await this.prisma.user.findFirst({
-      where: { id: payload.sub, isActive: true },
+      where: { id: payload.sub, isActive: true, role: UserRole.USER },
       select: { id: true, email: true, passwordHash: true },
     });
 
@@ -183,6 +234,6 @@ export class PasswordResetService {
       return { ok: false, message: 'Ссылка недействительна или истекла' };
     }
 
-    return { ok: true, userId: user.id, email };
+    return { ok: true, userId: user.id, email, jti: payload.jti };
   }
 }

@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { resolveSecret } from '../../config/resolve-secret';
 import { JwtService } from '@nestjs/jwt';
 import { UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -36,8 +37,10 @@ export class DesignerInviteService {
   }
 
   private secret(): string {
-    return (this.config.get<string>('DESIGNER_INVITE_JWT_SECRET')?.trim() ||
-      this.config.get<string>('JWT_SECRET', 'dev-secret')) as string;
+    return (
+      this.config.get<string>('DESIGNER_INVITE_JWT_SECRET')?.trim() ||
+      resolveSecret('JWT_SECRET', this.config.get<string>('JWT_SECRET'))
+    );
   }
 
   private async buildInviteLinkForRow(rowId: string): Promise<string> {

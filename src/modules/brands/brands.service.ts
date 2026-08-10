@@ -125,6 +125,7 @@ export class BrandsService {
         has3d: p.variants.some((v) => Boolean(v.model3dUrl?.trim())),
         hasDrawing: p.variants.some((v) => Boolean(v.drawingUrl?.trim())),
         casesLinkedCount: p.casesLinkedCount,
+        qaMessageCountPublic: p.qaMessageCountPublic,
         likesDisplayCount: Math.max(0, p.likesUserCount + p.likesAdminBoost),
       };
     });

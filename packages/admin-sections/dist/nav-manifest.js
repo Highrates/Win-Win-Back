@@ -34,6 +34,11 @@ exports.ADMIN_NAV_MANIFEST = {
                 labelKey: 'productSets',
                 activeMatch: 'productSets',
             },
+            {
+                href: '/admin/catalog/qa-queue',
+                labelKey: 'questions',
+                activeMatch: 'qaQueue',
+            },
         ],
     },
     midLinks: [
@@ -117,6 +122,8 @@ function isAdminNavChildActive(pathname, child) {
         return pathname.startsWith('/admin/referrals');
     if (child.activeMatch === 'userGroups')
         return pathname.startsWith('/admin/user-groups');
+    if (child.activeMatch === 'qaQueue')
+        return pathname.startsWith('/admin/catalog/qa-queue');
     return pathname === child.href || pathname.startsWith(`${child.href}/`);
 }
 /** Все href из manifest + dashboard cards (для CI и pathnames). */

@@ -1,0 +1,1 @@
+ALTER TYPE "ProductQaMessageStatus" ADD VALUE IF NOT EXISTS 'REJECTED';

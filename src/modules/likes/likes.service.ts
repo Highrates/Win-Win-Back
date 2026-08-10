@@ -336,6 +336,7 @@ export class LikesService {
           imageUrl: null as string | null,
           imageUrls: [] as string[],
           casesLinkedCount: 0,
+          qaMessageCountPublic: 0,
           likesDisplayCount: 0,
         };
       return {
@@ -346,6 +347,7 @@ export class LikesService {
         imageUrl: s.imageUrl,
         imageUrls: s.imageUrls ?? [],
         casesLinkedCount: s.casesLinkedCount,
+        qaMessageCountPublic: s.qaMessageCountPublic,
         likesDisplayCount: s.likesDisplayCount,
       };
     });

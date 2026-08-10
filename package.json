@@ -26,10 +26,6 @@
     "seed": "ts-node --compiler-options {\"module\":\"CommonJS\"} prisma/seed.ts"
   },
   "dependencies": {
-    "@win-win/admin-sections": "file:./packages/admin-sections",
-    "@win-win/order-item-snapshot": "file:./packages/order-item-snapshot",
-    "@win-win/order-status": "file:./packages/order-status",
-    "@win-win/sourcing-request": "file:./packages/sourcing-request",
     "@aws-sdk/client-s3": "^3.1019.0",
     "@nestjs/common": "^10.0.0",
     "@nestjs/config": "^3.0.0",
@@ -41,6 +37,10 @@
     "@nestjs/throttler": "^5.0.0",
     "@nestjs/websockets": "^10.4.22",
     "@prisma/client": "5.22.0",
+    "@win-win/admin-sections": "file:./packages/admin-sections",
+    "@win-win/order-item-snapshot": "file:./packages/order-item-snapshot",
+    "@win-win/order-status": "file:./packages/order-status",
+    "@win-win/sourcing-request": "file:./packages/sourcing-request",
     "bcrypt": "^5.1.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.0",
@@ -58,6 +58,7 @@
   "devDependencies": {
     "@nestjs/cli": "^10.0.0",
     "@nestjs/schematics": "^10.0.0",
+    "@nestjs/testing": "^10.4.22",
     "@types/bcrypt": "^5.0.0",
     "@types/express": "^4.17.0",
     "@types/image-size": "^0.8.0",
@@ -65,7 +66,9 @@
     "@types/node": "^20.0.0",
     "@types/nodemailer": "^8.0.0",
     "@types/passport-jwt": "^4.0.0",
+    "@types/supertest": "^7.2.1",
     "prisma": "5.22.0",
+    "supertest": "^7.2.2",
     "ts-node": "^10.9.2",
     "typescript": "^5.0.0",
     "vitest": "^3.0.5"

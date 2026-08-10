@@ -290,12 +290,23 @@ export class DesignerProjectsService {
   async updateMine(userId: string, projectId: string, dto: UpdateDesignerProjectDto) {
     const existing = await this.prisma.designerProject.findFirst({
       where: { id: projectId, userId },
-      select: { id: true },
+      select: {
+        id: true,
+        lines: { select: { productId: true, productVariantId: true } },
+      },
     });
     if (!existing) throw new NotFoundException();
 
     const mergedLines = mergeDesignerProjectLines(dto.lines ?? []);
-    await this.validateLinesProducts(mergedLines);
+    // Уже лежащие в проекте позиции можно оставить/частично удалить даже если товар
+    // скрыли в каталоге (isActive=false). Иначе PUT «удалить строку» падает на
+    // соседних недоступных SKU и мёртвые позиции нельзя убрать из ЛК.
+    await this.validateLinesProducts(mergedLines, {
+      allowInactiveProductIds: new Set(existing.lines.map((l) => l.productId)),
+      allowInactiveVariantIds: new Set(
+        existing.lines.map((l) => l.productVariantId).filter((id): id is string => Boolean(id)),
+      ),
+    });
 
     const project = await this.prisma.$transaction(async (tx) => {
       await tx.designerProject.update({
@@ -328,27 +339,44 @@ export class DesignerProjectsService {
     return { ok: true };
   }
 
-  private async validateLinesProducts(lines: DesignerProjectLineInputDto[]) {
+  private async validateLinesProducts(
+    lines: DesignerProjectLineInputDto[],
+    opts?: {
+      allowInactiveProductIds?: ReadonlySet<string>;
+      allowInactiveVariantIds?: ReadonlySet<string>;
+    },
+  ) {
     const productIds = [...new Set(lines.map((l) => l.productId))];
     const products = await this.prisma.product.findMany({
-      where: { id: { in: productIds }, isActive: true },
-      select: { id: true },
+      where: { id: { in: productIds } },
+      select: { id: true, isActive: true },
     });
-    if (products.length !== productIds.length) {
-      throw new BadRequestException('Один или несколько товаров не найдены или отключены');
+    const productById = new Map(products.map((p) => [p.id, p]));
+    for (const productId of productIds) {
+      const product = productById.get(productId);
+      if (!product) {
+        throw new BadRequestException('Один или несколько товаров не найдены или отключены');
+      }
+      if (!product.isActive && !opts?.allowInactiveProductIds?.has(productId)) {
+        throw new BadRequestException('Один или несколько товаров не найдены или отключены');
+      }
     }
 
     const variantChecks = lines.filter((l) => l.productVariantId?.trim());
     const variantIds = [...new Set(variantChecks.map((l) => l.productVariantId!))];
     if (variantIds.length) {
       const variants = await this.prisma.productVariant.findMany({
-        where: { id: { in: variantIds }, isActive: true },
-        select: { id: true, productId: true },
+        where: { id: { in: variantIds } },
+        select: { id: true, productId: true, isActive: true },
       });
       const vm = new Map(variants.map((v) => [v.id, v]));
       for (const l of variantChecks) {
-        const v = vm.get(l.productVariantId!);
+        const vid = l.productVariantId!;
+        const v = vm.get(vid);
         if (!v || v.productId !== l.productId) {
+          throw new BadRequestException('Несогласованный вариант SKU для товара');
+        }
+        if (!v.isActive && !opts?.allowInactiveVariantIds?.has(vid)) {
           throw new BadRequestException('Несогласованный вариант SKU для товара');
         }
       }

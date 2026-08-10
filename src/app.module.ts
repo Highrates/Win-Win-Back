@@ -2,7 +2,8 @@ import { join } from 'path';
 import { MiddlewareConsumer, Module, NestModule, RequestMethod } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD, APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerBehindProxyGuard } from './common/guards/throttler-behind-proxy.guard';
 import { RequestContextMiddleware } from './common/middleware/request-context.middleware';
 import { AuditHttpInterceptor } from './modules/audit/audit-http.interceptor';
 import { AuditModule } from './modules/audit/audit.module';
@@ -31,6 +32,7 @@ import { UserGroupProfilesModule } from './modules/user-group-profiles/user-grou
 import { UserGroupsModule } from './modules/user-groups/user-groups.module';
 import { SourcingRequestsModule } from './modules/sourcing-requests/sourcing-requests.module';
 import { LikesModule } from './modules/likes/likes.module';
+import { ProductQaModule } from './modules/product-qa/product-qa.module';
 import { StaffModule } from './modules/staff/staff.module';
 
 @Module({
@@ -50,6 +52,7 @@ import { StaffModule } from './modules/staff/staff.module';
     AuthModule,
     UsersModule,
     CatalogModule,
+    ProductQaModule,
     OrderChatModule,
     StaffModule,
     OrdersModule,
@@ -75,7 +78,7 @@ import { StaffModule } from './modules/staff/staff.module';
   providers: [
     {
       provide: APP_GUARD,
-      useClass: ThrottlerGuard,
+      useClass: ThrottlerBehindProxyGuard,
     },
     {
       provide: APP_FILTER,

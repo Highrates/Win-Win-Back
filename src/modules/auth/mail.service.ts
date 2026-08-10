@@ -4,6 +4,14 @@ import { resolve4 } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import * as nodemailer from 'nodemailer';
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 @Injectable()
 export class MailService {
   private readonly logger = new Logger(MailService.name);
@@ -327,6 +335,136 @@ export class MailService {
       html,
     });
     this.logger.log(`Sourcing submit notify (staff) sent to ${dedup.length} recipient(s)`);
+  }
+
+  /** Новый вопрос покупателя по товару. Получатели: `ORDER_CHAT_STAFF_EMAIL`. */
+  async sendProductQaNewQuestionStaff(params: {
+    recipients: string[];
+    productTitle: string;
+    topicTitle: string;
+    authorLabel: string;
+    bodyPreview: string;
+    adminProductUrl: string;
+    storefrontUrl: string;
+  }): Promise<void> {
+    const dedup = [...new Set(params.recipients.map((e) => e.trim()).filter(Boolean))];
+    if (!dedup.length) return;
+    const from = this.config.get<string>('MAIL_FROM')?.trim() || this.config.get<string>('SMTP_USER');
+    if (!from) throw new Error('MAIL_FROM или SMTP_USER нужен для отправки письма');
+    const configuredHost = this.config.get<string>('SMTP_HOST')?.trim();
+    if (!configuredHost) {
+      throw new Error('SMTP_HOST, SMTP_USER и SMTP_PASSWORD должны быть заданы для отправки почты');
+    }
+    const endpoint = await this.smtpConnectTarget(configuredHost);
+    const transport = this.transporter(endpoint);
+    const [primary, ...bcc] = dedup;
+    const productTitle = escapeHtml(params.productTitle);
+    const topicTitle = escapeHtml(params.topicTitle);
+    const authorLabel = escapeHtml(params.authorLabel);
+    const bodyPreview = escapeHtml(params.bodyPreview);
+    const subject = `Новый вопрос по товару: ${params.productTitle} — Win-Win`;
+    const text = [
+      `Новый вопрос на витрине.`,
+      `Товар: ${params.productTitle}`,
+      `Тема: ${params.topicTitle}`,
+      `Автор: ${params.authorLabel}`,
+      ``,
+      params.bodyPreview,
+      ``,
+      `Админка: ${params.adminProductUrl}`,
+      `Витрина: ${params.storefrontUrl}`,
+    ].join('\n');
+    const html = [
+      `<p>Новый вопрос по товару <strong>${productTitle}</strong>.</p>`,
+      `<p>Тема: <strong>${topicTitle}</strong><br/>Автор: <strong>${authorLabel}</strong></p>`,
+      `<p style="white-space:pre-wrap">${bodyPreview}</p>`,
+      `<p><a href="${params.adminProductUrl}">Открыть в админке</a> · <a href="${params.storefrontUrl}">На витрине</a></p>`,
+    ].join('');
+    await transport.sendMail({
+      from,
+      to: primary,
+      ...(bcc.length ? { bcc } : {}),
+      subject,
+      text,
+      html,
+    });
+    this.logger.log(`Product QA new question notify (staff) sent to ${dedup.length} recipient(s)`);
+  }
+
+  /** Ответ staff в private correspondence по товару. */
+  async sendProductQaStaffReplyCustomer(params: {
+    to: string;
+    customerName: string | null;
+    productTitle: string;
+    bodyPreview: string;
+    accountQuestionsUrl: string;
+  }): Promise<void> {
+    const { to, customerName, productTitle, bodyPreview, accountQuestionsUrl } = params;
+    const from = this.config.get<string>('MAIL_FROM')?.trim() || this.config.get<string>('SMTP_USER');
+    if (!from) throw new Error('MAIL_FROM или SMTP_USER нужен для отправки письма');
+    const configuredHost = this.config.get<string>('SMTP_HOST')?.trim();
+    if (!configuredHost) {
+      throw new Error('SMTP_HOST, SMTP_USER и SMTP_PASSWORD должны быть заданы для отправки почты');
+    }
+    const endpoint = await this.smtpConnectTarget(configuredHost);
+    const transport = this.transporter(endpoint);
+    const hello = customerName?.trim() ? `${customerName.trim()}, ` : '';
+    const title = escapeHtml(productTitle);
+    const preview = escapeHtml(bodyPreview);
+    const subject = `Ответ по товару «${productTitle}» — Win-Win`;
+    const text = [
+      `${hello}магазин ответил на ваш вопрос по товару «${productTitle}».`,
+      ``,
+      bodyPreview,
+      ``,
+      `Открыть переписку: ${accountQuestionsUrl}`,
+    ].join('\n');
+    const html = [
+      `<p>${hello}магазин ответил на ваш вопрос по товару <strong>${title}</strong>.</p>`,
+      `<p style="white-space:pre-wrap">${preview}</p>`,
+      `<p><a href="${accountQuestionsUrl}">Перейти в «Мои вопросы»</a></p>`,
+    ].join('');
+    await transport.sendMail({ from, to, subject, text, html });
+    this.logger.log(`Product QA staff reply notify (customer) sent to ${to}`);
+  }
+
+  /** Вопрос покупателя не прошёл модерацию на витрине. */
+  async sendProductQaRejectCustomer(params: {
+    to: string;
+    customerName: string | null;
+    productTitle: string;
+    bodyPreview: string;
+    accountQuestionsUrl: string;
+  }): Promise<void> {
+    const { to, customerName, productTitle, bodyPreview, accountQuestionsUrl } = params;
+    const from = this.config.get<string>('MAIL_FROM')?.trim() || this.config.get<string>('SMTP_USER');
+    if (!from) throw new Error('MAIL_FROM или SMTP_USER нужен для отправки письма');
+    const configuredHost = this.config.get<string>('SMTP_HOST')?.trim();
+    if (!configuredHost) {
+      throw new Error('SMTP_HOST, SMTP_USER и SMTP_PASSWORD должны быть заданы для отправки почты');
+    }
+    const endpoint = await this.smtpConnectTarget(configuredHost);
+    const transport = this.transporter(endpoint);
+    const hello = customerName?.trim() ? `${customerName.trim()}, ` : '';
+    const title = escapeHtml(productTitle);
+    const preview = escapeHtml(bodyPreview);
+    const subject = `Вопрос по товару «${productTitle}» не опубликован — Win-Win`;
+    const text = [
+      `${hello}к сожалению, ваш вопрос по товару «${productTitle}» не был опубликован на витрине.`,
+      `Вы по-прежнему можете получить ответ в личной переписке с магазином.`,
+      ``,
+      bodyPreview,
+      ``,
+      `Открыть «Мои вопросы»: ${accountQuestionsUrl}`,
+    ].join('\n');
+    const html = [
+      `<p>${hello}к сожалению, ваш вопрос по товару <strong>${title}</strong> не был опубликован на витрине.</p>`,
+      `<p>Вы по-прежнему можете получить ответ в личной переписке с магазином.</p>`,
+      `<p style="white-space:pre-wrap">${preview}</p>`,
+      `<p><a href="${accountQuestionsUrl}">Перейти в «Мои вопросы»</a></p>`,
+    ].join('');
+    await transport.sendMail({ from, to, subject, text, html });
+    this.logger.log(`Product QA reject notify (customer) sent to ${to}`);
   }
 
   async sendStaffAdminWelcome(params: {

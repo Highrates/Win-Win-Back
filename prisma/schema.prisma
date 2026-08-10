@@ -52,6 +52,16 @@ model User {
   designerProjects DesignerProject[]
   chatMessagesAuthored ChatMessage[]
   chatReadStates       ChatReadState[]
+  productQaMessagesAuthored ProductQaMessage[] @relation("ProductQaMessageAuthor")
+  productQaMessagesHidden   ProductQaMessage[] @relation("ProductQaMessageHiddenBy")
+  productQaMessagesEdited   ProductQaMessage[] @relation("ProductQaMessageEditedBy")
+  productQaMessageRevisions ProductQaMessageRevision[] @relation("ProductQaMessageRevisionAuthor")
+  productCorrespondencesAsCustomer ProductCorrespondence[] @relation("ProductCorrespondenceCustomer")
+  productCorrespondenceMessagesAuthored ProductCorrespondenceMessage[] @relation("ProductCorrespondenceMessageAuthor")
+  productCorrespondenceMessagesEdited ProductCorrespondenceMessage[] @relation("CorrespondenceMessageEditedBy")
+  productCorrespondenceMessageRevisions ProductCorrespondenceMessageRevision[] @relation("CorrespondenceMessageRevisionAuthor")
+  productQaPendingUploads   ProductQaPendingUpload[]
+  productQaStaffReadStates  ProductQaStaffReadState[]
   commercialProposalsPublished CommercialProposal[] @relation("CommercialProposalPublishedBy")
   sourcingCommercialProposalsPublished SourcingCommercialProposal[] @relation("SourcingCommercialProposalPublishedBy")
   userGroupMember UserGroupMember?
@@ -130,6 +140,202 @@ model ChatReadState {
   @@id([conversationId, userId])
 }
 
+/// Публичный тред вопросов по товару (один на productId в MVP).
+enum ProductQaAuthorRole {
+  USER
+  STAFF
+}
+
+enum ProductQaMessageStatus {
+  /// USER-post при pre-mod; смена статуса только approve/reject (не PATCH).
+  PENDING
+  VISIBLE
+  HIDDEN
+  /// Отклонено модератором (не на витрине; не soft-delete).
+  REJECTED
+  DELETED
+}
+
+enum ProductQaAttachmentKind {
+  IMAGE
+  FILE
+}
+
+model ProductQaThread {
+  id                 String   @id @default(cuid())
+  productId          String
+  product            Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  /// Заголовок топика («Доставка», «Размеры»…).
+  title              String
+  /// URL-сегмент в query `topic=`; для дефолтного топика — `general`.
+  slug               String
+  isDefault          Boolean  @default(false)
+  sortOrder          Int      @default(0)
+  /// Число сообщений со статусом VISIBLE в этом топике.
+  messageCountPublic Int      @default(0)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  messages ProductQaMessage[]
+
+  @@unique([productId, slug])
+  @@index([productId, sortOrder])
+}
+
+model ProductQaMessage {
+  id               String                 @id @default(cuid())
+  threadId         String
+  thread           ProductQaThread        @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  authorUserId     String
+  author           User                   @relation("ProductQaMessageAuthor", fields: [authorUserId], references: [id], onDelete: Cascade)
+  authorRole       ProductQaAuthorRole
+  body             String                 @db.Text
+  productVariantId String?
+  productVariant   ProductVariant?        @relation(fields: [productVariantId], references: [id], onDelete: SetNull)
+  status           ProductQaMessageStatus @default(VISIBLE)
+  hiddenByUserId   String?
+  hiddenBy         User?                  @relation("ProductQaMessageHiddenBy", fields: [hiddenByUserId], references: [id], onDelete: SetNull)
+  hiddenAt         DateTime?
+  deletedAt        DateTime?
+  createdAt        DateTime               @default(now())
+  editedAt         DateTime?
+  editedByUserId   String?
+  editedBy         User?                  @relation("ProductQaMessageEditedBy", fields: [editedByUserId], references: [id], onDelete: SetNull)
+  replyToMessageId String?
+  replyTo          ProductQaMessage?      @relation("QaReply", fields: [replyToMessageId], references: [id], onDelete: SetNull)
+  replies          ProductQaMessage[]     @relation("QaReply")
+
+  attachments ProductQaAttachment[]
+  revisions   ProductQaMessageRevision[]
+  correspondencePublishedFrom ProductCorrespondenceMessage? @relation("CorrespondencePublishedQa")
+
+  @@index([threadId, createdAt(sort: Desc)])
+  @@index([threadId, status, createdAt(sort: Desc)])
+  @@index([replyToMessageId])
+}
+
+model ProductQaMessageRevision {
+  id             String           @id @default(cuid())
+  messageId      String
+  message        ProductQaMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  body           String           @db.Text
+  editedByUserId String
+  editedBy       User             @relation("ProductQaMessageRevisionAuthor", fields: [editedByUserId], references: [id], onDelete: Cascade)
+  createdAt      DateTime         @default(now())
+
+  @@index([messageId, createdAt(sort: Desc)])
+}
+
+model ProductQaAttachment {
+  id        String                  @id @default(cuid())
+  messageId String
+  message   ProductQaMessage        @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  url       String
+  filename  String
+  mimeType  String
+  kind      ProductQaAttachmentKind
+  sortOrder Int                     @default(0)
+  createdAt DateTime                @default(now())
+
+  @@index([messageId, sortOrder])
+}
+
+/// Per-staff «просмотрено до» для in-app unread по товару.
+model ProductQaStaffReadState {
+  staffUserId String
+  staffUser   User     @relation(fields: [staffUserId], references: [id], onDelete: Cascade)
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  lastSeenAt  DateTime
+
+  @@id([staffUserId, productId])
+  @@index([staffUserId])
+}
+
+/// Загрузка в S3 до POST сообщения; GC удаляет просроченные, POST потребляет запись.
+model ProductQaPendingUpload {
+  id        String   @id @default(cuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  url       String
+  objectKey String   @unique
+  filename  String
+  mimeType  String
+  createdAt DateTime @default(now())
+
+  @@index([productId, userId, createdAt])
+  @@index([createdAt])
+}
+
+/// Приватная переписка покупатель ↔ магазин по товару (1:1 на пару product + customer).
+model ProductCorrespondence {
+  id             String   @id @default(cuid())
+  productId      String
+  product        Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  customerUserId String
+  customer       User     @relation("ProductCorrespondenceCustomer", fields: [customerUserId], references: [id], onDelete: Cascade)
+  lastMessageAt  DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  messages ProductCorrespondenceMessage[]
+
+  @@unique([productId, customerUserId])
+  @@index([customerUserId, lastMessageAt(sort: Desc)])
+  @@index([productId, lastMessageAt(sort: Desc)])
+}
+
+model ProductCorrespondenceMessage {
+  id                   String                 @id @default(cuid())
+  correspondenceId     String
+  correspondence       ProductCorrespondence  @relation(fields: [correspondenceId], references: [id], onDelete: Cascade)
+  authorUserId         String
+  author               User                   @relation("ProductCorrespondenceMessageAuthor", fields: [authorUserId], references: [id], onDelete: Cascade)
+  authorRole           ProductQaAuthorRole
+  body                 String                 @db.Text
+  productVariantId     String?
+  productVariant       ProductVariant?        @relation(fields: [productVariantId], references: [id], onDelete: SetNull)
+  publishedQaMessageId String?                @unique
+  publishedQaMessage   ProductQaMessage?      @relation("CorrespondencePublishedQa", fields: [publishedQaMessageId], references: [id], onDelete: SetNull)
+  createdAt            DateTime               @default(now())
+  editedAt             DateTime?
+  editedByUserId       String?
+  editedBy               User?                  @relation("CorrespondenceMessageEditedBy", fields: [editedByUserId], references: [id], onDelete: SetNull)
+
+  attachments ProductCorrespondenceAttachment[]
+  revisions   ProductCorrespondenceMessageRevision[]
+
+  @@index([correspondenceId, createdAt(sort: Desc)])
+}
+
+model ProductCorrespondenceMessageRevision {
+  id             String                       @id @default(cuid())
+  messageId      String
+  message        ProductCorrespondenceMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  body           String                       @db.Text
+  editedByUserId String
+  editedBy       User                         @relation("CorrespondenceMessageRevisionAuthor", fields: [editedByUserId], references: [id], onDelete: Cascade)
+  createdAt      DateTime                     @default(now())
+
+  @@index([messageId, createdAt(sort: Desc)])
+}
+
+model ProductCorrespondenceAttachment {
+  id        String                       @id @default(cuid())
+  messageId String
+  message   ProductCorrespondenceMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  url       String
+  filename  String
+  mimeType  String
+  kind      ProductQaAttachmentKind
+  sortOrder Int                          @default(0)
+  createdAt DateTime                     @default(now())
+
+  @@index([messageId, sortOrder])
+}
+
 /// Приглашение дизайнера по email: ссылка с подписанным токеном, ref-код на момент отправки.
 model DesignerInvite {
   id         String   @id @default(cuid())
@@ -172,6 +378,32 @@ model RegistrationChallenge {
 
   @@index([phone])
   @@index([email])
+}
+
+/// Одноразовый JWT после verify OTP (jti = id); защита от replay complete().
+model RegistrationCompletionToken {
+  id                  String    @id
+  phone               String?
+  email               String?
+  consentPersonalData Boolean
+  consentSms          Boolean
+  expiresAt           DateTime
+  usedAt              DateTime?
+  createdAt           DateTime  @default(now())
+
+  @@index([expiresAt])
+}
+
+/// Одноразовый JWT сброса пароля (jti = id); защита от replay confirm().
+model PasswordResetToken {
+  id        String    @id
+  userId    String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
 }
 
 /// OTP для привязки/смены email или телефона у существующего пользователя (ЛК).
@@ -530,6 +762,10 @@ model Product {
   likesUserCount   Int @default(0)
   /// Админское «добавление» к публичному счётчику (не строки лайков).
   likesAdminBoost  Int @default(0)
+  /// Публичные вопросы по товару (денорм. из ProductQaThread.messageCountPublic).
+  qaMessageCountPublic Int @default(0)
+  /// Последняя активность в переписке или публичном Q&A (для admin inbox pagination).
+  lastChatActivityAt DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -550,6 +786,12 @@ model Product {
   modifications    ProductModification[]
   elements         ProductElement[]
   commercialProposalLines CommercialProposalLine[]
+  productQaThreads        ProductQaThread[]
+  productQaPendingUploads ProductQaPendingUpload[]
+  productQaStaffReadStates  ProductQaStaffReadState[]
+  productCorrespondences  ProductCorrespondence[]
+
+  @@index([lastChatActivityAt(sort: Desc)])
 }
 
 /// Модификация товара (размер/конфигурация). Простой товар может иметь одну модификацию без элементов.
@@ -652,6 +894,8 @@ model ProductVariant {
   orderItems OrderItem[]
   designerProjectLines DesignerProjectLine[]
   commercialProposalLines CommercialProposalLine[]
+  productQaMessages       ProductQaMessage[]
+  productCorrespondenceMessages ProductCorrespondenceMessage[]
 
   @@index([productId])
   @@index([modificationId])

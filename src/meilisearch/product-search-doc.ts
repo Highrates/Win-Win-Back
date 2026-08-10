@@ -26,6 +26,7 @@ export type ProductVariantSearchIndexRow = {
   likesUserCount?: number;
   likesAdminBoost?: number;
   catalogTagIds?: string[];
+  qaMessageCountPublic?: number;
   /** Размеры из названий модификаций (до « · »). */
   sizeLabels?: string[];
   /** Id материалов бренда, доступных на элементах товара. */
@@ -133,6 +134,7 @@ export function buildProductSearchDocument(row: ProductVariantSearchIndexRow): R
     thumbUrl,
     imageUrls,
     casesLinkedCount: row.casesLinkedCount ?? 0,
+    qaMessageCountPublic: row.qaMessageCountPublic ?? 0,
     likesDisplayCount,
     sizeLabels: row.sizeLabels ?? [],
     brandMaterialIds: row.brandMaterialIds ?? [],

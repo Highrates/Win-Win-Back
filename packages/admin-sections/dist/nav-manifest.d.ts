@@ -1,13 +1,13 @@
 import type { AdminSectionId } from './constants';
 /** Раздел или pseudo-раздел «staff» (только суперадмин). */
 export type AdminNavAccessSection = AdminSectionId | 'staff';
-export type AdminNavLabelKey = AdminSectionId | 'products' | 'categories' | 'collections' | 'contextTags' | 'productSets' | 'pricing' | 'staff' | 'userGroups' | 'referrals' | 'site';
+export type AdminNavLabelKey = AdminSectionId | 'products' | 'categories' | 'collections' | 'contextTags' | 'productSets' | 'questions' | 'pricing' | 'staff' | 'userGroups' | 'referrals' | 'site';
 export type AdminNavChild = {
     href: string;
     labelKey: AdminNavLabelKey;
     section?: AdminNavAccessSection;
     /** Спец-логика подсветки активного пункта в сайдбаре. */
-    activeMatch?: 'collections' | 'contextTags' | 'productSets' | 'referrals' | 'userGroups';
+    activeMatch?: 'collections' | 'contextTags' | 'productSets' | 'referrals' | 'userGroups' | 'qaQueue';
 };
 export type AdminNavGroup = {
     section: AdminNavAccessSection;
@@ -56,6 +56,10 @@ export declare const ADMIN_NAV_MANIFEST: {
             href: string;
             labelKey: "productSets";
             activeMatch: "productSets";
+        } | {
+            href: string;
+            labelKey: "questions";
+            activeMatch: "qaQueue";
         })[];
     };
     readonly midLinks: ({
@@ -141,6 +145,10 @@ export declare const ADMIN_NAV_CATALOG_CHILDREN: ({
     href: string;
     labelKey: "productSets";
     activeMatch: "productSets";
+} | {
+    href: string;
+    labelKey: "questions";
+    activeMatch: "qaQueue";
 })[];
 /** @deprecated Используйте ADMIN_NAV_MANIFEST.settings.children */
 export declare const ADMIN_NAV_SETTINGS_CHILDREN: readonly AdminNavChild[];
