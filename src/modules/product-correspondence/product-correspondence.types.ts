@@ -34,7 +34,7 @@ export type ProductCorrespondenceMessageRevisionOut = {
 };
 
 export type ProductCorrespondenceMessagesListOut = {
-  correspondenceId: string;
+  correspondenceId: string | null;
   productId: string;
   customerUserId: string;
   messages: ProductCorrespondenceMessageOut[];

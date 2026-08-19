@@ -43,6 +43,13 @@ export class ProductCorrespondenceCoreService {
     });
   }
 
+  async findCorrespondenceForCustomer(productId: string, customerUserId: string) {
+    return this.prisma.productCorrespondence.findUnique({
+      where: { productId_customerUserId: { productId, customerUserId } },
+      select: { id: true, productId: true, customerUserId: true },
+    });
+  }
+
   async getCorrespondenceForCustomer(productId: string, customerUserId: string) {
     const row = await this.prisma.productCorrespondence.findUnique({
       where: { productId_customerUserId: { productId, customerUserId } },

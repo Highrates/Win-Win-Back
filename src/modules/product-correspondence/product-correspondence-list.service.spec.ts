@@ -5,7 +5,7 @@ import { ProductCorrespondenceListService } from './product-correspondence-list.
 describe('ProductCorrespondenceListService', () => {
   const core = {
     resolveActiveProductBySlug: vi.fn(),
-    resolveOrCreateCorrespondence: vi.fn(),
+    findCorrespondenceForCustomer: vi.fn(),
     getCorrespondenceForCustomer: vi.fn(),
     resolveProductById: vi.fn(),
     normalizePageLimit: vi.fn((n?: number) => n ?? 30),
@@ -15,6 +15,7 @@ describe('ProductCorrespondenceListService', () => {
     productCorrespondence: {
       findMany: vi.fn(),
       findUniqueOrThrow: vi.fn(),
+      deleteMany: vi.fn(),
     },
     productCorrespondenceMessage: {
       findMany: vi.fn(),
@@ -31,7 +32,20 @@ describe('ProductCorrespondenceListService', () => {
     service = new ProductCorrespondenceListService(prisma as never, core as never);
   });
 
+  it('listMessagesBySlug returns empty list without creating correspondence', async () => {
+    core.resolveActiveProductBySlug.mockResolvedValue({ id: 'p1', slug: 'chair' });
+    core.findCorrespondenceForCustomer.mockResolvedValue(null);
+
+    const out = await service.listMessagesBySlug('chair', 'u1');
+
+    expect(out.correspondenceId).toBeNull();
+    expect(out.messages).toEqual([]);
+    expect(out.hasOlder).toBe(false);
+    expect(prisma.productCorrespondence.findUniqueOrThrow).not.toHaveBeenCalled();
+  });
+
   it('listMyProducts sets awaitingStaffReply when last message is USER', async () => {
+    prisma.productCorrespondence.deleteMany.mockResolvedValue({ count: 0 });
     prisma.productCorrespondence.findMany.mockResolvedValue([
       {
         id: 'corr1',
@@ -64,6 +78,7 @@ describe('ProductCorrespondenceListService', () => {
   });
 
   it('listMyProducts clears awaitingStaffReply when last message is STAFF', async () => {
+    prisma.productCorrespondence.deleteMany.mockResolvedValue({ count: 0 });
     prisma.productCorrespondence.findMany.mockResolvedValue([
       {
         id: 'corr1',

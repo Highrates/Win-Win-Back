@@ -170,12 +170,35 @@ describe('PricingAdminService profiles CRUD', () => {
     expect(prisma.pricingProfile.create).toHaveBeenCalledOnce();
   });
 
-  it('findProfileForCategoryIds: только isDefault=true', async () => {
+  it('findProfileForCategoryIds: любой профиль с пересечением категорий', async () => {
     prisma.pricingProfile.findFirst.mockResolvedValue(profileEntity);
     await svc.findProfileForCategoryIds(['cat-a']);
     expect(prisma.pricingProfile.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: expect.objectContaining({ isDefault: true }),
+        where: {
+          categories: { some: { categoryId: { in: ['cat-a'] } } },
+        },
+        orderBy: [{ isDefault: 'asc' }, { sortOrder: 'asc' }],
+      }),
+    );
+  });
+
+  it('findProfileForCategoryIds: находит дополнительный профиль (isDefault=false)', async () => {
+    const secondaryProfile = {
+      ...profileEntity,
+      id: 'pp-2',
+      name: 'Освещение и отделочные',
+      isDefault: false,
+      categories: [{ categoryId: 'cat-light' }],
+    };
+    prisma.pricingProfile.findFirst.mockResolvedValue(secondaryProfile);
+    const result = await svc.findProfileForCategoryIds(['cat-light']);
+    expect(result).toEqual(secondaryProfile);
+    expect(prisma.pricingProfile.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          categories: { some: { categoryId: { in: ['cat-light'] } } },
+        },
       }),
     );
   });

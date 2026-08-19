@@ -26,10 +26,19 @@ export class ProductCorrespondenceListService {
     opts?: { limit?: number; beforeMessageId?: string },
   ): Promise<ProductCorrespondenceMessagesListOut> {
     const product = await this.core.resolveActiveProductBySlug(slug);
-    const correspondence = await this.core.resolveOrCreateCorrespondence(
+    const correspondence = await this.core.findCorrespondenceForCustomer(
       product.id,
       customerUserId,
     );
+    if (!correspondence) {
+      return {
+        correspondenceId: null,
+        productId: product.id,
+        customerUserId,
+        messages: [],
+        hasOlder: false,
+      };
+    }
     return this.listMessages(correspondence.id, opts);
   }
 
@@ -95,8 +104,13 @@ export class ProductCorrespondenceListService {
 
   async listMyProducts(userId: string): Promise<ProductCorrespondenceMyProductsListOut> {
     const uid = userId.trim();
+
+    await this.prisma.productCorrespondence.deleteMany({
+      where: { customerUserId: uid, messages: { none: {} } },
+    });
+
     const rows = await this.prisma.productCorrespondence.findMany({
-      where: { customerUserId: uid },
+      where: { customerUserId: uid, messages: { some: {} } },
       orderBy: { lastMessageAt: 'desc' },
       select: {
         id: true,
@@ -153,7 +167,7 @@ export class ProductCorrespondenceListService {
   async listThreadsForProduct(productId: string): Promise<ProductCorrespondenceThreadsListOut> {
     await this.core.resolveProductById(productId);
     const rows = await this.prisma.productCorrespondence.findMany({
-      where: { productId },
+      where: { productId, messages: { some: {} } },
       orderBy: { lastMessageAt: 'desc' },
       select: {
         id: true,

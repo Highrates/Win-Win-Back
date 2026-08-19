@@ -375,15 +375,15 @@ export class PricingAdminService {
     return reverseRetailToCnyFromProfileCalc(calcIn, dto);
   }
 
-  /** Основной профиль (isDefault) по пересечению категорий — для гостей и пользователей без группы. */
+  /** Профиль по пересечению категорий товара; при нескольких совпадениях — не основной (специфичный) первым. */
   async findProfileForCategoryIds(categoryIds: string[]) {
     const uniq = [...new Set(categoryIds.filter(Boolean))];
     if (!uniq.length) return null;
     return this.prisma.pricingProfile.findFirst({
       where: {
-        isDefault: true,
         categories: { some: { categoryId: { in: uniq } } },
       },
+      orderBy: [{ isDefault: 'asc' }, { sortOrder: 'asc' }],
       include: { categories: { select: { categoryId: true } } },
     });
   }
