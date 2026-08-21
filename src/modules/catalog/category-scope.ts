@@ -41,3 +41,22 @@ export function meilisearchCategoryScopeFilter(scopeIds: string[]): string | nul
   if (ids.length === 1) return `categoryIds = "${ids[0]}"`;
   return `(${ids.map((id) => `categoryIds = "${id}"`).join(' OR ')})`;
 }
+
+/**
+ * Число уникальных товаров, попадающих в scope категории (сама + потомки).
+ * `productsByCategory` — categoryId → set productId (основная и доп. категории).
+ */
+export function countUniqueProductsInCategoryScope(
+  rootCategoryId: string,
+  categories: CategoryTreeNode[],
+  productsByCategory: Map<string, ReadonlySet<string>>,
+): number {
+  const scope = collectCategoryAndDescendantIds(rootCategoryId, categories);
+  const uniq = new Set<string>();
+  for (const cid of scope) {
+    const set = productsByCategory.get(cid);
+    if (!set) continue;
+    for (const pid of set) uniq.add(pid);
+  }
+  return uniq.size;
+}

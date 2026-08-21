@@ -12,6 +12,7 @@ import { resolveEffectiveVariantImages } from './variant-effective-gallery';
 import { enrichProductsWithLikedByMe } from '../../common/utils/enrich-products-liked-by-me';
 import {
   collectCategoryAndDescendantIds,
+  countUniqueProductsInCategoryScope,
   meilisearchCategoryScopeFilter,
 } from './category-scope';
 import {
@@ -274,6 +275,7 @@ export class CatalogService {
       select: {
         product: {
           select: {
+            id: true,
             categoryId: true,
             productCategories: { select: { categoryId: true } },
           },
@@ -282,14 +284,27 @@ export class CatalogService {
     });
 
     const stripIds = new Set<string>();
+    const productIdsByRoot = new Map<string, Set<string>>();
     for (const link of links) {
       const ids = collectProductCategoryIds(
         link.product.categoryId,
         link.product.productCategories,
       );
+      const rootIds = new Set<string>();
       for (const cid of ids) {
         const node = rootCategoryFor(cid);
-        if (node) stripIds.add(node.id);
+        if (node) {
+          stripIds.add(node.id);
+          rootIds.add(node.id);
+        }
+      }
+      for (const rid of rootIds) {
+        let set = productIdsByRoot.get(rid);
+        if (!set) {
+          set = new Set();
+          productIdsByRoot.set(rid, set);
+        }
+        set.add(link.product.id);
       }
     }
 
@@ -298,6 +313,7 @@ export class CatalogService {
       name: c.name,
       sortOrder: c.sortOrder,
       backgroundImageUrl: c.backgroundImageUrl,
+      productCount: productIdsByRoot.get(c.id)?.size ?? 0,
     });
 
     let rows = categories
@@ -315,31 +331,59 @@ export class CatalogService {
 
   /**
    * Дерево для витрины: активные корни и полное поддерево активных потомков (произвольная глубина).
+   * `productCount` у корня — уникальные активные товары в категории и всех потомках.
    */
   async getCategoryTree(): Promise<{ roots: PublicCategoryTreeRoot[] }> {
-    const rootsRows = await this.prisma.category.findMany({
-      where: { isActive: true, parentId: null },
-      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
-      select: {
-        id: true,
-        slug: true,
-        name: true,
-        sortOrder: true,
-        backgroundImageUrl: true,
-        _count: {
-          select: {
-            primaryProducts: { where: { isActive: true } },
-            productCategories: { where: { product: { isActive: true } } },
-          },
+    const [rootsRows, allCats, products] = await Promise.all([
+      this.prisma.category.findMany({
+        where: { isActive: true, parentId: null },
+        orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+        select: {
+          id: true,
+          slug: true,
+          name: true,
+          sortOrder: true,
+          backgroundImageUrl: true,
         },
-      },
-    });
+      }),
+      this.prisma.category.findMany({
+        where: { isActive: true },
+        select: { id: true, parentId: true },
+      }),
+      this.prisma.product.findMany({
+        where: { isActive: true },
+        select: {
+          id: true,
+          categoryId: true,
+          productCategories: { select: { categoryId: true } },
+        },
+      }),
+    ]);
+
+    const productsByCategory = new Map<string, Set<string>>();
+    const addProductToCategory = (categoryId: string, productId: string) => {
+      let set = productsByCategory.get(categoryId);
+      if (!set) {
+        set = new Set();
+        productsByCategory.set(categoryId, set);
+      }
+      set.add(productId);
+    };
+    for (const p of products) {
+      addProductToCategory(p.categoryId, p.id);
+      for (const pc of p.productCategories) {
+        addProductToCategory(pc.categoryId, p.id);
+      }
+    }
+
+    const countProductsInSubtree = (rootId: string): number =>
+      countUniqueProductsInCategoryScope(rootId, allCats, productsByCategory);
+
     const roots: PublicCategoryTreeRoot[] = [];
     for (const r of rootsRows) {
-      const { _count, ...rest } = r;
       roots.push({
-        ...rest,
-        productCount: _count.primaryProducts + _count.productCategories,
+        ...r,
+        productCount: countProductsInSubtree(r.id),
         children: await this.buildPublicCategorySubtree(r.id),
       });
     }

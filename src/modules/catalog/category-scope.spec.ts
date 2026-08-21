@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   collectCategoryAndDescendantIds,
+  countUniqueProductsInCategoryScope,
   meilisearchCategoryScopeFilter,
 } from './category-scope';
 
@@ -28,6 +29,25 @@ describe('collectCategoryAndDescendantIds', () => {
     expect(ids).toContain('grand');
     expect(ids).not.toContain('root');
     expect(ids).not.toContain('other');
+  });
+});
+
+describe('countUniqueProductsInCategoryScope', () => {
+  const tree = [
+    { id: 'root', parentId: null },
+    { id: 'child', parentId: 'root' },
+    { id: 'other', parentId: null },
+  ];
+
+  it('counts unique products across root and descendants', () => {
+    const byCat = new Map<string, Set<string>>([
+      ['root', new Set(['p1'])],
+      ['child', new Set(['p1', 'p2'])],
+      ['other', new Set(['p3'])],
+    ]);
+    expect(countUniqueProductsInCategoryScope('root', tree, byCat)).toBe(2);
+    expect(countUniqueProductsInCategoryScope('child', tree, byCat)).toBe(2);
+    expect(countUniqueProductsInCategoryScope('other', tree, byCat)).toBe(1);
   });
 });
 
