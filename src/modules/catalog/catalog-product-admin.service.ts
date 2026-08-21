@@ -18,6 +18,7 @@ import {
 import { CatalogVariantAdminService } from './catalog-variant-admin.service';
 import { slugifyProductBase } from './slug-transliteration';
 import { buildCategoryPathLabel } from './catalog-category-path';
+import { priceToNumber } from '../../meilisearch/product-search-doc';
 
 function parseProductVisibilityFilter(raw?: string): boolean | undefined {
   const v = raw?.trim().toLowerCase();
@@ -38,6 +39,30 @@ export type AdminProductListQueryFilters = {
   collectionId?: string;
   productSetId?: string;
 };
+
+/** Цена для колонки списка: min среди вариантов с price > 0 (как на витрине), не только isDefault. */
+export function pickAdminListPrice(variants: {
+  price: { toString(): string };
+  currency: string;
+  isActive: boolean;
+}[]): { price: string; currency: string } {
+  const withNums = variants.map((v) => ({
+    price: v.price.toString(),
+    currency: v.currency,
+    isActive: v.isActive,
+    n: priceToNumber(v.price),
+  }));
+  const positiveActive = withNums.filter((v) => v.isActive && v.n > 0);
+  const positiveAny = withNums.filter((v) => v.n > 0);
+  const pool = positiveActive.length ? positiveActive : positiveAny;
+  if (!pool.length) {
+    const fb = withNums[0];
+    return { price: fb?.price ?? '0', currency: fb?.currency ?? 'RUB' };
+  }
+  pool.sort((a, b) => a.n - b.n);
+  const min = pool[0]!;
+  return { price: min.price, currency: min.currency || 'RUB' };
+}
 
 function buildProductAdminListWhere(
   q?: string,
@@ -361,11 +386,11 @@ export class CatalogProductAdminService {
             select: { url: true },
           },
           variants: {
-            where: { isDefault: true },
-            take: 1,
+            orderBy: [{ isActive: 'desc' }, { isDefault: 'desc' }, { sortOrder: 'asc' }],
             select: {
               price: true,
               currency: true,
+              isActive: true,
             },
           },
         },
@@ -378,14 +403,14 @@ export class CatalogProductAdminService {
     ]);
     const byId = new Map(cats.map((c) => [c.id, { name: c.name, parentId: c.parentId }]));
     const items = rows.map((r) => {
-      const dv = r.variants[0];
+      const { price, currency } = pickAdminListPrice(r.variants);
       const thumbUrl = r.images[0]?.url ?? null;
       return {
         id: r.id,
         name: r.name,
         slug: r.slug,
-        price: dv?.price.toString() ?? '0',
-        currency: dv?.currency ?? 'RUB',
+        price,
+        currency,
         isActive: r.isActive,
         category: r.category,
         categoryPath: buildCategoryPathLabel(r.category.id, byId),
