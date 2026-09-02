@@ -220,6 +220,7 @@ export class OrdersService {
     userIdFilter?: string,
     bucketRaw?: string,
     staffUserId?: string,
+    opts?: { from?: string; to?: string },
   ) {
     const take = Math.min(Math.max(limit, 1), 100);
     const skip = (Math.max(page, 1) - 1) * take;
@@ -234,9 +235,11 @@ export class OrdersService {
       : undefined;
     const uid = userIdFilter?.trim();
     const userClause: Prisma.OrderWhereInput | undefined = uid ? { userId: uid } : undefined;
+    const createdAt = createdAtInRange(parseDashboardDateRange(opts?.from, opts?.to));
     const clauses: Prisma.OrderWhereInput[] = [USER_ORDER_LIST_WHERE, adminListBucketWhere(bucketRaw)];
     if (userClause) clauses.push(userClause);
     if (search) clauses.push(search);
+    if (createdAt) clauses.push({ createdAt });
     const where: Prisma.OrderWhereInput = { AND: clauses };
     const [rows, total] = await Promise.all([
       this.prisma.order.findMany({

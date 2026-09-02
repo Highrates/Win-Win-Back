@@ -38,6 +38,8 @@ export class SourcingRequestsAdminController {
     @Query('q') q?: string,
     @Query('userId') userId?: string,
     @Query('bucket') bucket?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
   ) {
     return this.sourcing.findManyForAdmin(
       parseSourcingListPage(pageRaw),
@@ -46,6 +48,10 @@ export class SourcingRequestsAdminController {
       userId?.trim() || undefined,
       bucket?.trim() || undefined,
       user.sub,
+      {
+        from: from?.trim() || undefined,
+        to: to?.trim() || undefined,
+      },
     );
   }
 

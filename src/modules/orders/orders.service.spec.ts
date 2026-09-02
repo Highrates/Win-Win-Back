@@ -141,3 +141,27 @@ describe('OrdersService.getDashboardStatusSummaryForAdmin', () => {
     expect(prisma.order.count).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('OrdersService.findManyForAdmin period filter', () => {
+  it('передаёт createdAt в where при from/to', async () => {
+    const { service, prisma } = buildService();
+    prisma.order.findMany.mockResolvedValue([]);
+    prisma.order.count.mockResolvedValue(0);
+    prisma.chatConversation.findMany.mockResolvedValue([]);
+
+    const from = '2026-09-01T00:00:00.000Z';
+    const to = '2026-09-02T00:00:00.000Z';
+    await service.findManyForAdmin(1, 20, undefined, undefined, 'new', undefined, { from, to });
+
+    const where = prisma.order.findMany.mock.calls[0]?.[0]?.where;
+    expect(where).toEqual(
+      expect.objectContaining({
+        AND: expect.arrayContaining([
+          expect.objectContaining({
+            createdAt: { gte: new Date(from), lt: new Date(to) },
+          }),
+        ]),
+      }),
+    );
+  });
+});

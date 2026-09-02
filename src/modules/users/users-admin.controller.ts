@@ -56,8 +56,15 @@ export class UsersAdminController {
   listPartnerApplications(
     @Query('skip', new DefaultValuePipe(0), ParseIntPipe) skip: number,
     @Query('take', new DefaultValuePipe(20), ParseIntPipe) take: number,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
   ) {
-    return this.users.listPartnerApplicationsForAdmin({ skip, take });
+    return this.users.listPartnerApplicationsForAdmin({
+      skip,
+      take,
+      from: from?.trim() || undefined,
+      to: to?.trim() || undefined,
+    });
   }
 
   @Post('partner-applications/:id/approve')
@@ -95,9 +102,17 @@ export class UsersAdminController {
     @Query('skip', new DefaultValuePipe(0), ParseIntPipe) skip: number,
     @Query('take', new DefaultValuePipe(50), ParseIntPipe) take: number,
     @Query('q') q?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
   ) {
     const t = Math.min(Math.max(take, 1), 100);
-    return this.users.listRetailUsers({ skip: Math.max(skip, 0), take: t, q });
+    return this.users.listRetailUsers({
+      skip: Math.max(skip, 0),
+      take: t,
+      q,
+      from: from?.trim() || undefined,
+      to: to?.trim() || undefined,
+    });
   }
 
   @Get(':id/group')

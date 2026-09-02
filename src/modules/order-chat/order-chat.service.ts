@@ -883,45 +883,46 @@ export class OrderChatService {
     active: number;
     completed: number;
   }> {
-    const countBucket = async (bucketWhere: Prisma.OrderWhereInput): Promise<number> => {
-      const convs = await this.prisma.chatConversation.findMany({
-        where: {
-          order: { AND: [{ status: { not: OrderStatus.DRAFT } }, bucketWhere] },
-          OR: [{ retentionPurgesAt: null }, { retentionPurgesAt: { gt: new Date() } }],
-        },
-        select: {
-          id: true,
-          readStates: {
-            where: { userId: staffUserId },
-            select: { lastReadAt: true },
-            take: 1,
-          },
-        },
-      });
-      const parts = await Promise.all(
-        convs.map(async (c) => {
-          const lastRead = c.readStates[0]?.lastReadAt ?? new Date(0);
-          return this.prisma.chatMessage.count({
-            where: {
-              conversationId: c.id,
-              authorRole: ChatMessageAuthorRole.CUSTOMER,
-              deletedAt: null,
-              createdAt: { gt: lastRead },
-            },
-          });
-        }),
-      );
-      return parts.reduce((a, b) => a + b, 0);
-    };
+    const activeStatuses = [...ADMIN_ACTIVE_STATUSES];
+    const completedStatuses = [...ADMIN_COMPLETED_STATUSES];
+    const rows = await this.prisma.$queryRaw<Array<{ bucket: string; count: bigint }>>(Prisma.sql`
+      SELECT bucket, COUNT(*)::bigint AS count
+      FROM (
+        SELECT
+          CASE
+            WHEN o.status = ${OrderStatus.PENDING_APPROVAL}::"OrderStatus" THEN 'new'
+            WHEN o.status IN (${Prisma.join(
+              activeStatuses.map((s) => Prisma.sql`${s}::"OrderStatus"`),
+            )}) THEN 'active'
+            WHEN o.status IN (${Prisma.join(
+              completedStatuses.map((s) => Prisma.sql`${s}::"OrderStatus"`),
+            )}) THEN 'completed'
+            ELSE 'other'
+          END AS bucket
+        FROM "ChatConversation" c
+        INNER JOIN "Order" o ON o.id = c."orderId"
+        LEFT JOIN "ChatReadState" rs
+          ON rs."conversationId" = c.id AND rs."userId" = ${staffUserId}
+        INNER JOIN "ChatMessage" m ON m."conversationId" = c.id
+        WHERE o.status <> ${OrderStatus.DRAFT}::"OrderStatus"
+          AND (c."retentionPurgesAt" IS NULL OR c."retentionPurgesAt" > NOW())
+          AND m."authorRole" = ${ChatMessageAuthorRole.CUSTOMER}::"ChatMessageAuthorRole"
+          AND m."deletedAt" IS NULL
+          AND m."createdAt" > COALESCE(rs."lastReadAt", '-infinity'::timestamptz)
+      ) t
+      WHERE bucket <> 'other'
+      GROUP BY bucket
+    `);
 
-    const newN = await countBucket({ status: OrderStatus.PENDING_APPROVAL });
-    const activeN = await countBucket({ status: { in: [...ADMIN_ACTIVE_STATUSES] } });
-    const completedN = await countBucket({ status: { in: [...ADMIN_COMPLETED_STATUSES] } });
+    const byBucket = { new: 0, active: 0, completed: 0 };
+    for (const row of rows) {
+      if (row.bucket === 'new' || row.bucket === 'active' || row.bucket === 'completed') {
+        byBucket[row.bucket] = Number(row.count);
+      }
+    }
     return {
-      total: newN + activeN + completedN,
-      new: newN,
-      active: activeN,
-      completed: completedN,
+      total: byBucket.new + byBucket.active + byBucket.completed,
+      ...byBucket,
     };
   }
 
@@ -932,51 +933,43 @@ export class OrderChatService {
     active: number;
     completed: number;
   }> {
-    const countBucket = async (
-      statuses: SourcingRequestStatus[],
-    ): Promise<number> => {
-      const convs = await this.prisma.chatConversation.findMany({
-        where: {
-          sourcingRequestId: { not: null },
-          sourcingRequest: { status: { in: statuses } },
-          OR: [{ retentionPurgesAt: null }, { retentionPurgesAt: { gt: new Date() } }],
-        },
-        select: {
-          id: true,
-          readStates: {
-            where: { userId: staffUserId },
-            select: { lastReadAt: true },
-            take: 1,
-          },
-        },
-      });
-      const parts = await Promise.all(
-        convs.map(async (c) => {
-          const lastRead = c.readStates[0]?.lastReadAt ?? new Date(0);
-          return this.prisma.chatMessage.count({
-            where: {
-              conversationId: c.id,
-              authorRole: ChatMessageAuthorRole.CUSTOMER,
-              deletedAt: null,
-              createdAt: { gt: lastRead },
-            },
-          });
-        }),
-      );
-      return parts.reduce((a, b) => a + b, 0);
-    };
+    const rows = await this.prisma.$queryRaw<Array<{ bucket: string; count: bigint }>>(Prisma.sql`
+      SELECT bucket, COUNT(*)::bigint AS count
+      FROM (
+        SELECT
+          CASE
+            WHEN sr.status = ${SourcingRequestStatus.PENDING_REVIEW}::"SourcingRequestStatus" THEN 'new'
+            WHEN sr.status = ${SourcingRequestStatus.IN_PROGRESS}::"SourcingRequestStatus" THEN 'active'
+            WHEN sr.status IN (
+              ${SourcingRequestStatus.COMPLETED}::"SourcingRequestStatus",
+              ${SourcingRequestStatus.CANCELLED}::"SourcingRequestStatus"
+            ) THEN 'completed'
+            ELSE 'other'
+          END AS bucket
+        FROM "ChatConversation" c
+        INNER JOIN "SourcingRequest" sr ON sr.id = c."sourcingRequestId"
+        LEFT JOIN "ChatReadState" rs
+          ON rs."conversationId" = c.id AND rs."userId" = ${staffUserId}
+        INNER JOIN "ChatMessage" m ON m."conversationId" = c.id
+        WHERE c."sourcingRequestId" IS NOT NULL
+          AND (c."retentionPurgesAt" IS NULL OR c."retentionPurgesAt" > NOW())
+          AND m."authorRole" = ${ChatMessageAuthorRole.CUSTOMER}::"ChatMessageAuthorRole"
+          AND m."deletedAt" IS NULL
+          AND m."createdAt" > COALESCE(rs."lastReadAt", '-infinity'::timestamptz)
+      ) t
+      WHERE bucket <> 'other'
+      GROUP BY bucket
+    `);
 
-    const newN = await countBucket([SourcingRequestStatus.PENDING_REVIEW]);
-    const activeN = await countBucket([SourcingRequestStatus.IN_PROGRESS]);
-    const completedN = await countBucket([
-      SourcingRequestStatus.COMPLETED,
-      SourcingRequestStatus.CANCELLED,
-    ]);
+    const byBucket = { new: 0, active: 0, completed: 0 };
+    for (const row of rows) {
+      if (row.bucket === 'new' || row.bucket === 'active' || row.bucket === 'completed') {
+        byBucket[row.bucket] = Number(row.count);
+      }
+    }
     return {
-      total: newN + activeN + completedN,
-      new: newN,
-      active: activeN,
-      completed: completedN,
+      total: byBucket.new + byBucket.active + byBucket.completed,
+      ...byBucket,
     };
   }
 

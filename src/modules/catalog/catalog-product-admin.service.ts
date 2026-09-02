@@ -67,32 +67,43 @@ export function parseProductAdminHygieneFilter(raw?: string): ProductAdminHygien
     : undefined;
 }
 
-/** Критерии «дыр» в модификациях / элементах для списка и дашборда. */
+/** Критерии «дыр» в модификациях / элементах для списка и дашборда.
+ * Базовые бакеты (no_modifications / no_variants / element_empty_pool / composite_incomplete)
+ * взаимно исключают друг друга. `active_empty` — rollup «опубликован и пустой» (пересекается
+ * с no_modifications / no_variants / composite по задумке фильтра списка). */
 export function productAdminHygieneWhere(key: ProductAdminHygieneKey): Prisma.ProductWhereInput {
   switch (key) {
     case 'no_modifications':
       return { modifications: { none: {} } };
     case 'no_variants':
+      // Простой товар: моды есть, вариантов нет, элементов нет (составные → composite_*).
       return {
-        AND: [{ modifications: { some: {} } }, { variants: { none: {} } }],
+        AND: [
+          { modifications: { some: {} } },
+          { variants: { none: {} } },
+          { elements: { none: {} } },
+        ],
       };
     case 'active_empty':
+      // Витрина с дырой: в каталоге и (нет модов или нет вариантов). Rollup для списка.
       return {
         isActive: true,
-        OR: [{ modifications: { none: {} } }, { variants: { none: {} } }],
+        OR: [
+          { modifications: { none: {} } },
+          {
+            AND: [{ modifications: { some: {} } }, { variants: { none: {} } }],
+          },
+        ],
       };
     case 'element_empty_pool':
       return { elements: { some: { availabilities: { none: {} } } } };
     case 'composite_incomplete':
+      // Есть элементы, нет вариантов; дыры пула — только в element_empty_pool.
       return {
         AND: [
           { elements: { some: {} } },
-          {
-            OR: [
-              { elements: { some: { availabilities: { none: {} } } } },
-              { variants: { none: {} } },
-            ],
-          },
+          { variants: { none: {} } },
+          { NOT: { elements: { some: { availabilities: { none: {} } } } } },
         ],
       };
   }

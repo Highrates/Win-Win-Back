@@ -308,12 +308,20 @@ export class UsersService {
     });
   }
 
-  async listRetailUsers(params: { skip: number; take: number; q?: string }) {
+  async listRetailUsers(params: {
+    skip: number;
+    take: number;
+    q?: string;
+    from?: string;
+    to?: string;
+  }) {
     const q = params.q?.trim();
     const digits = q?.replace(/\D/g, '') ?? '';
+    const createdAt = createdAtInRange(parseDashboardDateRange(params.from, params.to));
     const where: Prisma.UserWhereInput = {
       role: UserRole.USER,
       isActive: true,
+      ...(createdAt ? { createdAt } : {}),
       ...(q
         ? {
             OR: [
@@ -644,15 +652,23 @@ export class UsersService {
     throw new BadRequestException('Не удалось сгенерировать реферальный номер');
   }
 
-  async listPartnerApplicationsForAdmin(params: { skip: number; take: number }) {
+  async listPartnerApplicationsForAdmin(params: {
+    skip: number;
+    take: number;
+    from?: string;
+    to?: string;
+  }) {
     const take = Math.min(100, Math.max(1, params.take));
     const skip = Math.max(0, params.skip);
+    const submittedAt = createdAtInRange(parseDashboardDateRange(params.from, params.to));
     const where = {
       role: UserRole.USER,
       isActive: true,
       profile: {
         is: {
-          partnerApplicationSubmittedAt: { not: null },
+          partnerApplicationSubmittedAt: submittedAt
+            ? { gte: submittedAt.gte, lt: submittedAt.lt }
+            : { not: null },
           winWinPartnerApproved: false,
           partnerApplicationRejectedAt: null,
         },

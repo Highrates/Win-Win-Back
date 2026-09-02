@@ -41,16 +41,25 @@ describe('productAdminHygieneWhere', () => {
     });
   });
 
-  it('no_variants — есть модификации, нет вариантов', () => {
+  it('no_variants — есть модификации, нет вариантов, нет элементов', () => {
     expect(productAdminHygieneWhere('no_variants')).toEqual({
-      AND: [{ modifications: { some: {} } }, { variants: { none: {} } }],
+      AND: [
+        { modifications: { some: {} } },
+        { variants: { none: {} } },
+        { elements: { none: {} } },
+      ],
     });
   });
 
   it('active_empty — активен и (нет модов или нет вариантов)', () => {
     expect(productAdminHygieneWhere('active_empty')).toEqual({
       isActive: true,
-      OR: [{ modifications: { none: {} } }, { variants: { none: {} } }],
+      OR: [
+        { modifications: { none: {} } },
+        {
+          AND: [{ modifications: { some: {} } }, { variants: { none: {} } }],
+        },
+      ],
     });
   });
 
@@ -60,16 +69,12 @@ describe('productAdminHygieneWhere', () => {
     });
   });
 
-  it('composite_incomplete — есть элементы и дыра в пуле или вариантах', () => {
+  it('composite_incomplete — есть элементы, нет вариантов, пулы заполнены', () => {
     expect(productAdminHygieneWhere('composite_incomplete')).toEqual({
       AND: [
         { elements: { some: {} } },
-        {
-          OR: [
-            { elements: { some: { availabilities: { none: {} } } } },
-            { variants: { none: {} } },
-          ],
-        },
+        { variants: { none: {} } },
+        { NOT: { elements: { some: { availabilities: { none: {} } } } } },
       ],
     });
   });

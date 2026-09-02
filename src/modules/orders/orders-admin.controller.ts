@@ -37,6 +37,8 @@ export class OrdersAdminController {
     @Query('q') q?: string,
     @Query('userId') userId?: string,
     @Query('bucket') bucket?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
   ) {
     const page = pageRaw ? parseInt(pageRaw, 10) : 1;
     const limit = limitRaw ? parseInt(limitRaw, 10) : 20;
@@ -47,6 +49,10 @@ export class OrdersAdminController {
       userId?.trim() || undefined,
       bucket?.trim() || undefined,
       user.sub,
+      {
+        from: from?.trim() || undefined,
+        to: to?.trim() || undefined,
+      },
     );
   }
 
