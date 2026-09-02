@@ -1,6 +1,6 @@
 /** Ключи разделов админ-панели (сайдбар + API guard). */
 export declare const ADMIN_SECTION_DASHBOARD: "dashboard";
-export declare const ADMIN_SECTION_IDS: readonly ["dashboard", "catalog", "brands", "orders", "applications", "clients", "objects", "blog", "journal", "settings"];
+export declare const ADMIN_SECTION_IDS: readonly ["dashboard", "catalog", "brands", "orders", "applications", "clients", "objects", "blog", "journal", "settings", "assistant"];
 export type AdminSectionId = (typeof ADMIN_SECTION_IDS)[number];
 /** Разделы, которые можно назначить MODERATOR через чекбоксы (дашборд — всегда). */
 export declare const MODERATOR_ASSIGNABLE_SECTIONS: Exclude<AdminSectionId, typeof ADMIN_SECTION_DASHBOARD>[];

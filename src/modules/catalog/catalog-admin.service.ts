@@ -718,9 +718,14 @@ export class CatalogAdminService {
       tagId?: string;
       collectionId?: string;
       productSetId?: string;
+      hygiene?: string;
     },
   ) {
     return this.productAdmin.listProductsForAdmin(q, pageRaw, limitRaw, visibility, filters);
+  }
+
+  async getDashboardCatalogSummary() {
+    return this.productAdmin.getDashboardCatalogSummary();
   }
 
   async deleteProducts(ids: string[]) {

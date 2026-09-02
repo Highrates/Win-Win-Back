@@ -40,8 +40,15 @@ export class ProductQaAdminController {
   constructor(private readonly qa: ProductQaService) {}
 
   @Get('qa/unread-summary')
-  qaUnreadSummary(@CurrentUser() user: JwtPayload) {
-    return this.qa.getStaffQaUnreadSummary(user.sub, user.role);
+  qaUnreadSummary(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    return this.qa.getStaffQaUnreadSummary(user.sub, user.role, {
+      from: from?.trim() || undefined,
+      to: to?.trim() || undefined,
+    });
   }
 
   @Get('qa/pending-summary')

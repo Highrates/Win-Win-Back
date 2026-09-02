@@ -43,6 +43,7 @@ import {
 import { StaffAccessService } from '../staff/staff-access.service';
 import { StaffAdminService } from '../staff/staff-admin.service';
 import { Throttle } from '@nestjs/throttler';
+import { TurnstileCaptchaService } from '../../common/turnstile/turnstile-captcha.service';
 
 /** Per-IP лимиты на чувствительных auth-ручках (перекрывают глобальные 100 req/min). */
 const AUTH_LOGIN_THROTTLE = { default: { ttl: 60_000, limit: 15 } };
@@ -62,6 +63,7 @@ export class AuthController {
     private passwordReset: PasswordResetService,
     private staffAccess: StaffAccessService,
     private staffAdmin: StaffAdminService,
+    private turnstile: TurnstileCaptchaService,
   ) {}
 
   private authPath(req: Request, fallback: string): string {
@@ -102,6 +104,7 @@ export class AuthController {
   async registerPhoneStart(@Body() dto: RegisterPhoneStartDto, @Req() req: Request) {
     const path = this.authPath(req, '/auth/register/phone/start');
     try {
+      await this.turnstile.assertValidUserToken(dto.turnstileToken);
       return await this.registration.startPhone(dto);
     } catch (e) {
       await this.logRegisterFailed(path, 'phone/start', e, { channel: 'phone' });
@@ -128,6 +131,7 @@ export class AuthController {
   async registerEmailStart(@Body() dto: RegisterEmailStartDto, @Req() req: Request) {
     const path = this.authPath(req, '/auth/register/email/start');
     try {
+      await this.turnstile.assertValidUserToken(dto.turnstileToken);
       return await this.registration.startEmail(dto);
     } catch (e) {
       await this.logRegisterFailed(path, 'email/start', e, { channel: 'email' });
@@ -192,6 +196,7 @@ export class AuthController {
   @Post('login')
   async login(@Body() dto: LoginDto, @Req() req: Request) {
     const path = this.authPath(req, '/auth/login');
+    await this.turnstile.assertValidUserToken(dto.turnstileToken);
     const user = await this.authService.validateUser(dto.emailOrPhone, dto.password);
     if (!user) {
       await this.audit.logAuthSecurityEvent({
@@ -326,6 +331,7 @@ export class AuthController {
   @Throttle({ default: { ttl: 60_000, limit: 5 } })
   @Post('password-reset/request')
   async passwordResetRequest(@Body() dto: PasswordResetRequestDto) {
+    await this.turnstile.assertValidUserToken(dto.turnstileToken);
     return this.passwordReset.requestReset(dto.email);
   }
 

@@ -23,6 +23,29 @@ describe('CatalogAdminService', () => {
     expect(r).toEqual([{ id: '1' }]);
   });
 
+  it('делегирует getDashboardCatalogSummary в CatalogProductAdminService', async () => {
+    const getDashboardCatalogSummary = vi.fn().mockResolvedValue({
+      noModifications: 1,
+      noVariants: 2,
+      activeEmpty: 3,
+      elementEmptyPool: 4,
+      compositeIncomplete: 5,
+    });
+    const svc = new CatalogAdminService(
+      {} as never,
+      {} as never,
+      {} as never,
+      { getDashboardCatalogSummary } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    const r = await svc.getDashboardCatalogSummary();
+    expect(getDashboardCatalogSummary).toHaveBeenCalledTimes(1);
+    expect(r.noModifications).toBe(1);
+  });
+
   it('делегирует recalculateAllFormulaProductPrices в CatalogVariantPricingService', async () => {
     const recalculateAllFormulaProductPrices = vi.fn().mockResolvedValue(undefined);
     const svc = new CatalogAdminService(

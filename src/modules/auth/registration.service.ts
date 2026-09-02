@@ -1,7 +1,5 @@
 import {
   BadRequestException,
-  HttpException,
-  HttpStatus,
   Injectable,
   InternalServerErrorException,
   Logger,
@@ -10,12 +8,19 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { RegistrationOtpChannel } from '@prisma/client';
 import { DesignerInviteService } from './designer-invite.service';
+import { AuthRateLimitService } from './auth-rate-limit.service';
 import { randomInt, randomUUID } from 'crypto';
-import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { MailService } from './mail.service';
 import { UnimtxOtpService } from './unimtx-otp.service';
+import { OtpChallengeService } from './otp-challenge.service';
+import { formatMailSendError, formatSmsSendError } from './otp-send-errors';
+import {
+  normalizeEmail as normalizeEmailShared,
+  normalizePhoneE164 as normalizePhoneE164Shared,
+  phoneDigitsToE164,
+} from './otp-normalize';
 import { resolveSecret } from '../../config/resolve-secret';
 import {
   RegisterCompleteDto,
@@ -25,31 +30,10 @@ import {
   RegisterPhoneVerifyDto,
 } from './dto/register-flow.dto';
 
-const OTP_TTL_MS = 10 * 60 * 1000;
-const MAX_OTP_ATTEMPTS = 5;
 const COMPLETION_TOKEN_TTL_MS = 60 * 60 * 1000;
 /** Сколько раз за окно можно запросить OTP на один email/телефон (регистрация). */
 const OTP_START_MAX_PER_DESTINATION = 5;
 const OTP_START_WINDOW_MS = 15 * 60 * 1000;
-
-/** Детали ошибки nodemailer/SMTP для логов (в UI не отдаём). */
-function formatMailSendError(e: unknown): string {
-  if (!(e instanceof Error)) return String(e);
-  const ex = e as Error & { code?: string; responseCode?: number; response?: string; command?: string };
-  const parts = [ex.message];
-  if (ex.code) parts.push(`code=${ex.code}`);
-  if (ex.command) parts.push(`cmd=${ex.command}`);
-  if (ex.responseCode != null) parts.push(`smtp=${ex.responseCode}`);
-  if (typeof ex.response === 'string' && ex.response.trim()) {
-    parts.push(ex.response.trim().slice(0, 400));
-  }
-  return parts.join(' | ');
-}
-
-function formatSmsSendError(e: unknown): string {
-  if (!(e instanceof Error)) return String(e);
-  return e.message;
-}
 
 export interface RegistrationCompletionJwtPayload {
   purpose: 'register_complete';
@@ -60,11 +44,14 @@ export interface RegistrationCompletionJwtPayload {
   consentSms: boolean;
 }
 
+/**
+ * Гостевая регистрация (OTP → completion JWT → createRetailUser).
+ * Shared: OtpChallengeService / otp-normalize / otp-send-errors.
+ * Таблица RegistrationChallenge — отдельно от AccountContactChallenge (ЛК).
+ */
 @Injectable()
 export class RegistrationService {
   private readonly logger = new Logger(RegistrationService.name);
-
-  private readonly startLimitByDestination = new Map<string, { count: number; windowEnd: number }>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -74,6 +61,8 @@ export class RegistrationService {
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
     private readonly designerInvites: DesignerInviteService,
+    private readonly rateLimit: AuthRateLimitService,
+    private readonly otp: OtpChallengeService,
   ) {}
 
   private regTokenSecret(): string {
@@ -83,24 +72,13 @@ export class RegistrationService {
     );
   }
 
-  /** Снижает риск SMS/email bombing по одному destination. */
-  private consumeRegistrationOtpStartSlot(destinationKey: string): void {
-    const now = Date.now();
-    const row = this.startLimitByDestination.get(destinationKey);
-    if (!row || row.windowEnd < now) {
-      this.startLimitByDestination.set(destinationKey, {
-        count: 1,
-        windowEnd: now + OTP_START_WINDOW_MS,
-      });
-      return;
-    }
-    if (row.count >= OTP_START_MAX_PER_DESTINATION) {
-      throw new HttpException(
-        'Слишком много запросов кода за короткое время. Подождите около 15 минут и попробуйте снова.',
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
-    }
-    row.count += 1;
+  /** Снижает риск SMS/email bombing по одному destination (DB, multi-instance). */
+  private async consumeRegistrationOtpStartSlot(destinationKey: string): Promise<void> {
+    await this.rateLimit.consumeSlot(
+      `reg_otp:${destinationKey}`,
+      OTP_START_MAX_PER_DESTINATION,
+      OTP_START_WINDOW_MS,
+    );
   }
 
   /** Нейтральный ответ без OTP — не палим наличие аккаунта и выравниваем тайминг. */
@@ -111,28 +89,16 @@ export class RegistrationService {
 
   /** Только цифры страны и абонента, без «+». */
   normalizePhoneE164(raw: string): string {
-    const t = raw.trim();
-    const digits = (t.startsWith('+') ? t.slice(1) : t).replace(/\D/g, '');
-    if (digits.length < 10) throw new BadRequestException('Некорректный номер телефона');
-    return digits;
-  }
-
-  /** E.164 для Unimatrix: + и только цифры после него. */
-  private phoneDigitsToE164(digits: string): string {
-    return `+${digits.replace(/\D/g, '')}`;
+    return normalizePhoneE164Shared(raw);
   }
 
   normalizeEmail(raw: string): string {
-    return raw.trim().toLowerCase();
-  }
-
-  private generateOtp(): string {
-    return String(randomInt(0, 1_000_000)).padStart(6, '0');
+    return normalizeEmailShared(raw);
   }
 
   async startPhone(dto: RegisterPhoneStartDto): Promise<{ message: string }> {
     const phone = this.normalizePhoneE164(dto.phone);
-    this.consumeRegistrationOtpStartSlot(`phone:${phone}`);
+    await this.consumeRegistrationOtpStartSlot(`phone:${phone}`);
 
     const taken = await this.users.existsByPhoneOrEmail(phone, null);
     if (taken) {
@@ -141,9 +107,7 @@ export class RegistrationService {
 
     await this.prisma.registrationChallenge.deleteMany({ where: { phone } });
 
-    const code = this.generateOtp();
-    const codeHash = await bcrypt.hash(code, 8);
-    const expiresAt = new Date(Date.now() + OTP_TTL_MS);
+    const { code, codeHash, expiresAt } = await this.otp.createOtp();
 
     const challenge = await this.prisma.registrationChallenge.create({
       data: {
@@ -158,7 +122,7 @@ export class RegistrationService {
     });
 
     try {
-      await this.smsOtp.sendSmsOtp(this.phoneDigitsToE164(phone), code, OTP_TTL_MS / 60000);
+      await this.smsOtp.sendSmsOtp(phoneDigitsToE164(phone), code, this.otp.ttlMs / 60000);
     } catch (e) {
       await this.prisma.registrationChallenge.delete({ where: { id: challenge.id } }).catch(() => {});
       this.logger.error(`sendSmsOtp: ${formatSmsSendError(e)}`);
@@ -170,7 +134,7 @@ export class RegistrationService {
 
   async startEmail(dto: RegisterEmailStartDto): Promise<{ message: string }> {
     const email = this.normalizeEmail(dto.email);
-    this.consumeRegistrationOtpStartSlot(`email:${email}`);
+    await this.consumeRegistrationOtpStartSlot(`email:${email}`);
 
     const taken = await this.users.existsByPhoneOrEmail(null, email);
     if (taken) {
@@ -179,9 +143,7 @@ export class RegistrationService {
 
     await this.prisma.registrationChallenge.deleteMany({ where: { email } });
 
-    const code = this.generateOtp();
-    const codeHash = await bcrypt.hash(code, 8);
-    const expiresAt = new Date(Date.now() + OTP_TTL_MS);
+    const { code, codeHash, expiresAt } = await this.otp.createOtp();
 
     const challenge = await this.prisma.registrationChallenge.create({
       data: {
@@ -294,20 +256,19 @@ export class RegistrationService {
       throw new BadRequestException('Код устарел или не найден. Запросите новый.');
     }
 
-    const ok = await bcrypt.compare(code, challenge.codeHash);
+    const ok = await this.otp.otpMatches(code, challenge.codeHash);
     if (ok) {
       return this.issueCompletionTokenFromChallenge(challenge);
     }
 
-    const inc = await this.prisma.registrationChallenge.updateMany({
-      where: { id: challenge.id, attempts: { lt: MAX_OTP_ATTEMPTS } },
-      data: { attempts: { increment: 1 } },
+    return this.otp.rejectWrongCode({
+      tryIncrement: () =>
+        this.prisma.registrationChallenge.updateMany({
+          where: { id: challenge.id, attempts: { lt: this.otp.maxAttempts } },
+          data: { attempts: { increment: 1 } },
+        }),
+      purge: () => this.prisma.registrationChallenge.delete({ where: { id: challenge.id } }),
     });
-    if (inc.count === 0) {
-      await this.prisma.registrationChallenge.delete({ where: { id: challenge.id } }).catch(() => {});
-      throw new BadRequestException('Превышено число попыток. Запросите код заново.');
-    }
-    throw new BadRequestException('Неверный код');
   }
 
   private async consumeCompletionToken(jti: string): Promise<void> {

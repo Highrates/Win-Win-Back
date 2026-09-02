@@ -6,7 +6,9 @@ function makeSvc() {
   const prisma = {} as never;
   const media = {} as never;
   const mail = {} as never;
-  return new UsersService(prisma, media, mail);
+  const profileResolver = {} as never;
+  const inviteClaim = { consumeInTx: vi.fn() } as never;
+  return new UsersService(prisma, media, mail, profileResolver, inviteClaim);
 }
 
 describe('UsersService (referrals)', () => {
@@ -80,7 +82,7 @@ describe('UsersService (admin delete)', () => {
         }),
       ),
     };
-    const svc = new UsersService(prisma as never, {} as never, {} as never);
+    const svc = new UsersService(prisma as never, {} as never, {} as never, {} as never, {} as never);
 
     await svc.deleteRetailUserForAdmin('admin1', 'u1');
 
@@ -98,7 +100,7 @@ describe('UsersService (admin delete)', () => {
         findFirst: vi.fn().mockResolvedValue({ id: 'u1', isActive: false }),
       },
     };
-    const svc = new UsersService(prisma as never, {} as never, {} as never);
+    const svc = new UsersService(prisma as never, {} as never, {} as never, {} as never, {} as never);
 
     await expect(svc.deleteRetailUserForAdmin('admin1', 'u1')).rejects.toBeInstanceOf(BadRequestException);
   });

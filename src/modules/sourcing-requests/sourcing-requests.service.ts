@@ -17,6 +17,10 @@ import { OrderChatService } from '../order-chat/order-chat.service';
 import { assertSourcingStatusTransition } from './sourcing-status.constants';
 import { adminBucketStatuses, userScopeStatuses, resolveSourcingProductStoredName } from '@win-win/sourcing-request';
 import {
+  createdAtInRange,
+  parseDashboardDateRange,
+} from '../../common/utils/dashboard-date-range';
+import {
   parseBudgetDigits as parseBudgetDigitsRaw,
   sourcingCommercialProposalOfferTotalRub,
 } from '@win-win/sourcing-request';
@@ -428,6 +432,29 @@ export class SourcingRequestsService {
       where: { status: SourcingRequestStatus.PENDING_REVIEW },
     });
     return { total };
+  }
+
+  /** Дашборд: новые + в работе; опционально фильтр по createdAt. */
+  async getDashboardStatusSummaryForAdmin(opts?: {
+    from?: string;
+    to?: string;
+  }): Promise<{ pendingReview: number; inProgress: number }> {
+    const createdAt = createdAtInRange(parseDashboardDateRange(opts?.from, opts?.to));
+    const [pendingReview, inProgress] = await Promise.all([
+      this.prisma.sourcingRequest.count({
+        where: {
+          status: SourcingRequestStatus.PENDING_REVIEW,
+          ...(createdAt ? { createdAt } : {}),
+        },
+      }),
+      this.prisma.sourcingRequest.count({
+        where: {
+          status: SourcingRequestStatus.IN_PROGRESS,
+          ...(createdAt ? { createdAt } : {}),
+        },
+      }),
+    ]);
+    return { pendingReview, inProgress };
   }
 
   async findManyForAdmin(

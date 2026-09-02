@@ -33,8 +33,9 @@ describe('DesignerInviteService', () => {
     const jwt = { signAsync: vi.fn().mockResolvedValue('tok-active') } as any;
     const mail = {} as any;
     const users = {} as any;
+    const inviteClaim = {} as any;
 
-    const svc = new DesignerInviteService(prisma, config, jwt, mail, users);
+    const svc = new DesignerInviteService(prisma, config, jwt, mail, users, inviteClaim);
     const r = await svc.listActiveInvitesForUser('U1');
 
     expect(prisma.designerInvite.findMany).toHaveBeenCalledWith(
@@ -83,7 +84,7 @@ describe('DesignerInviteService', () => {
     const mail = { sendDesignerInvite: vi.fn().mockResolvedValue(undefined) } as any;
     const users = { ensureWinWinReferralCodeForUser: vi.fn().mockResolvedValue('REF123') } as any;
 
-    const svc = new DesignerInviteService(prisma, config, jwt, mail, users);
+    const svc = new DesignerInviteService(prisma, config, jwt, mail, users, {} as any);
     await svc.sendInvite('U1', 'guest@example.com');
 
     expect(prisma.designerInvite.updateMany).toHaveBeenCalledWith(
@@ -135,7 +136,7 @@ describe('DesignerInviteService', () => {
     } as any;
     const users = { ensureWinWinReferralCodeForUser: vi.fn().mockResolvedValue('REF123') } as any;
 
-    const svc = new DesignerInviteService(prisma, config, jwt, mail, users);
+    const svc = new DesignerInviteService(prisma, config, jwt, mail, users, {} as any);
     await expect(svc.sendInvite('U1', 'guest@example.com')).rejects.toBeInstanceOf(BadRequestException);
     expect(prisma.designerInvite.delete).toHaveBeenCalledWith({ where: { id: 'INV1' } });
   });
@@ -158,7 +159,7 @@ describe('DesignerInviteService', () => {
     const mail = {} as any;
     const users = { ensureWinWinReferralCodeForUser: vi.fn().mockResolvedValue('REF123') } as any;
 
-    const svc = new DesignerInviteService(prisma, config, jwt, mail, users);
+    const svc = new DesignerInviteService(prisma, config, jwt, mail, users, {} as any);
     await expect(svc.sendInvite('U1', 'guest@example.com')).rejects.toMatchObject({
       message: expect.stringContaining('100'),
     });
@@ -167,36 +168,49 @@ describe('DesignerInviteService', () => {
   it('claimByTokenForUser: применяет ref и помечает инвайт consumed', async () => {
     const prisma = {
       user: { findFirst: vi.fn().mockResolvedValue({ id: 'U1', email: 'a@b.com' }) },
-      designerInvite: {
-        findFirst: vi.fn().mockResolvedValue({ id: 'I1', refCode: 'REF123' }),
-        update: vi.fn().mockResolvedValue(undefined),
-      },
     } as any;
     const config = { get: vi.fn().mockReturnValue('dev-secret') } as any;
-    const jwt = { verifyAsync: vi.fn().mockResolvedValue({ sub: 'I1', typ: 'dinv' }) } as any;
+    const jwt = {} as any;
     const mail = {} as any;
     const users = { tryAttachWinWinReferralByCodeForExistingUser: vi.fn().mockResolvedValue(undefined) } as any;
+    const inviteClaim = {
+      resolveActiveForEmail: vi.fn().mockResolvedValue({
+        inviteId: 'I1',
+        refCode: 'REF123',
+        emailNorm: 'a@b.com',
+      }),
+      markConsumed: vi.fn().mockResolvedValue(undefined),
+    };
 
-    const svc = new DesignerInviteService(prisma, config, jwt, mail, users);
+    const svc = new DesignerInviteService(prisma, config, jwt, mail, users, inviteClaim as any);
     const r = await svc.claimByTokenForUser('U1', 'tok');
 
+    expect(inviteClaim.resolveActiveForEmail).toHaveBeenCalledWith(
+      'tok',
+      'a@b.com',
+      'Приглашение не подходит к этому аккаунту',
+    );
     expect(users.tryAttachWinWinReferralByCodeForExistingUser).toHaveBeenCalledWith('U1', 'REF123');
-    expect(prisma.designerInvite.update).toHaveBeenCalled();
+    expect(inviteClaim.markConsumed).toHaveBeenCalledWith('I1');
     expect(r).toEqual({ ok: true, prefillRef: 'REF123' });
   });
 
   it('claimByTokenForUser: если инвайт не подходит — BadRequest', async () => {
     const prisma = {
       user: { findFirst: vi.fn().mockResolvedValue({ id: 'U1', email: 'a@b.com' }) },
-      designerInvite: { findFirst: vi.fn().mockResolvedValue(null) },
     } as any;
     const config = { get: vi.fn().mockReturnValue('dev-secret') } as any;
-    const jwt = { verifyAsync: vi.fn().mockResolvedValue({ sub: 'I1', typ: 'dinv' }) } as any;
+    const jwt = {} as any;
     const mail = {} as any;
     const users = { tryAttachWinWinReferralByCodeForExistingUser: vi.fn() } as any;
+    const inviteClaim = {
+      resolveActiveForEmail: vi.fn().mockRejectedValue(new BadRequestException('bad')),
+      markConsumed: vi.fn(),
+    };
 
-    const svc = new DesignerInviteService(prisma, config, jwt, mail, users);
+    const svc = new DesignerInviteService(prisma, config, jwt, mail, users, inviteClaim as any);
     await expect(svc.claimByTokenForUser('U1', 'tok')).rejects.toBeInstanceOf(BadRequestException);
+    expect(users.tryAttachWinWinReferralByCodeForExistingUser).not.toHaveBeenCalled();
   });
 });
 

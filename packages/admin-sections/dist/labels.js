@@ -14,6 +14,7 @@ const LABELS_RU = {
     blog: 'Блог',
     journal: 'Журнал',
     settings: 'Настройки',
+    assistant: 'Ассистент',
 };
 const LABELS_ZH = {
     dashboard: '仪表板',
@@ -26,6 +27,7 @@ const LABELS_ZH = {
     blog: '博客',
     journal: '日志',
     settings: '设置',
+    assistant: '助手',
 };
 const NAV_EXTRA_RU = {
     products: 'Товары',

@@ -1,4 +1,5 @@
 import { IsString, MinLength, MaxLength, IsBoolean } from 'class-validator';
+import { IsPasswordPolicy } from '../../auth/password-policy';
 
 export class UpdatePasswordDto {
   @IsString()
@@ -6,7 +7,7 @@ export class UpdatePasswordDto {
   currentPassword!: string;
 
   @IsString()
-  @MinLength(8)
+  @IsPasswordPolicy()
   @MaxLength(200)
   newPassword!: string;
 }

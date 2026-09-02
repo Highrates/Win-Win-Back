@@ -31,9 +31,11 @@ import { OrderSettingsModule } from './modules/order-settings/order-settings.mod
 import { UserGroupProfilesModule } from './modules/user-group-profiles/user-group-profiles.module';
 import { UserGroupsModule } from './modules/user-groups/user-groups.module';
 import { SourcingRequestsModule } from './modules/sourcing-requests/sourcing-requests.module';
+import { AssistantModule } from './assistant/assistant.module';
 import { LikesModule } from './modules/likes/likes.module';
 import { ProductQaModule } from './modules/product-qa/product-qa.module';
 import { StaffModule } from './modules/staff/staff.module';
+import { TurnstileCaptchaModule } from './common/turnstile/turnstile-captcha.module';
 
 @Module({
   imports: [
@@ -48,6 +50,7 @@ import { StaffModule } from './modules/staff/staff.module';
     // default limiter: 100 req/min per tracker (см. ThrottlerGuard).
     ThrottlerModule.forRoot([{ name: 'default', ttl: 60000, limit: 100 }]),
     PrismaModule,
+    TurnstileCaptchaModule,
     MeilisearchModule,
     AuthModule,
     UsersModule,
@@ -74,6 +77,7 @@ import { StaffModule } from './modules/staff/staff.module';
     UserGroupProfilesModule,
     UserGroupsModule,
     SourcingRequestsModule,
+    AssistantModule,
   ],
   providers: [
     {

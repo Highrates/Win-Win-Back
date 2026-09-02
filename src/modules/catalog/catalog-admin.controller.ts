@@ -302,6 +302,11 @@ export class CatalogAdminController {
     return this.catalogTags.update(id, dto);
   }
 
+  @Get('dashboard-catalog-summary')
+  dashboardCatalogSummary() {
+    return this.catalogAdmin.getDashboardCatalogSummary();
+  }
+
   @Get('products')
   listProducts(
     @Query('q') q?: string,
@@ -313,13 +318,14 @@ export class CatalogAdminController {
     @Query('tagId') tagId?: string,
     @Query('collectionId') collectionId?: string,
     @Query('productSetId') productSetId?: string,
+    @Query('hygiene') hygiene?: string,
   ) {
     return this.catalogAdmin.listProductsForAdmin(
       q,
       page ? parseInt(page, 10) : undefined,
       limit ? parseInt(limit, 10) : undefined,
       visibility,
-      { brandId, categoryId, tagId, collectionId, productSetId },
+      { brandId, categoryId, tagId, collectionId, productSetId, hygiene },
     );
   }
 

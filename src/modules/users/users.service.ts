@@ -20,7 +20,13 @@ import {
   type UserProfileVitrineDto,
 } from './dto/user-profile-vitrine.dto';
 import { normalizeEmailOrPhoneForLookup } from '../../common/utils/phone-normalize';
+import {
+  createdAtInRange,
+  parseDashboardDateRange,
+} from '../../common/utils/dashboard-date-range';
 import { UserGroupProfileResolverService } from '../user-group-profiles/user-group-profile-resolver.service';
+import { assertPasswordPolicy } from '../auth/password-policy';
+import { InviteClaimService } from '../auth/invite-claim.service';
 
 /** Символы для публичного кода (без 0/O, I, L). */
 const WinWinCrockford = '0123456789ABCDEFGHJKMNPQRSTVWXYZ' as const;
@@ -53,6 +59,7 @@ export class UsersService {
     private media: MediaLibraryService,
     private mail: MailService,
     private profileResolver: UserGroupProfileResolverService,
+    private inviteClaim: InviteClaimService,
   ) {}
 
   async existsByPhoneOrEmail(phoneDigits: string | null, emailLower: string | null): Promise<boolean> {
@@ -91,9 +98,7 @@ export class UsersService {
   }
 
   async changePassword(userId: string, currentPassword: string, newPassword: string) {
-    if (newPassword.length < 8) {
-      throw new BadRequestException('Пароль — не менее 8 символов');
-    }
+    assertPasswordPolicy(newPassword);
     const ok = await this.checkPassword(userId, currentPassword);
     if (!ok) {
       throw new UnauthorizedException('Неверный текущий пароль');
@@ -108,9 +113,7 @@ export class UsersService {
 
   /** Сброс пароля по ссылке из письма (без текущего пароля). */
   async setPasswordWithoutCurrent(userId: string, newPassword: string) {
-    if (newPassword.length < 8) {
-      throw new BadRequestException('Пароль — не менее 8 символов');
-    }
+    assertPasswordPolicy(newPassword);
     const user = await this.prisma.user.findFirst({
       where: { id: userId, isActive: true },
       select: { id: true, passwordHash: true },
@@ -256,6 +259,7 @@ export class UsersService {
       throw new ConflictException('Пользователь с таким телефоном или email уже зарегистрирован');
     }
 
+    assertPasswordPolicy(dto.password);
     const passwordHash = await bcrypt.hash(dto.password, 10);
     const now = new Date();
     const refRaw = (dto.referralCode ?? '').trim();
@@ -296,20 +300,7 @@ export class UsersService {
       }
 
       if (designerInviteId && email) {
-        const ex = await tx.designerInvite.findFirst({
-          where: {
-            id: designerInviteId,
-            consumedAt: null,
-            emailNorm: email,
-            expiresAt: { gt: new Date() },
-          },
-        });
-        if (ex) {
-          await tx.designerInvite.update({
-            where: { id: ex.id },
-            data: { consumedAt: new Date() },
-          });
-        }
+        await this.inviteClaim.consumeInTx(tx, designerInviteId, email);
       }
 
       const { passwordHash: _pw, ...safe } = user;
@@ -404,6 +395,7 @@ export class UsersService {
   }
 
   async create(dto: { email?: string; phone?: string; password: string }) {
+    assertPasswordPolicy(dto.password);
     const passwordHash = await bcrypt.hash(dto.password, 10);
     return this.prisma.user.create({
       data: {
@@ -705,6 +697,43 @@ export class UsersService {
     } as const;
     const total = await this.prisma.user.count({ where });
     return { total };
+  }
+
+  /** Дашборд: новые регистрации USER за период (или 0 без from/to). */
+  async getDashboardSignupSummaryForAdmin(opts?: {
+    from?: string;
+    to?: string;
+  }): Promise<{ new: number }> {
+    const createdAt = createdAtInRange(parseDashboardDateRange(opts?.from, opts?.to));
+    if (!createdAt) return { new: 0 };
+    const total = await this.prisma.user.count({
+      where: { role: UserRole.USER, isActive: true, createdAt },
+    });
+    return { new: total };
+  }
+
+  /** Дашборд: новые заявки партнёров за период (ещё в очереди). */
+  async getDashboardPartnersSummaryForAdmin(opts?: {
+    from?: string;
+    to?: string;
+  }): Promise<{ new: number }> {
+    const submittedAt = createdAtInRange(parseDashboardDateRange(opts?.from, opts?.to));
+    const total = await this.prisma.user.count({
+      where: {
+        role: UserRole.USER,
+        isActive: true,
+        profile: {
+          is: {
+            partnerApplicationSubmittedAt: submittedAt
+              ? { gte: submittedAt.gte, lt: submittedAt.lt }
+              : { not: null },
+            winWinPartnerApproved: false,
+            partnerApplicationRejectedAt: null,
+          },
+        },
+      },
+    });
+    return { new: total };
   }
 
   /**

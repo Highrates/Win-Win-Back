@@ -406,6 +406,16 @@ model PasswordResetToken {
   @@index([expiresAt])
 }
 
+/// Счётчики OTP start / abuse (shared across API instances).
+model AuthRateLimitBucket {
+  bucketKey String   @id
+  count     Int      @default(0)
+  windowEnd DateTime
+  updatedAt DateTime @updatedAt
+
+  @@index([windowEnd])
+}
+
 /// OTP для привязки/смены email или телефона у существующего пользователя (ЛК).
 model AccountContactChallenge {
   id       String                 @id @default(cuid())
@@ -1672,4 +1682,50 @@ model UserGroupMember {
   assignedByUserId String?
 
   @@index([groupId])
+}
+
+/// Диалог LLM-ассистента админки (на сотрудника)
+model AssistantThread {
+  id        String              @id @default(cuid())
+  staffId   String
+  title     String              @default("")
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+  messages  AssistantMessage[]
+
+  @@index([staffId, updatedAt])
+}
+
+model AssistantMessage {
+  id        String          @id @default(cuid())
+  threadId  String
+  thread    AssistantThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  /// user | assistant | tool
+  role      String
+  content   String          @default("") @db.Text
+  meta      Json?
+  createdAt DateTime        @default(now())
+
+  @@index([threadId, createdAt])
+}
+
+/// Audit trail LLM-ассистента (без полного текста промпта).
+model AssistantAuditEvent {
+  id               String   @id @default(cuid())
+  staffId          String
+  threadId         String?
+  /// chat | tool | usage | error | deny_tool
+  kind             String
+  toolName         String?
+  promptChars      Int?
+  promptTokens     Int?
+  completionTokens Int?
+  totalTokens      Int?
+  model            String?
+  meta             Json?
+  createdAt        DateTime @default(now())
+
+  @@index([staffId, createdAt])
+  @@index([createdAt])
+  @@index([kind, createdAt])
 }

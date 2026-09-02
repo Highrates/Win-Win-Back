@@ -21,6 +21,10 @@ import {
   ADMIN_COMPLETED_STATUSES,
   CUSTOMER_IN_WORK_STATUSES,
 } from './order-status.constants';
+import {
+  createdAtInRange,
+  parseDashboardDateRange,
+} from '../../common/utils/dashboard-date-range';
 
 const USER_ORDER_LIST_WHERE: Prisma.OrderWhereInput = {
   status: { not: OrderStatus.DRAFT },
@@ -287,6 +291,29 @@ export class OrdersService {
       where: { status: OrderStatus.PENDING_APPROVAL },
     });
     return { total };
+  }
+
+  /** Дашборд: новые (на согласовании) + в работе; опционально фильтр по createdAt. */
+  async getDashboardStatusSummaryForAdmin(opts?: {
+    from?: string;
+    to?: string;
+  }): Promise<{ new: number; active: number }> {
+    const createdAt = createdAtInRange(parseDashboardDateRange(opts?.from, opts?.to));
+    const [newCount, active] = await Promise.all([
+      this.prisma.order.count({
+        where: {
+          status: OrderStatus.PENDING_APPROVAL,
+          ...(createdAt ? { createdAt } : {}),
+        },
+      }),
+      this.prisma.order.count({
+        where: {
+          status: { in: [...ADMIN_ACTIVE_STATUSES] },
+          ...(createdAt ? { createdAt } : {}),
+        },
+      }),
+    ]);
+    return { new: newCount, active };
   }
 
   async findOneForAdmin(orderId: string) {

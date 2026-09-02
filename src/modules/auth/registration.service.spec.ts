@@ -1,7 +1,8 @@
-import { BadRequestException, HttpException, InternalServerErrorException } from '@nestjs/common';
+import { BadRequestException, HttpException } from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as bcrypt from 'bcrypt';
 import { RegistrationService } from './registration.service';
+import { OtpChallengeService } from './otp-challenge.service';
 
 function makeService(overrides?: {
   existsByPhoneOrEmail?: (phone: string | null, email: string | null) => Promise<boolean>;
@@ -41,6 +42,10 @@ function makeService(overrides?: {
   const designerInvites = {
     assertValidForNewAccountEmail: vi.fn(),
   };
+  const rateLimit = {
+    consumeSlot: vi.fn().mockResolvedValue(undefined),
+  };
+  const otp = new OtpChallengeService();
 
   const service = new RegistrationService(
     prisma as never,
@@ -50,9 +55,11 @@ function makeService(overrides?: {
     jwt as never,
     config as never,
     designerInvites as never,
+    rateLimit as never,
+    otp,
   );
 
-  return { service, prisma, users, mail, smsOtp, jwt };
+  return { service, prisma, users, mail, smsOtp, jwt, rateLimit, otp };
 }
 
 describe('RegistrationService', () => {
@@ -95,15 +102,19 @@ describe('RegistrationService', () => {
     });
 
     it('rate-limits OTP starts per destination', async () => {
-      const { service, prisma } = makeService();
-      prisma.registrationChallenge.create.mockResolvedValue({ id: 'ch1' });
+      const { service, rateLimit } = makeService();
       const dto = { phone: '+79001234567', consentPersonalData: true, consentSms: true };
 
-      for (let i = 0; i < 5; i += 1) {
-        await service.startPhone(dto);
-      }
+      rateLimit.consumeSlot.mockRejectedValueOnce(
+        new HttpException('Слишком много запросов кода за короткое время.', 429),
+      );
 
       await expect(service.startPhone(dto)).rejects.toBeInstanceOf(HttpException);
+      expect(rateLimit.consumeSlot).toHaveBeenCalledWith(
+        'reg_otp:phone:79001234567',
+        5,
+        15 * 60 * 1000,
+      );
     });
   });
 

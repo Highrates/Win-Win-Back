@@ -12,6 +12,7 @@ const LABELS_RU: Record<AdminSectionId, string> = {
   blog: 'Блог',
   journal: 'Журнал',
   settings: 'Настройки',
+  assistant: 'Ассистент',
 };
 
 const LABELS_ZH: Record<AdminSectionId, string> = {
@@ -25,6 +26,7 @@ const LABELS_ZH: Record<AdminSectionId, string> = {
   blog: '博客',
   journal: '日志',
   settings: '设置',
+  assistant: '助手',
 };
 
 const NAV_EXTRA_RU: Record<Exclude<AdminNavLabelKey, AdminSectionId>, string> = {

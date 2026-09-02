@@ -13,6 +13,8 @@ export const ADMIN_SECTION_IDS = [
   'blog',
   'journal',
   'settings',
+  /** LLM-ассистент (FAB + API); не входит в дашборд автоматически. */
+  'assistant',
 ] as const;
 
 export type AdminSectionId = (typeof ADMIN_SECTION_IDS)[number];

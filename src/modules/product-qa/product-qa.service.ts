@@ -191,8 +191,12 @@ export class ProductQaService {
     );
   }
 
-  getStaffQaUnreadSummary(staffUserId: string, staffRole: string) {
-    return this.staffUnread.getUnreadSummary(staffUserId, staffRole);
+  getStaffQaUnreadSummary(
+    staffUserId: string,
+    staffRole: string,
+    opts?: { from?: string; to?: string },
+  ) {
+    return this.staffUnread.getUnreadSummary(staffUserId, staffRole, opts);
   }
 
   getStaffQaPendingSummary(

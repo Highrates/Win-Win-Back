@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.resolveAdminSectionFromPathname = resolveAdminSectionFromPathname;
 exports.staffCanAccessAdminPath = staffCanAccessAdminPath;
+exports.staffCanAssistant = staffCanAssistant;
 const constants_1 = require("./constants");
 const nav_manifest_1 = require("./nav-manifest");
 /** Next.js pathname админки, напр. `/admin/orders/sourcing/abc`. */
@@ -37,4 +38,10 @@ function staffCanAccessAdminPath(pathname, sections, isSuperAdmin) {
     if (target === constants_1.ADMIN_SECTION_DASHBOARD)
         return true;
     return sections.includes(target);
+}
+/** Суперадмин или явный grant `assistant` (FAB + API). */
+function staffCanAssistant(sections, isSuperAdmin) {
+    if (isSuperAdmin)
+        return true;
+    return sections.includes('assistant');
 }

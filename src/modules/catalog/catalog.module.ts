@@ -35,6 +35,6 @@ import { CatalogTierPricingService } from './catalog-tier-pricing.service';
     ProductStructureAdminService,
   ],
   controllers: [CatalogController, CatalogAdminController],
-  exports: [CatalogService, CatalogTierPricingService, PricingAdminService, StorageModule],
+  exports: [CatalogService, CatalogTierPricingService, PricingAdminService, StorageModule, CatalogAdminService],
 })
 export class CatalogModule {}

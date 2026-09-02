@@ -12,6 +12,7 @@ import { randomInt, randomUUID } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { MailService } from './mail.service';
+import { formatMailSendError } from './otp-send-errors';
 
 const RESET_JWT_MAX = 64 * 1024;
 const RESET_TTL = '1h';
@@ -22,20 +23,6 @@ export interface PasswordResetJwtPayload {
   typ: 'pwreset';
   jti: string;
   email: string;
-}
-
-/** Детали ошибки nodemailer/SMTP для логов (в UI не отдаём). */
-function formatMailSendError(e: unknown): string {
-  if (!(e instanceof Error)) return String(e);
-  const ex = e as Error & { code?: string; responseCode?: number; response?: string; command?: string };
-  const parts = [ex.message];
-  if (ex.code) parts.push(`code=${ex.code}`);
-  if (ex.command) parts.push(`cmd=${ex.command}`);
-  if (ex.responseCode != null) parts.push(`smtp=${ex.responseCode}`);
-  if (typeof ex.response === 'string' && ex.response.trim()) {
-    parts.push(ex.response.trim().slice(0, 400));
-  }
-  return parts.join(' | ');
 }
 
 @Injectable()

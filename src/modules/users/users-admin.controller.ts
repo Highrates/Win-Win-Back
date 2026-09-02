@@ -36,6 +36,22 @@ export class UsersAdminController {
     return this.users.countPendingPartnerApplicationsForAdmin();
   }
 
+  @Get('signup-summary')
+  signupSummary(@Query('from') from?: string, @Query('to') to?: string) {
+    return this.users.getDashboardSignupSummaryForAdmin({
+      from: from?.trim() || undefined,
+      to: to?.trim() || undefined,
+    });
+  }
+
+  @Get('partners-summary')
+  partnersSummary(@Query('from') from?: string, @Query('to') to?: string) {
+    return this.users.getDashboardPartnersSummaryForAdmin({
+      from: from?.trim() || undefined,
+      to: to?.trim() || undefined,
+    });
+  }
+
   @Get('partner-applications')
   listPartnerApplications(
     @Query('skip', new DefaultValuePipe(0), ParseIntPipe) skip: number,

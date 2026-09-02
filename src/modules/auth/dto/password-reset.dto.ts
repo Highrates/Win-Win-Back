@@ -1,8 +1,13 @@
-import { IsEmail, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsEmail, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsPasswordPolicy } from '../password-policy';
 
 export class PasswordResetRequestDto {
   @IsEmail()
   email!: string;
+
+  @IsOptional()
+  @IsString()
+  turnstileToken?: string;
 }
 
 export class PasswordResetTokenBodyDto {
@@ -19,6 +24,6 @@ export class PasswordResetConfirmDto {
   token!: string;
 
   @IsString()
-  @MinLength(8)
+  @IsPasswordPolicy()
   password!: string;
 }

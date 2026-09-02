@@ -565,7 +565,10 @@ describe('Product QA HTTP (Express shim)', () => {
         .expect(200);
 
       expect(res.body).toEqual({ total: 3 });
-      expect(qa.getStaffQaUnreadSummary).toHaveBeenCalledWith('s1', UserRole.ADMIN);
+      expect(qa.getStaffQaUnreadSummary).toHaveBeenCalledWith('s1', UserRole.ADMIN, {
+        from: undefined,
+        to: undefined,
+      });
     });
 
     it('GET unread-summary returns 401 without JWT', async () => {

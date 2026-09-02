@@ -17,6 +17,8 @@ exports.ADMIN_SECTION_IDS = [
     'blog',
     'journal',
     'settings',
+    /** LLM-ассистент (FAB + API); не входит в дашборд автоматически. */
+    'assistant',
 ];
 /** Разделы, которые можно назначить MODERATOR через чекбоксы (дашборд — всегда). */
 exports.MODERATOR_ASSIGNABLE_SECTIONS = exports.ADMIN_SECTION_IDS.filter((id) => id !== exports.ADMIN_SECTION_DASHBOARD);

@@ -14,7 +14,6 @@ import { ProductQaBroadcastService } from './product-qa-broadcast.service';
 import { ProductQaModerationService } from './product-qa-moderation.service';
 import { ProductQaUploadService } from './product-qa-upload.service';
 import { ProductQaSearchSyncService } from './product-qa-search-sync.service';
-import { ProductQaCaptchaService } from './product-qa-captcha.service';
 import { ProductQaNotifyService } from './product-qa-notify.service';
 import { ProductQaStaffUnreadService } from './product-qa-staff-unread.service';
 import { ProductQaPendingSummaryService } from './product-qa-pending-summary.service';
@@ -51,7 +50,6 @@ import { ProductCorrespondenceAdminController } from '../product-correspondence/
     ProductQaModerationService,
     ProductQaUploadService,
     ProductQaSearchSyncService,
-    ProductQaCaptchaService,
     ProductQaNotifyService,
     ProductQaStaffUnreadService,
     ProductQaPendingSummaryService,

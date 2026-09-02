@@ -9,6 +9,8 @@ export function resolveAdminSectionFromApiPath(pathOnly: string): AdminApiAccess
   if (p.includes('/settings/admin/staff/me')) return 'dashboard';
   if (p.includes('/settings/admin/staff')) return 'staff';
 
+  if (p.includes('/assistant/admin')) return 'assistant';
+
   if (p.includes('/users/admin/partner-applications')) return 'applications';
   if (p.includes('/users/admin')) return 'clients';
 

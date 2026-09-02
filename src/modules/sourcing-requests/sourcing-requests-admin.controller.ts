@@ -54,6 +54,14 @@ export class SourcingRequestsAdminController {
     return this.sourcing.countPendingReviewForAdmin();
   }
 
+  @Get('dashboard-status-summary')
+  dashboardStatusSummary(@Query('from') from?: string, @Query('to') to?: string) {
+    return this.sourcing.getDashboardStatusSummaryForAdmin({
+      from: from?.trim() || undefined,
+      to: to?.trim() || undefined,
+    });
+  }
+
   @Get('chat-unread-summary')
   chatUnreadSummary(@CurrentUser() user: JwtPayload) {
     return this.orderChat.unreadSourcingCustomerChatSummaryForAdminBuckets(user.sub);

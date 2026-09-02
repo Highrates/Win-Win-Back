@@ -10,6 +10,7 @@ function buildService() {
       findMany: vi.fn(async () => []),
       count: vi.fn(async () => 0),
       update: vi.fn(),
+      groupBy: vi.fn(async () => []),
     },
     chatConversation: {
       findMany: vi.fn(async () => []),
@@ -124,5 +125,19 @@ describe('OrdersService.findManyForAdmin', () => {
 
     expect(out.items[0]?.hasChatMessages).toBe(true);
     expect(out.items[1]?.hasChatMessages).toBe(false);
+  });
+});
+
+describe('OrdersService.getDashboardStatusSummaryForAdmin', () => {
+  it('считает new и active', async () => {
+    const { service, prisma } = buildService();
+    prisma.order.count
+      .mockResolvedValueOnce(3)
+      .mockResolvedValueOnce(2);
+
+    const out = await service.getDashboardStatusSummaryForAdmin();
+
+    expect(out).toEqual({ new: 3, active: 2 });
+    expect(prisma.order.count).toHaveBeenCalledTimes(2);
   });
 });

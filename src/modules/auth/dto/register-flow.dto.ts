@@ -1,4 +1,5 @@
 import { IsBoolean, IsEmail, IsOptional, IsString, Matches, MinLength, MaxLength, Equals } from 'class-validator';
+import { IsPasswordPolicy } from '../password-policy';
 
 export class RegisterPhoneStartDto {
   @IsString()
@@ -12,6 +13,10 @@ export class RegisterPhoneStartDto {
 
   @IsBoolean()
   consentSms!: boolean;
+
+  @IsOptional()
+  @IsString()
+  turnstileToken?: string;
 }
 
 export class RegisterEmailStartDto {
@@ -24,6 +29,10 @@ export class RegisterEmailStartDto {
 
   @IsBoolean()
   consentSms!: boolean;
+
+  @IsOptional()
+  @IsString()
+  turnstileToken?: string;
 }
 
 export class RegisterPhoneVerifyDto {
@@ -51,7 +60,7 @@ export class RegisterCompleteDto {
   completionToken!: string;
 
   @IsString()
-  @MinLength(8)
+  @IsPasswordPolicy()
   password!: string;
 
   /** Публичный реф. номер Win-Win (из ссылки ?ref=); L1 / L2 — см. UsersService.createRetailUser. */

@@ -42,3 +42,12 @@ export function staffCanAccessAdminPath(
   if (target === ADMIN_SECTION_DASHBOARD) return true;
   return sections.includes(target);
 }
+
+/** Суперадмин или явный grant `assistant` (FAB + API). */
+export function staffCanAssistant(
+  sections: readonly string[],
+  isSuperAdmin: boolean,
+): boolean {
+  if (isSuperAdmin) return true;
+  return sections.includes('assistant');
+}

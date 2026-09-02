@@ -6,6 +6,7 @@ import { UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MailService } from './mail.service';
 import { UsersService } from '../users/users.service';
+import { InviteClaimService } from './invite-claim.service';
 
 const INVITE_JWT_MAX = 64 * 1024;
 const DESIGNER_INVITE_DAILY_LIMIT = 100;
@@ -18,6 +19,7 @@ export class DesignerInviteService {
     private readonly jwt: JwtService,
     private readonly mail: MailService,
     private readonly users: UsersService,
+    private readonly inviteClaim: InviteClaimService,
   ) {}
 
   private publicSiteBase(): string {
@@ -190,34 +192,7 @@ export class DesignerInviteService {
     token: string | null | undefined,
     registrationEmail: string | null,
   ): Promise<{ inviteId: string; refCode: string } | null> {
-    if (!token?.trim()) return null;
-    if (!registrationEmail?.trim()) {
-      throw new BadRequestException('Для приглашения завершите регистрацию по email');
-    }
-    let payload: { sub?: string; typ?: string };
-    try {
-      payload = await this.jwt.verifyAsync<{ sub?: string; typ?: string }>(token, {
-        secret: this.secret(),
-      });
-    } catch {
-      throw new BadRequestException('Ссылка приглашения недействительна или истекла');
-    }
-    if (payload.typ !== 'dinv' || !payload.sub) {
-      throw new BadRequestException('Ссылка приглашения недействительна');
-    }
-    const em = registrationEmail.trim().toLowerCase();
-    const row = await this.prisma.designerInvite.findFirst({
-      where: {
-        id: payload.sub,
-        emailNorm: em,
-        consumedAt: null,
-        expiresAt: { gt: new Date() },
-      },
-    });
-    if (!row) {
-      throw new BadRequestException('Приглашение не подходит к этому email');
-    }
-    return { inviteId: row.id, refCode: row.refCode };
+    return this.inviteClaim.resolveForNewRegistration(token, registrationEmail);
   }
 
   /**
@@ -229,34 +204,13 @@ export class DesignerInviteService {
       select: { id: true, email: true },
     });
     if (!user?.email) throw new BadRequestException('У аккаунта нет email, приглашение не применимо');
-    let payload: { sub?: string; typ?: string };
-    try {
-      payload = await this.jwt.verifyAsync<{ sub?: string; typ?: string }>(token, {
-        secret: this.secret(),
-      });
-    } catch {
-      throw new BadRequestException('Ссылка приглашения недействительна или истекла');
-    }
-    if (payload.typ !== 'dinv' || !payload.sub) {
-      throw new BadRequestException('Ссылка приглашения недействительна');
-    }
-    const em = user.email.toLowerCase();
-    const row = await this.prisma.designerInvite.findFirst({
-      where: {
-        id: payload.sub,
-        emailNorm: em,
-        consumedAt: null,
-        expiresAt: { gt: new Date() },
-      },
-    });
-    if (!row) {
-      throw new BadRequestException('Приглашение не подходит к этому аккаунту');
-    }
-    await this.users.tryAttachWinWinReferralByCodeForExistingUser(userId, row.refCode);
-    await this.prisma.designerInvite.update({
-      where: { id: row.id },
-      data: { consumedAt: new Date() },
-    });
-    return { ok: true as const, prefillRef: row.refCode };
+    const resolved = await this.inviteClaim.resolveActiveForEmail(
+      token,
+      user.email,
+      'Приглашение не подходит к этому аккаунту',
+    );
+    await this.users.tryAttachWinWinReferralByCodeForExistingUser(userId, resolved.refCode);
+    await this.inviteClaim.markConsumed(resolved.inviteId);
+    return { ok: true as const, prefillRef: resolved.refCode };
   }
 }

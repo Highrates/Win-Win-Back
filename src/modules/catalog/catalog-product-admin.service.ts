@@ -32,13 +32,71 @@ function parseProductVisibilityFilter(raw?: string): boolean | undefined {
   return undefined;
 }
 
+export const PRODUCT_ADMIN_HYGIENE_KEYS = [
+  'no_modifications',
+  'no_variants',
+  'active_empty',
+  'element_empty_pool',
+  'composite_incomplete',
+] as const;
+
+export type ProductAdminHygieneKey = (typeof PRODUCT_ADMIN_HYGIENE_KEYS)[number];
+
 export type AdminProductListQueryFilters = {
   brandId?: string;
   categoryId?: string;
   tagId?: string;
   collectionId?: string;
   productSetId?: string;
+  hygiene?: string;
 };
+
+export type DashboardCatalogSummary = {
+  noModifications: number;
+  noVariants: number;
+  activeEmpty: number;
+  elementEmptyPool: number;
+  compositeIncomplete: number;
+};
+
+export function parseProductAdminHygieneFilter(raw?: string): ProductAdminHygieneKey | undefined {
+  const v = raw?.trim().toLowerCase();
+  if (!v) return undefined;
+  return (PRODUCT_ADMIN_HYGIENE_KEYS as readonly string[]).includes(v)
+    ? (v as ProductAdminHygieneKey)
+    : undefined;
+}
+
+/** Критерии «дыр» в модификациях / элементах для списка и дашборда. */
+export function productAdminHygieneWhere(key: ProductAdminHygieneKey): Prisma.ProductWhereInput {
+  switch (key) {
+    case 'no_modifications':
+      return { modifications: { none: {} } };
+    case 'no_variants':
+      return {
+        AND: [{ modifications: { some: {} } }, { variants: { none: {} } }],
+      };
+    case 'active_empty':
+      return {
+        isActive: true,
+        OR: [{ modifications: { none: {} } }, { variants: { none: {} } }],
+      };
+    case 'element_empty_pool':
+      return { elements: { some: { availabilities: { none: {} } } } };
+    case 'composite_incomplete':
+      return {
+        AND: [
+          { elements: { some: {} } },
+          {
+            OR: [
+              { elements: { some: { availabilities: { none: {} } } } },
+              { variants: { none: {} } },
+            ],
+          },
+        ],
+      };
+  }
+}
 
 /** Цена для колонки списка: min среди вариантов с price > 0 (как на витрине), не только isDefault. */
 export function pickAdminListPrice(variants: {
@@ -126,6 +184,11 @@ function buildProductAdminListWhere(
     and.push({
       curatedProductSetItems: { some: { setId: productSetId } },
     });
+  }
+
+  const hygiene = parseProductAdminHygieneFilter(filters.hygiene);
+  if (hygiene) {
+    and.push(productAdminHygieneWhere(hygiene));
   }
 
   if (and.length === 0) return {};
@@ -357,6 +420,29 @@ export class CatalogProductAdminService {
       });
       await tx.productImage.deleteMany({ where: { id: { in: delIds } } });
     }
+  }
+
+  async getDashboardCatalogSummary(): Promise<DashboardCatalogSummary> {
+    const [
+      noModifications,
+      noVariants,
+      activeEmpty,
+      elementEmptyPool,
+      compositeIncomplete,
+    ] = await Promise.all([
+      this.prisma.product.count({ where: productAdminHygieneWhere('no_modifications') }),
+      this.prisma.product.count({ where: productAdminHygieneWhere('no_variants') }),
+      this.prisma.product.count({ where: productAdminHygieneWhere('active_empty') }),
+      this.prisma.product.count({ where: productAdminHygieneWhere('element_empty_pool') }),
+      this.prisma.product.count({ where: productAdminHygieneWhere('composite_incomplete') }),
+    ]);
+    return {
+      noModifications,
+      noVariants,
+      activeEmpty,
+      elementEmptyPool,
+      compositeIncomplete,
+    };
   }
 
   async listProductsForAdmin(

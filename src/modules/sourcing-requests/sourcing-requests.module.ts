@@ -22,5 +22,6 @@ import { SourcingChatAdminController } from './sourcing-chat-admin.controller';
     SourcingRequestsAdminController,
     SourcingRequestsController,
   ],
+  exports: [SourcingRequestsService],
 })
 export class SourcingRequestsModule {}

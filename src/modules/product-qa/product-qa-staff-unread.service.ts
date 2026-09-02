@@ -4,6 +4,7 @@ import { Prisma, ProductQaAuthorRole, ProductQaMessageStatus } from '@prisma/cli
 import { PrismaService } from '../../prisma/prisma.service';
 import { productQaPreModerationEnabled } from './product-qa.constants';
 import { ProductQaCoreService } from './product-qa-core.service';
+import { parseDashboardDateRange } from '../../common/utils/dashboard-date-range';
 
 @Injectable()
 export class ProductQaStaffUnreadService {
@@ -21,10 +22,14 @@ export class ProductQaStaffUnreadService {
     return preMod ? [ProductQaMessageStatus.PENDING] : [ProductQaMessageStatus.VISIBLE];
   }
 
-  async countUnreadForStaff(staffUserId: string): Promise<number> {
+  async countUnreadForStaff(
+    staffUserId: string,
+    opts?: { from?: string; to?: string },
+  ): Promise<number> {
     const statuses = this.staffUnreadMessageStatuses();
     const baseline = await this.staffUnreadBaseline(staffUserId);
-    return this.countUnreadViaSql(staffUserId, statuses, baseline);
+    const range = parseDashboardDateRange(opts?.from, opts?.to);
+    return this.countUnreadViaSql(staffUserId, statuses, baseline, range);
   }
 
   private async staffUnreadBaseline(staffUserId: string): Promise<Date> {
@@ -40,7 +45,10 @@ export class ProductQaStaffUnreadService {
     staffUserId: string,
     statuses: ProductQaMessageStatus[],
     baseline: Date,
+    range?: { from: Date; to: Date } | null,
   ): Promise<number> {
+    const createdLower = range ? range.from : null;
+    const createdUpper = range ? range.to : null;
     const qaRows = await this.prisma.$queryRaw<Array<{ count: bigint }>>(
       Prisma.sql`
         SELECT COUNT(*)::bigint AS count
@@ -51,6 +59,8 @@ export class ProductQaStaffUnreadService {
         WHERE m."authorRole" = ${ProductQaAuthorRole.USER}::"ProductQaAuthorRole"
           AND m.status IN (${Prisma.join(statuses.map((s) => Prisma.sql`${s}::"ProductQaMessageStatus"`))})
           AND m."createdAt" > COALESCE(rs."lastSeenAt", ${baseline})
+          AND (${createdLower}::timestamptz IS NULL OR m."createdAt" >= ${createdLower})
+          AND (${createdUpper}::timestamptz IS NULL OR m."createdAt" < ${createdUpper})
       `,
     );
     const corrRows = await this.prisma.$queryRaw<Array<{ count: bigint }>>(
@@ -63,6 +73,8 @@ export class ProductQaStaffUnreadService {
         WHERE cm."authorRole" = ${ProductQaAuthorRole.USER}::"ProductQaAuthorRole"
           AND cm."publishedQaMessageId" IS NULL
           AND cm."createdAt" > COALESCE(rs."lastSeenAt", ${baseline})
+          AND (${createdLower}::timestamptz IS NULL OR cm."createdAt" >= ${createdLower})
+          AND (${createdUpper}::timestamptz IS NULL OR cm."createdAt" < ${createdUpper})
       `,
     );
     return Number(qaRows[0]?.count ?? 0n) + Number(corrRows[0]?.count ?? 0n);
@@ -89,9 +101,10 @@ export class ProductQaStaffUnreadService {
   async getUnreadSummary(
     staffUserId: string,
     staffRole: string,
+    opts?: { from?: string; to?: string },
   ): Promise<{ total: number }> {
     await this.core.assertStaffCatalogAccess(staffUserId, staffRole);
-    const total = await this.countUnreadForStaff(staffUserId);
+    const total = await this.countUnreadForStaff(staffUserId, opts);
     return { total };
   }
 }
