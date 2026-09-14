@@ -145,7 +145,7 @@ export class CasesService {
       select: { winWinPartnerApproved: true },
     });
     if (!p?.winWinPartnerApproved) {
-      throw new ForbiddenException('Доступно только партнёрам Win-Win');
+      throw new ForbiddenException('Доступно только партнёрам Wupapa');
     }
   }
 

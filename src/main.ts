@@ -71,7 +71,7 @@ async function bootstrap() {
   });
 
   await app.listen(port);
-  console.log(`Win-Win API: http://localhost:${port}/${prefix}`);
+  console.log(`Wupapa API: http://localhost:${port}/${prefix}`);
 }
 
 bootstrap();

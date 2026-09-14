@@ -41,7 +41,7 @@ export class UpdateUserProfileDto {
   avatarUrl?: string | null;
 }
 
-/** Видимость карточки партнёра в каталоге дизайнеров на сайте (только одобренные Win-Win). */
+/** Видимость карточки партнёра в каталоге дизайнеров на сайте (только одобренные Wupapa). */
 export class DesignerSiteVisibilityDto {
   @IsBoolean()
   visible!: boolean;

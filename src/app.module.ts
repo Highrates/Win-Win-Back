@@ -35,6 +35,7 @@ import { AssistantModule } from './assistant/assistant.module';
 import { LikesModule } from './modules/likes/likes.module';
 import { ProductQaModule } from './modules/product-qa/product-qa.module';
 import { StaffModule } from './modules/staff/staff.module';
+import { SearchModule } from './modules/search/search.module';
 import { TurnstileCaptchaModule } from './common/turnstile/turnstile-captcha.module';
 
 @Module({
@@ -78,6 +79,7 @@ import { TurnstileCaptchaModule } from './common/turnstile/turnstile-captcha.mod
     UserGroupsModule,
     SourcingRequestsModule,
     AssistantModule,
+    SearchModule,
   ],
   providers: [
     {

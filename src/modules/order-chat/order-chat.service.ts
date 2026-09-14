@@ -126,7 +126,7 @@ export class OrderChatService {
     },
   ): string {
     if (role === ChatMessageAuthorRole.STAFF) {
-      return author.staffDisplayName?.trim() || 'Менеджер Win-Win';
+      return author.staffDisplayName?.trim() || 'Менеджер Wupapa';
     }
     const n = [author.profile?.firstName, author.profile?.lastName]
       .filter((x): x is string => typeof x === 'string' && Boolean(x.trim()))

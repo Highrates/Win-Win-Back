@@ -67,7 +67,7 @@ export class DesignerInviteService {
     });
     if (!inviter) throw new NotFoundException('Пользователь не найден');
     if (!inviter.profile?.winWinPartnerApproved) {
-      throw new ForbiddenException('Доступно только одобренным партнёрам Win-Win');
+      throw new ForbiddenException('Доступно только одобренным партнёрам Wupapa');
     }
     return inviter;
   }
@@ -141,7 +141,7 @@ export class DesignerInviteService {
         [p?.firstName, p?.lastName]
           .filter((x) => x != null && String(x).trim().length > 0)
           .map((s) => String(s).trim())
-          .join(' ') || (inviter.email ? inviter.email : 'Партнёр Win-Win');
+          .join(' ') || (inviter.email ? inviter.email : 'Партнёр Wupapa');
       await this.mail.sendDesignerInvite({ to: email, inviteLink: link, inviterLabel: invName, refCode });
       return { ok: true as const, expiresAt: expiresAt.toISOString(), inviteLink: link };
     } catch (err) {

@@ -171,7 +171,7 @@ export class UsersService {
    * Проверяем, что `referredId` не является предком `referrerId`:
    * referrerId -> ... -> referredId (по цепочке "кто пригласил X").
    *
-   * В модели Win-Win глубина обычно 2, но для защиты от неконсистентных данных
+   * В модели Wupapa глубина обычно 2, но для защиты от неконсистентных данных
    * ставим ограничение на шаги.
    */
   private async assertNoWinWinReferralCycleInTx(
@@ -238,7 +238,7 @@ export class UsersService {
     password: string;
     consentPersonalData: boolean;
     consentSms: boolean;
-    /** Публичный реф. номер партнёра Win-Win: L1, если владелец — не L1; иначе L2. */
+    /** Публичный реф. номер партнёра Wupapa: L1, если владелец — не L1; иначе L2. */
     referralCode?: string | null;
     /** После `DesignerInvite` — погасить приглашение. */
     designerInviteId?: string | null;
@@ -473,7 +473,7 @@ export class UsersService {
       select: { winWinPartnerApproved: true },
     });
     if (!p?.winWinPartnerApproved) {
-      throw new ForbiddenException('Доступно только партнёрам Win-Win');
+      throw new ForbiddenException('Доступно только партнёрам Wupapa');
     }
     await this.ensureDesignerRecordForWinWinPartner(userId);
     await this.prisma.designer.update({
@@ -763,7 +763,7 @@ export class UsersService {
         throw new BadRequestException('Нет заявки на рассмотрении');
       }
       if (p.winWinPartnerApproved) {
-        throw new BadRequestException('Пользователь уже партнёр Win-Win');
+        throw new BadRequestException('Пользователь уже партнёр Wupapa');
       }
       if (p.partnerApplicationRejectedAt) {
         throw new BadRequestException('Заявка отклонена, ожидается повторная подача');
@@ -850,7 +850,7 @@ export class UsersService {
       throw new BadRequestException('Нет заявки на рассмотрении');
     }
     if (p.winWinPartnerApproved) {
-      throw new BadRequestException('Пользователь уже партнёр Win-Win');
+      throw new BadRequestException('Пользователь уже партнёр Wupapa');
     }
     if (p.partnerApplicationRejectedAt) {
       throw new BadRequestException('Заявка уже отклонена');
@@ -999,7 +999,7 @@ export class UsersService {
       select: { winWinPartnerApproved: true },
     });
     if (!approved?.winWinPartnerApproved) {
-      throw new ForbiddenException('Раздел доступен одобренным партнёрам Win-Win');
+      throw new ForbiddenException('Раздел доступен одобренным партнёрам Wupapa');
     }
     const { l1 } = await this.getWinWinReferralStructureForAdmin(partnerUserId);
     const inviter = await this.getWinWinReferralInviterForAdmin(partnerUserId);
@@ -1060,7 +1060,7 @@ export class UsersService {
     };
   }
 
-  /** Заявка на статус партнёра Win-Win (текст + CV). */
+  /** Заявка на статус партнёра Wupapa (текст + CV). */
   async submitPartnerApplication(
     userId: string,
     file: Express.Multer.File,
@@ -1080,7 +1080,7 @@ export class UsersService {
 
     const before = await this.prisma.userProfile.findUnique({ where: { userId } });
     if (before?.winWinPartnerApproved) {
-      throw new BadRequestException('Вы уже партнёр Win-Win');
+      throw new BadRequestException('Вы уже партнёр Wupapa');
     }
     if (before?.partnerApplicationSubmittedAt && !before?.partnerApplicationRejectedAt) {
       throw new BadRequestException('Заявка уже подана');

@@ -58,7 +58,7 @@ export function labelQaAuthor(
   },
 ): string {
   if (role === ProductQaAuthorRole.STAFF) {
-    return author.staffDisplayName?.trim() || 'Администратор Win-Win';
+    return author.staffDisplayName?.trim() || 'Администратор Wupapa';
   }
   const n = [author.profile?.firstName, author.profile?.lastName]
     .filter((x): x is string => typeof x === 'string' && Boolean(x.trim()))

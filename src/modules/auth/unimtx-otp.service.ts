@@ -129,7 +129,7 @@ export class UnimtxOtpService {
       : {
           to: toE164,
           signature: sig,
-          content: `Код подтверждения Win-Win: ${digits}. Действует ${ttl} минут.`,
+          content: `Код подтверждения Wupapa: ${digits}. Действует ${ttl} минут.`,
         };
 
     const { ok, payload, raw } = await this.postJson('sms.message.send', body);

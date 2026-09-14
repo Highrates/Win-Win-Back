@@ -98,7 +98,7 @@ export class UsersController {
     return this.usersService.uploadUserProfileRichMedia(userId, file);
   }
 
-  /** Заявка на партнёра Win-Win: multipart `coverLetter` (текст) + `file` (CV). */
+  /** Заявка на партнёра Wupapa: multipart `coverLetter` (текст) + `file` (CV). */
   @Post('me/designer-invite')
   @Throttle({ default: { ttl: 60_000, limit: 10 } })
   sendDesignerInvite(@CurrentUser('sub') userId: string, @Body() dto: SendDesignerInviteDto) {

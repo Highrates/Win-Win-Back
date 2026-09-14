@@ -84,9 +84,9 @@ export class MailService {
     await transport.sendMail({
       from,
       to,
-      subject: 'Код подтверждения Win-Win',
-      text: `Ваш код подтверждения: ${code}\n\nЕсли вы не регистрировались на Win-Win, проигнорируйте письмо.`,
-      html: `<p>Ваш код подтверждения: <strong>${code}</strong></p><p>Если вы не регистрировались на Win-Win, проигнорируйте письмо.</p>`,
+      subject: 'Код подтверждения Wupapa',
+      text: `Ваш код подтверждения: ${code}\n\nЕсли вы не регистрировались на Wupapa, проигнорируйте письмо.`,
+      html: `<p>Ваш код подтверждения: <strong>${code}</strong></p><p>Если вы не регистрировались на Wupapa, проигнорируйте письмо.</p>`,
     });
     this.logger.log(`Registration OTP email sent to ${to}`);
   }
@@ -101,9 +101,9 @@ export class MailService {
     }
     const endpoint = await this.smtpConnectTarget(configuredHost);
     const transport = this.transporter(endpoint);
-    const subject = 'Сброс пароля Win-Win';
+    const subject = 'Сброс пароля Wupapa';
     const text = [
-      `Вы запросили сброс пароля на Win-Win.`,
+      `Вы запросили сброс пароля на Wupapa.`,
       ``,
       `Перейдите по ссылке (действительна 1 час):`,
       resetLink,
@@ -111,7 +111,7 @@ export class MailService {
       `Если вы не запрашивали сброс, проигнорируйте письмо.`,
     ].join('\n');
     const html = [
-      `<p>Вы запросили сброс пароля на Win-Win.</p>`,
+      `<p>Вы запросили сброс пароля на Wupapa.</p>`,
       `<p><a href="${resetLink}">Задать новый пароль</a> (ссылка действительна 1 час)</p>`,
       `<p style="color:#666;font-size:12px">Если вы не запрашивали сброс, проигнорируйте письмо.</p>`,
     ].join('');
@@ -129,9 +129,9 @@ export class MailService {
     }
     const endpoint = await this.smtpConnectTarget(configuredHost);
     const transport = this.transporter(endpoint);
-    const subject = 'Приглашение стать партнёром Win-Win';
+    const subject = 'Приглашение стать партнёром Wupapa';
     const text = [
-      `${inviterLabel} приглашает вас присоединиться к Win-Win как дизайнер-партнёр.`,
+      `${inviterLabel} приглашает вас присоединиться к Wupapa как дизайнер-партнёр.`,
       ``,
       `Реферальный номер в приглашении: ${refCode}`,
       ``,
@@ -141,7 +141,7 @@ export class MailService {
       `Если вы не ждали это письмо, проигнорируйте его.`,
     ].join('\n');
     const html = [
-      `<p><strong>${inviterLabel}</strong> приглашает вас стать партнёром Win-Win.</p>`,
+      `<p><strong>${inviterLabel}</strong> приглашает вас стать партнёром Wupapa.</p>`,
       `<p>Реферальный номер: <strong>${refCode}</strong></p>`,
       `<p><a href="${inviteLink}">Перейти к регистрации или входу</a> (ссылка действительна 14 дней)</p>`,
       `<p style="color:#666;font-size:12px">Если вы не ждали письмо, проигнорируйте.</p>`,
@@ -161,18 +161,18 @@ export class MailService {
     const endpoint = await this.smtpConnectTarget(configuredHost);
     const transport = this.transporter(endpoint);
     const hello = name?.trim() ? `${name.trim()}, поздравляем!` : 'Поздравляем!';
-    const subject = 'Вы стали партнёром Win-Win';
+    const subject = 'Вы стали партнёром Wupapa';
     const text = [
       hello,
       ``,
-      `Ваш статус на Win-Win изменён: вы стали партнёром.`,
+      `Ваш статус на Wupapa изменён: вы стали партнёром.`,
       `Ваш реферальный номер: ${referralCode}`,
       ``,
       `Зайдите в личный кабинет, чтобы пригласить других дизайнеров и отслеживать доход.`,
     ].join('\n');
     const html = [
       `<p><strong>${hello}</strong></p>`,
-      `<p>Ваш статус на Win-Win изменён: вы стали партнёром.</p>`,
+      `<p>Ваш статус на Wupapa изменён: вы стали партнёром.</p>`,
       `<p>Ваш реферальный номер: <strong>${referralCode}</strong></p>`,
       `<p style="color:#666;font-size:12px">Зайдите в личный кабинет, чтобы пригласить других дизайнеров и отслеживать доход.</p>`,
     ].join('');
@@ -197,7 +197,7 @@ export class MailService {
     const endpoint = await this.smtpConnectTarget(configuredHost);
     const transport = this.transporter(endpoint);
     const hello = customerName?.trim() ? `${customerName.trim()}, ` : '';
-    const subject = `Новое сообщение по заказу ${orderDisplayId} — Win-Win`;
+    const subject = `Новое сообщение по заказу ${orderDisplayId} — Wupapa`;
     const text = [
       `${hello}вам ответили в чате по заказу ${orderDisplayId}.`,
       ``,
@@ -232,7 +232,7 @@ export class MailService {
     const endpoint = await this.smtpConnectTarget(configuredHost);
     const transport = this.transporter(endpoint);
     const [primary, ...bcc] = dedup;
-    const subject = `Новое сообщение в чате заказа ${params.orderDisplayId} — Win-Win`;
+    const subject = `Новое сообщение в чате заказа ${params.orderDisplayId} — Wupapa`;
     const text = [
       `Клиент написал в чат по заказу ${params.orderDisplayId}.`,
       ``,
@@ -274,7 +274,7 @@ export class MailService {
     const endpoint = await this.smtpConnectTarget(configuredHost);
     const transport = this.transporter(endpoint);
     const [primary, ...bcc] = dedup;
-    const subject = `Новая заявка на заказ ${params.orderDisplayId} — Win-Win`;
+    const subject = `Новая заявка на заказ ${params.orderDisplayId} — Wupapa`;
     const text = [
       `Клиент отправил заказ на согласование (заказ ${params.orderDisplayId}).`,
       ``,
@@ -314,7 +314,7 @@ export class MailService {
     const transport = this.transporter(endpoint);
     const [primary, ...bcc] = dedup;
     const title = params.requestTitle.trim() || 'Без названия';
-    const subject = `Новая заявка на подбор ${params.requestDisplayId} — Win-Win`;
+    const subject = `Новая заявка на подбор ${params.requestDisplayId} — Wupapa`;
     const text = [
       `Клиент отправил заявку на подбор (${params.requestDisplayId}).`,
       `Тема: ${title}`,
@@ -362,7 +362,7 @@ export class MailService {
     const topicTitle = escapeHtml(params.topicTitle);
     const authorLabel = escapeHtml(params.authorLabel);
     const bodyPreview = escapeHtml(params.bodyPreview);
-    const subject = `Новый вопрос по товару: ${params.productTitle} — Win-Win`;
+    const subject = `Новый вопрос по товару: ${params.productTitle} — Wupapa`;
     const text = [
       `Новый вопрос на витрине.`,
       `Товар: ${params.productTitle}`,
@@ -411,7 +411,7 @@ export class MailService {
     const hello = customerName?.trim() ? `${customerName.trim()}, ` : '';
     const title = escapeHtml(productTitle);
     const preview = escapeHtml(bodyPreview);
-    const subject = `Ответ по товару «${productTitle}» — Win-Win`;
+    const subject = `Ответ по товару «${productTitle}» — Wupapa`;
     const text = [
       `${hello}магазин ответил на ваш вопрос по товару «${productTitle}».`,
       ``,
@@ -448,7 +448,7 @@ export class MailService {
     const hello = customerName?.trim() ? `${customerName.trim()}, ` : '';
     const title = escapeHtml(productTitle);
     const preview = escapeHtml(bodyPreview);
-    const subject = `Вопрос по товару «${productTitle}» не опубликован — Win-Win`;
+    const subject = `Вопрос по товару «${productTitle}» не опубликован — Wupapa`;
     const text = [
       `${hello}к сожалению, ваш вопрос по товару «${productTitle}» не был опубликован на витрине.`,
       `Вы по-прежнему можете получить ответ в личной переписке с магазином.`,
@@ -485,24 +485,24 @@ export class MailService {
     const hello = staffDisplayName?.trim()
       ? `Здравствуйте, ${staffDisplayName.trim()}!`
       : 'Здравствуйте!';
-    const subject = 'Доступ в админ-панель Win-Win';
+    const subject = 'Доступ в админ-панель Wupapa';
     const text = [
       hello,
       '',
-      'Вам выдан доступ в админ-панель Win-Win.',
+      'Вам выдан доступ в админ-панель Wupapa.',
       '',
       `Страница входа: ${loginUrl}`,
       `Email для входа: ${to}`,
       `Пароль: ${password}`,
       '',
-      'Сохраните пароль в надёжном месте. Если вы не ожидали это письмо, обратитесь к администратору Win-Win.',
+      'Сохраните пароль в надёжном месте. Если вы не ожидали это письмо, обратитесь к администратору Wupapa.',
     ].join('\n');
     const html = [
       `<p>${hello}</p>`,
-      `<p>Вам выдан доступ в <strong>админ-панель Win-Win</strong>.</p>`,
+      `<p>Вам выдан доступ в <strong>админ-панель Wupapa</strong>.</p>`,
       `<p><a href="${loginUrl}">Войти в админку</a></p>`,
       `<p>Email: <strong>${to}</strong><br/>Пароль: <strong>${password}</strong></p>`,
-      `<p style="color:#666;font-size:12px">Сохраните пароль в надёжном месте. Если вы не ожидали письмо, обратитесь к администратору Win-Win.</p>`,
+      `<p style="color:#666;font-size:12px">Сохраните пароль в надёжном месте. Если вы не ожидали письмо, обратитесь к администратору Wupapa.</p>`,
     ].join('');
     await transport.sendMail({ from, to, subject, text, html });
     this.logger.log(`Staff admin welcome email sent to ${to}`);
@@ -526,24 +526,24 @@ export class MailService {
     const hello = staffDisplayName?.trim()
       ? `Здравствуйте, ${staffDisplayName.trim()}!`
       : 'Здравствуйте!';
-    const subject = 'Новый пароль админ-панели Win-Win';
+    const subject = 'Новый пароль админ-панели Wupapa';
     const text = [
       hello,
       '',
-      'Администратор сбросил ваш пароль для входа в админ-панель Win-Win.',
+      'Администратор сбросил ваш пароль для входа в админ-панель Wupapa.',
       '',
       `Страница входа: ${loginUrl}`,
       `Email для входа: ${to}`,
       `Новый пароль: ${password}`,
       '',
-      'Сохраните пароль в надёжном месте. Если вы не ожидали это письмо, обратитесь к администратору Win-Win.',
+      'Сохраните пароль в надёжном месте. Если вы не ожидали это письмо, обратитесь к администратору Wupapa.',
     ].join('\n');
     const html = [
       `<p>${hello}</p>`,
-      `<p>Администратор сбросил ваш пароль для входа в <strong>админ-панель Win-Win</strong>.</p>`,
+      `<p>Администратор сбросил ваш пароль для входа в <strong>админ-панель Wupapa</strong>.</p>`,
       `<p><a href="${loginUrl}">Войти в админку</a></p>`,
       `<p>Email: <strong>${to}</strong><br/>Новый пароль: <strong>${password}</strong></p>`,
-      `<p style="color:#666;font-size:12px">Сохраните пароль в надёжном месте. Если вы не ожидали письмо, обратитесь к администратору Win-Win.</p>`,
+      `<p style="color:#666;font-size:12px">Сохраните пароль в надёжном месте. Если вы не ожидали письмо, обратитесь к администратору Wupapa.</p>`,
     ].join('');
     await transport.sendMail({ from, to, subject, text, html });
     this.logger.log(`Staff admin password reset email sent to ${to}`);

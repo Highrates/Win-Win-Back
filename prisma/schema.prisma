@@ -1,4 +1,4 @@
-// Win-Win API — PostgreSQL schema
+// Wupapa API — PostgreSQL schema
 // Локализация данных в РФ
 
 generator client {
@@ -453,7 +453,7 @@ model UserProfile {
   coverImageUrls Json?
   /// После первого захода в ЛК после регистрации показываем `/account/profile` (таб «Инфо») один раз
   profileOnboardingPending Boolean @default(true)
-  /// Партнёр Win-Win: одобрено админом (реферальная программа, разделы Кейсы/Команда/Проекты и т.д.)
+  /// Партнёр Wupapa: одобрено админом (реферальная программа, разделы Кейсы/Команда/Проекты и т.д.)
   winWinPartnerApproved Boolean @default(false)
   /// Заявка на партнёра: сопроводительный текст
   partnerApplicationCoverLetter  String?   @db.Text
@@ -481,7 +481,7 @@ model UserProfile {
   updatedAt    DateTime  @updatedAt
 }
 
-/// Кейсы дизайнера (создаются в ЛК; доступны только одобренным партнёрам Win-Win).
+/// Кейсы дизайнера (создаются в ЛК; доступны только одобренным партнёрам Wupapa).
 model Case {
   id String @id @default(cuid())
 

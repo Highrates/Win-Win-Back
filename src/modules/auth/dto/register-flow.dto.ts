@@ -63,7 +63,7 @@ export class RegisterCompleteDto {
   @IsPasswordPolicy()
   password!: string;
 
-  /** Публичный реф. номер Win-Win (из ссылки ?ref=); L1 / L2 — см. UsersService.createRetailUser. */
+  /** Публичный реф. номер Wupapa (из ссылки ?ref=); L1 / L2 — см. UsersService.createRetailUser. */
   @IsOptional()
   @IsString()
   @MaxLength(64)
