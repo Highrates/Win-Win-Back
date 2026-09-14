@@ -14,16 +14,26 @@ export function assistantToolStatusMessage(toolName: string): string {
       return 'Смотрю сводку заказов…';
     case 'list_orders':
       return 'Смотрю заказы…';
+    case 'get_orders_chat_unread_summary':
+      return 'Считаю непрочитанные чаты заказов…';
     case 'search_products':
       return 'Ищу товары в каталоге…';
     case 'get_sourcing_summary':
       return 'Смотрю заявки на подбор…';
+    case 'get_sourcing_chat_unread_summary':
+      return 'Считаю непрочитанные чаты подбора…';
+    case 'list_sourcing_requests':
+      return 'Смотрю заявки на подбор…';
     case 'get_qa_pending_summary':
       return 'Смотрю очередь Q&A…';
+    case 'get_qa_unread_summary':
+      return 'Считаю непрочитанные Q&A…';
     case 'get_signup_summary':
       return 'Считаю регистрации…';
     case 'get_partner_applications_pending':
       return 'Смотрю заявки партнёров…';
+    case 'get_partner_rewards_pending_summary':
+      return 'Считаю невыплаченные начисления…';
     case 'list_oos_variants':
       return 'Проверяю товары без наличия…';
     case 'sales_timeseries':

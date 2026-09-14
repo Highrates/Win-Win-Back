@@ -319,6 +319,52 @@ export class OrdersService {
     return { new: newCount, active };
   }
 
+  /** Воронка заказов по статусам (без DRAFT); опционально период createdAt. */
+  async getStatusFunnelForAdmin(opts?: {
+    from?: string;
+    to?: string;
+  }): Promise<{
+    byStatus: Array<{ status: OrderStatus; count: number }>;
+    buckets: { new: number; active: number; completed: number; other: number };
+    period: { from: string | null; to: string | null };
+    total: number;
+  }> {
+    const range = parseDashboardDateRange(opts?.from, opts?.to);
+    const createdAt = createdAtInRange(range);
+    const rows = await this.prisma.order.groupBy({
+      by: ['status'],
+      where: {
+        status: { not: OrderStatus.DRAFT },
+        ...(createdAt ? { createdAt } : {}),
+      },
+      _count: { _all: true },
+    });
+    const activeSet = new Set<string>(ADMIN_ACTIVE_STATUSES);
+    const completedSet = new Set<string>(ADMIN_COMPLETED_STATUSES);
+    const buckets = { new: 0, active: 0, completed: 0, other: 0 };
+    let total = 0;
+    const byStatus = rows
+      .map((r) => {
+        const count = r._count._all;
+        total += count;
+        if (r.status === OrderStatus.PENDING_APPROVAL) buckets.new += count;
+        else if (activeSet.has(r.status)) buckets.active += count;
+        else if (completedSet.has(r.status)) buckets.completed += count;
+        else buckets.other += count;
+        return { status: r.status, count };
+      })
+      .sort((a, b) => b.count - a.count);
+    return {
+      byStatus,
+      buckets,
+      total,
+      period: {
+        from: range?.from.toISOString() ?? null,
+        to: range?.to.toISOString() ?? null,
+      },
+    };
+  }
+
   async findOneForAdmin(orderId: string) {
     return this.prisma.order.findFirst({
       where: { id: orderId },

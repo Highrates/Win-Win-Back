@@ -528,4 +528,60 @@ export class ReferralsService {
     }
     return { ok: true as const };
   }
+
+  /**
+   * Сводка невыплаченных реферальных начислений (ReferralReward).
+   * Это не очередь заявок из ЛК — requestPartnerPayout пока не сохраняет заявки.
+   */
+  async getAdminPartnerRewardsPendingSummary(): Promise<{
+    partnersWithUnpaidRewards: number;
+    pending: { partners: number; rows: number; amountRub: string };
+    invoiced: { partners: number; rows: number; amountRub: string };
+    note: string;
+  }> {
+    const [pendingAgg, invoicedAgg, pendingPartners, invoicedPartners] =
+      await Promise.all([
+        this.prisma.referralReward.aggregate({
+          where: { status: 'PENDING' },
+          _count: { _all: true },
+          _sum: { amount: true },
+        }),
+        this.prisma.referralReward.aggregate({
+          where: { status: 'INVOICED' },
+          _count: { _all: true },
+          _sum: { amount: true },
+        }),
+        this.prisma.referralReward.groupBy({
+          by: ['userId'],
+          where: { status: 'PENDING' },
+        }),
+        this.prisma.referralReward.groupBy({
+          by: ['userId'],
+          where: { status: 'INVOICED' },
+        }),
+      ]);
+
+    const pendingPartnerIds = new Set(pendingPartners.map((r) => r.userId));
+    const invoicedPartnerIds = new Set(invoicedPartners.map((r) => r.userId));
+    const allUnpaid = new Set([...pendingPartnerIds, ...invoicedPartnerIds]);
+
+    const pendingAmount = pendingAgg._sum.amount ?? new Prisma.Decimal(0);
+    const invoicedAmount = invoicedAgg._sum.amount ?? new Prisma.Decimal(0);
+
+    return {
+      partnersWithUnpaidRewards: allUnpaid.size,
+      pending: {
+        partners: pendingPartnerIds.size,
+        rows: pendingAgg._count._all,
+        amountRub: pendingAmount.toFixed(2),
+      },
+      invoiced: {
+        partners: invoicedPartnerIds.size,
+        rows: invoicedAgg._count._all,
+        amountRub: invoicedAmount.toFixed(2),
+      },
+      note:
+        'Начисления ReferralReward (PENDING/INVOICED), не заявки на выплату из ЛК — очередь заявок пока не ведётся.',
+    };
+  }
 }

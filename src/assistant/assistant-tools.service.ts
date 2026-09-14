@@ -1,8 +1,10 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { CatalogAdminService } from '../modules/catalog/catalog-admin.service';
+import { OrderChatService } from '../modules/order-chat/order-chat.service';
 import { OrdersService } from '../modules/orders/orders.service';
 import { ProductQaService } from '../modules/product-qa/product-qa.service';
+import { ReferralsService } from '../modules/referrals/referrals.service';
 import { SourcingRequestsService } from '../modules/sourcing-requests/sourcing-requests.service';
 import { UsersService } from '../modules/users/users.service';
 import { staffCanUseAssistantTool } from './assistant-tool-acl';
@@ -19,6 +21,12 @@ function clampInt(v: unknown, fallback: number, min: number, max: number): numbe
   const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
   if (!Number.isFinite(n)) return fallback;
   return Math.min(max, Math.max(min, Math.trunc(n)));
+}
+
+function optionalIso(v: unknown): string | undefined {
+  if (typeof v !== 'string') return undefined;
+  const t = v.trim();
+  return t.length ? t : undefined;
 }
 
 function maskEmail(email: string | null | undefined): string | null {
@@ -42,6 +50,18 @@ function maskName(name: string | null | undefined): string | null {
   return `${t.slice(0, 1)}***`;
 }
 
+function profileDisplayName(profile?: {
+  firstName?: string | null;
+  lastName?: string | null;
+} | null): string | null {
+  if (!profile) return null;
+  const parts = [profile.firstName, profile.lastName].filter(
+    (p): p is string => Boolean(p?.trim()),
+  );
+  if (!parts.length) return null;
+  return parts.join(' ');
+}
+
 @Injectable()
 export class AssistantToolsService {
   constructor(
@@ -50,6 +70,8 @@ export class AssistantToolsService {
     private readonly sourcing: SourcingRequestsService,
     private readonly users: UsersService,
     private readonly productQa: ProductQaService,
+    private readonly referrals: ReferralsService,
+    private readonly orderChat: OrderChatService,
   ) {}
 
   listToolDefs(acl?: AssistantToolAcl): GptToolDef[] {
@@ -59,10 +81,13 @@ export class AssistantToolsService {
         function: {
           name: 'get_orders_dashboard',
           description:
-            'Сводка заказов для дашборда: новые (на согласовании), активные, завершённые, разбивка по каждому статусу.',
+            'Сводка заказов для дашборда: новые (на согласовании), активные. Опционально from/to (ISO).',
           parameters: {
             type: 'object',
-            properties: {},
+            properties: {
+              from: { type: 'string', description: 'ISO начало периода (включительно)' },
+              to: { type: 'string', description: 'ISO конец периода (исключительно)' },
+            },
             additionalProperties: false,
           },
         },
@@ -72,7 +97,7 @@ export class AssistantToolsService {
         function: {
           name: 'list_orders',
           description:
-            'Список заказов админки (чтение). Фильтры: q (id/email/телефон), bucket (как в админке), page, limit (до 50). Персональные данные маскируются.',
+            'Список заказов админки (чтение). Фильтры: q, bucket, page, limit (до 50), from/to. PII маскируются.',
           parameters: {
             type: 'object',
             properties: {
@@ -83,7 +108,22 @@ export class AssistantToolsService {
               },
               page: { type: 'integer', description: 'Страница, с 1' },
               limit: { type: 'integer', description: '1–50' },
+              from: { type: 'string' },
+              to: { type: 'string' },
             },
+            additionalProperties: false,
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'get_orders_chat_unread_summary',
+          description:
+            'Непрочитанные сообщения клиентов в чатах заказов для текущего сотрудника: total, new, active, completed.',
+          parameters: {
+            type: 'object',
+            properties: {},
             additionalProperties: false,
           },
         },
@@ -93,10 +133,62 @@ export class AssistantToolsService {
         function: {
           name: 'get_sourcing_summary',
           description:
-            'Заявки на подбор мебели (sourcing): pendingReview, inProgress, completed, cancelled.',
+            'Заявки на подбор мебели (sourcing): pendingReview, inProgress. Опционально from/to (ISO).',
+          parameters: {
+            type: 'object',
+            properties: {
+              from: { type: 'string' },
+              to: { type: 'string' },
+            },
+            additionalProperties: false,
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'get_sourcing_chat_unread_summary',
+          description:
+            'Непрочитанные сообщения клиентов в чатах заявок на подбор (sourcing) для текущего сотрудника.',
           parameters: {
             type: 'object',
             properties: {},
+            additionalProperties: false,
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'list_sourcing_requests',
+          description:
+            'Список заявок на подбор (чтение). Фильтры: q, bucket (new|active|completed), page, limit, from/to. PII маскируются.',
+          parameters: {
+            type: 'object',
+            properties: {
+              q: { type: 'string' },
+              bucket: { type: 'string' },
+              page: { type: 'integer' },
+              limit: { type: 'integer', description: '1–50' },
+              from: { type: 'string' },
+              to: { type: 'string' },
+            },
+            additionalProperties: false,
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'funnel_lite',
+          description:
+            'Воронка заказов: counts по каждому OrderStatus + buckets new/active/completed/other. Опционально from/to (ISO, по createdAt). Без DRAFT.',
+          parameters: {
+            type: 'object',
+            properties: {
+              from: { type: 'string' },
+              to: { type: 'string' },
+            },
             additionalProperties: false,
           },
         },
@@ -126,12 +218,41 @@ export class AssistantToolsService {
       {
         type: 'function',
         function: {
+          name: 'content_gaps',
+          description:
+            'Гигиена каталога: noModifications, noVariants, activeEmpty, elementEmptyPool, compositeIncomplete.',
+          parameters: {
+            type: 'object',
+            properties: {},
+            additionalProperties: false,
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
           name: 'get_qa_pending_summary',
           description:
             'Очередь модерации Q&A: publicQaPending, correspondenceAwaitingPublish, топ товаров по pending (до 5).',
           parameters: {
             type: 'object',
             properties: {},
+            additionalProperties: false,
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'get_qa_unread_summary',
+          description:
+            'Непрочитанные Q&A-сообщения для текущего сотрудника (не очередь модерации). Опционально from/to.',
+          parameters: {
+            type: 'object',
+            properties: {
+              from: { type: 'string' },
+              to: { type: 'string' },
+            },
             additionalProperties: false,
           },
         },
@@ -152,7 +273,21 @@ export class AssistantToolsService {
         type: 'function',
         function: {
           name: 'get_partner_applications_pending',
-          description: 'Сколько заявок «Стать партнёром» ждут рассмотрения.',
+          description:
+            'Сколько заявок «Стать партнёром» ждут рассмотрения (вступление в программу). НЕ выплаты.',
+          parameters: {
+            type: 'object',
+            properties: {},
+            additionalProperties: false,
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'get_partner_rewards_pending_summary',
+          description:
+            'Невыплаченные реферальные начисления (ReferralReward PENDING/INVOICED). Для вопросов про выплаты.',
           parameters: {
             type: 'object',
             properties: {},
@@ -211,8 +346,12 @@ export class AssistantToolsService {
     args: Record<string, unknown>,
     acl?: AssistantToolAcl,
   ): Promise<unknown> {
+    const from = optionalIso(args.from);
+    const to = optionalIso(args.to);
+    const period = from && to ? { from, to } : undefined;
+
     if (name === 'get_orders_dashboard') {
-      const overview = await this.orders.getDashboardStatusSummaryForAdmin();
+      const overview = await this.orders.getDashboardStatusSummaryForAdmin(period);
       return {
         ...overview,
         adminLinks: {
@@ -234,6 +373,7 @@ export class AssistantToolsService {
         undefined,
         bucket,
         acl?.staffId,
+        period,
       );
       return {
         total: result.total,
@@ -256,11 +396,78 @@ export class AssistantToolsService {
       };
     }
 
+    if (name === 'get_orders_chat_unread_summary') {
+      if (!acl?.staffId) return { error: 'Нет контекста staff' };
+      const summary = await this.orderChat.unreadCustomerChatSummaryForAdminBuckets(
+        acl.staffId,
+      );
+      return {
+        ...summary,
+        adminLink: '/admin/orders',
+      };
+    }
+
     if (name === 'get_sourcing_summary') {
-      const summary = await this.sourcing.getDashboardStatusSummaryForAdmin();
+      const summary = await this.sourcing.getDashboardStatusSummaryForAdmin(period);
       return {
         ...summary,
         adminLink: '/admin/orders/sourcing',
+      };
+    }
+
+    if (name === 'get_sourcing_chat_unread_summary') {
+      if (!acl?.staffId) return { error: 'Нет контекста staff' };
+      const summary =
+        await this.orderChat.unreadSourcingCustomerChatSummaryForAdminBuckets(
+          acl.staffId,
+        );
+      return {
+        ...summary,
+        adminLink: '/admin/orders/sourcing',
+      };
+    }
+
+    if (name === 'list_sourcing_requests') {
+      const page = clampInt(args.page, 1, 1, 100);
+      const limit = clampInt(args.limit, 20, 1, 50);
+      const q = typeof args.q === 'string' ? args.q : undefined;
+      const bucket = typeof args.bucket === 'string' ? args.bucket : undefined;
+      const result = await this.sourcing.findManyForAdmin(
+        page,
+        limit,
+        q,
+        undefined,
+        bucket,
+        acl?.staffId,
+        period,
+      );
+      return {
+        total: result.total,
+        page: result.page,
+        limit: result.limit,
+        adminLink: '/admin/orders/sourcing',
+        items: result.items.map((r) => ({
+          id: r.id,
+          title: r.title,
+          deliveryCity: r.deliveryCity,
+          status: r.status,
+          createdAt: r.createdAt,
+          unreadCustomerChatCount: r.unreadCustomerChatCount,
+          hasChatMessages: r.hasChatMessages,
+          itemCount: r.items?.length ?? 0,
+          email: maskEmail(r.user?.email),
+          phone: maskPhone(r.user?.phone),
+          customerName: maskName(profileDisplayName(r.user?.profile)),
+          adminLink: `/admin/orders/sourcing/${r.id}`,
+        })),
+      };
+    }
+
+    if (name === 'funnel_lite') {
+      const funnel = await this.orders.getStatusFunnelForAdmin(period);
+      return {
+        ...funnel,
+        adminLink: '/admin/orders',
       };
     }
 
@@ -298,6 +505,21 @@ export class AssistantToolsService {
       };
     }
 
+    if (name === 'content_gaps') {
+      const summary = await this.catalogAdmin.getDashboardCatalogSummary();
+      return {
+        ...summary,
+        adminLink: '/admin/catalog/products',
+        hygieneLinks: {
+          noModifications: '/admin/catalog/products?hygiene=no_modifications',
+          noVariants: '/admin/catalog/products?hygiene=no_variants',
+          activeEmpty: '/admin/catalog/products?hygiene=active_empty',
+          elementEmptyPool: '/admin/catalog/products?hygiene=element_empty_pool',
+          compositeIncomplete: '/admin/catalog/products?hygiene=composite_incomplete',
+        },
+      };
+    }
+
     if (name === 'get_qa_pending_summary') {
       if (!acl?.staffId) {
         return { error: 'Нет контекста staff для Q&A' };
@@ -321,6 +543,21 @@ export class AssistantToolsService {
       };
     }
 
+    if (name === 'get_qa_unread_summary') {
+      if (!acl?.staffId) {
+        return { error: 'Нет контекста staff для Q&A' };
+      }
+      const summary = await this.productQa.getStaffQaUnreadSummary(
+        acl.staffId,
+        acl.staffRole,
+        period,
+      );
+      return {
+        ...summary,
+        adminLink: '/admin/catalog/qa-queue',
+      };
+    }
+
     if (name === 'get_signup_summary') {
       const summary = await this.users.getDashboardSignupSummaryForAdmin();
       return {
@@ -334,6 +571,18 @@ export class AssistantToolsService {
       return {
         ...pending,
         adminLink: '/admin/applications',
+      };
+    }
+
+    if (name === 'get_partner_rewards_pending_summary') {
+      const summary =
+        await this.referrals.getAdminPartnerRewardsPendingSummary();
+      return {
+        ...summary,
+        adminLinks: {
+          applicationsPayouts: '/admin/applications',
+          referralsPayouts: '/admin/referrals',
+        },
       };
     }
 

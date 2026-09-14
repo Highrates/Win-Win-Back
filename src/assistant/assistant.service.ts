@@ -16,6 +16,7 @@ import {
   dbHistoryToModelMessages,
   isAssistantUiHistoryMessage,
 } from './assistant-history';
+import { assistantLanguageHint } from './assistant-language';
 import { staffCanUseAssistantTool } from './assistant-tool-acl';
 import { AssistantToolsService } from './assistant-tools.service';
 import { GptunnelClient, type GptMessage, type GptUsage } from './gptunnel.client';
@@ -228,6 +229,10 @@ export class AssistantService {
       ASSISTANT_SYSTEM_PROMPT,
       history,
     );
+    const langHint = assistantLanguageHint(trimmed);
+    if (langHint) {
+      messages.splice(1, 0, { role: 'system', content: langHint });
+    }
 
     const toolDefs = this.tools.listToolDefs(acl);
     let finalText = '';

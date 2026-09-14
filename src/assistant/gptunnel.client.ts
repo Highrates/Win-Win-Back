@@ -94,6 +94,29 @@ function parseUsage(
   };
 }
 
+function isObfuscationErrorMessage(msg: string): boolean {
+  const m = msg.toLowerCase();
+  return (
+    m.includes('obfuscation rejected') ||
+    m.includes('obfuscation failed') ||
+    m.includes('failed to extract entities') ||
+    m.includes('already borrowed')
+  );
+}
+
+function gptunnelErrorMessage(e: unknown): string {
+  if (e instanceof ServiceUnavailableException) {
+    const res = e.getResponse();
+    if (typeof res === 'string') return res;
+    if (res && typeof res === 'object' && 'message' in res) {
+      const msg = (res as { message?: unknown }).message;
+      if (typeof msg === 'string') return msg;
+      if (Array.isArray(msg)) return msg.join('; ');
+    }
+  }
+  return e instanceof Error ? e.message : String(e);
+}
+
 @Injectable()
 export class GptunnelClient {
   private readonly logger = new Logger(GptunnelClient.name);
@@ -109,6 +132,13 @@ export class GptunnelClient {
     const n = raw ? Number(raw) : NaN;
     if (!Number.isFinite(n) || n < 64) return ASSISTANT_DEFAULT_MAX_TOKENS;
     return Math.min(16_384, Math.trunc(n));
+  }
+
+  /** Default from ASSISTANT_OBFUSCATE (true unless 0/false/off/no). */
+  get obfuscateDefault(): boolean {
+    const raw = this.config.get<string>('ASSISTANT_OBFUSCATE')?.trim().toLowerCase();
+    if (!raw) return true;
+    return !(raw === '0' || raw === 'false' || raw === 'off' || raw === 'no');
   }
 
   private get apiKey(): string {
@@ -134,13 +164,14 @@ export class GptunnelClient {
     tools?: GptToolDef[];
     temperature?: number;
     stream: boolean;
+    obfuscate: boolean;
   }): Record<string, unknown> {
     const body: Record<string, unknown> = {
       model: this.model,
       messages: opts.messages,
       temperature: opts.temperature ?? 0.2,
       max_tokens: this.maxTokens,
-      obfuscate: true,
+      obfuscate: opts.obfuscate,
       stream: opts.stream,
     };
     if (opts.stream) {
@@ -153,14 +184,13 @@ export class GptunnelClient {
     return body;
   }
 
-  async chatCompletions(opts: {
+  private async chatCompletionsOnce(opts: {
     messages: GptMessage[];
     tools?: GptToolDef[];
     temperature?: number;
     signal?: AbortSignal;
+    obfuscate: boolean;
   }): Promise<{ message: GptMessage; usage: GptUsage | null }> {
-    this.assertConfigured();
-
     const res = await fetch(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -193,6 +223,31 @@ export class GptunnelClient {
     return { message, usage: parseUsage(json.usage) };
   }
 
+  async chatCompletions(opts: {
+    messages: GptMessage[];
+    tools?: GptToolDef[];
+    temperature?: number;
+    signal?: AbortSignal;
+  }): Promise<{ message: GptMessage; usage: GptUsage | null }> {
+    this.assertConfigured();
+    const wantObfuscate = this.obfuscateDefault;
+    try {
+      return await this.chatCompletionsOnce({ ...opts, obfuscate: wantObfuscate });
+    } catch (e) {
+      if (
+        wantObfuscate &&
+        !opts.signal?.aborted &&
+        isObfuscationErrorMessage(gptunnelErrorMessage(e))
+      ) {
+        this.logger.warn(
+          'GPTunnel obfuscation failed; retrying once without obfuscate',
+        );
+        return await this.chatCompletionsOnce({ ...opts, obfuscate: false });
+      }
+      throw e;
+    }
+  }
+
   /** Real token stream from GPTunnel (OpenAI SSE). Yields content deltas, usage, then final message. */
   async *streamChatCompletions(opts: {
     messages: GptMessage[];
@@ -201,7 +256,33 @@ export class GptunnelClient {
     signal?: AbortSignal;
   }): AsyncGenerator<GptStreamEvent> {
     this.assertConfigured();
+    const wantObfuscate = this.obfuscateDefault;
 
+    try {
+      yield* this.streamChatCompletionsOnce({ ...opts, obfuscate: wantObfuscate });
+    } catch (e) {
+      if (
+        wantObfuscate &&
+        !opts.signal?.aborted &&
+        isObfuscationErrorMessage(gptunnelErrorMessage(e))
+      ) {
+        this.logger.warn(
+          'GPTunnel obfuscation failed on stream; retrying once without obfuscate',
+        );
+        yield* this.streamChatCompletionsOnce({ ...opts, obfuscate: false });
+        return;
+      }
+      throw e;
+    }
+  }
+
+  private async *streamChatCompletionsOnce(opts: {
+    messages: GptMessage[];
+    tools?: GptToolDef[];
+    temperature?: number;
+    signal?: AbortSignal;
+    obfuscate: boolean;
+  }): AsyncGenerator<GptStreamEvent> {
     const res = await fetch(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {

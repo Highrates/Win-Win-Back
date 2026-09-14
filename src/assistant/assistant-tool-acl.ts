@@ -7,11 +7,19 @@ import type { AdminSectionId } from '@win-win/admin-sections';
 export const ASSISTANT_TOOL_SECTIONS: Record<string, AdminSectionId | AdminSectionId[]> = {
   get_orders_dashboard: 'dashboard',
   list_orders: 'orders',
+  get_orders_chat_unread_summary: 'orders',
   get_sourcing_summary: 'orders',
+  get_sourcing_chat_unread_summary: 'orders',
+  list_sourcing_requests: 'orders',
+  funnel_lite: ['dashboard', 'orders'],
   search_products: 'catalog',
+  content_gaps: 'catalog',
   get_qa_pending_summary: 'catalog',
+  get_qa_unread_summary: 'catalog',
   get_signup_summary: 'clients',
   get_partner_applications_pending: 'applications',
+  /** Начисления ReferralReward; UI выплат — applications + referrals (settings). */
+  get_partner_rewards_pending_summary: ['applications', 'settings'],
 };
 
 export function staffCanUseAssistantTool(
