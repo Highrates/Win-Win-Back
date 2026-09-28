@@ -8,13 +8,23 @@ import { ConfigService } from '@nestjs/config';
 import {
   CopyObjectCommand,
   DeleteObjectCommand,
+  GetObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
 import { randomBytes } from 'crypto';
-import { copyFile, mkdir, readdir, unlink, writeFile } from 'fs/promises';
-import { dirname, join } from 'path';
+import { createReadStream } from 'fs';
+import { copyFile, mkdir, readdir, stat, unlink, writeFile } from 'fs/promises';
+import { dirname, join, resolve, sep } from 'path';
+import { Readable } from 'stream';
+import { isPrivateObjectKey } from './private-objects';
+
+export type StoredObjectStream = {
+  body: Readable;
+  contentType: string | null;
+  contentLength: number | null;
+};
 
 const MAX_BYTES = 6 * 1024 * 1024;
 /** Аватар / обложка в ЛК (сжатие на клиенте; Multer согласован с этим). */
@@ -63,10 +73,13 @@ export class ObjectStorageService {
   private readonly logger = new Logger(ObjectStorageService.name);
   private readonly s3Client: S3Client | null;
   private readonly s3Bucket: string | undefined;
+  /** Bucket без публичного доступа для персональных файлов (см. `isPrivateObjectKey`). */
+  private readonly s3PrivateBucket: string | undefined;
   private readonly s3PublicBase: string | undefined;
 
   constructor(private readonly config: ConfigService) {
     this.s3Bucket = this.config.get<string>('S3_BUCKET')?.trim() || undefined;
+    this.s3PrivateBucket = this.config.get<string>('S3_PRIVATE_BUCKET')?.trim() || undefined;
     const accessKey =
       this.config.get<string>('S3_ACCESS_KEY_ID')?.trim() ||
       this.config.get<string>('AWS_ACCESS_KEY_ID')?.trim();
@@ -86,6 +99,11 @@ export class ObjectStorageService {
         credentials: { accessKeyId: accessKey, secretAccessKey: secret },
         forcePathStyle: forcePath,
       });
+      if (!this.s3PrivateBucket) {
+        this.logger.warn(
+          'S3_PRIVATE_BUCKET не задан — вложения чатов и заявок сохраняются в публичный bucket и доступны по прямой ссылке',
+        );
+      }
     } else {
       this.s3Client = null;
       if (!this.isS3Ready()) {
@@ -98,6 +116,16 @@ export class ObjectStorageService {
 
   isS3Ready(): boolean {
     return this.s3Client !== null && !!this.s3Bucket && !!this.s3PublicBase;
+  }
+
+  /** Bucket для ключа: персональные файлы — в приватный (если задан), остальное — в публичный. */
+  private bucketForKey(key: string): string {
+    return this.s3PrivateBucket && isPrivateObjectKey(key) ? this.s3PrivateBucket : this.s3Bucket!;
+  }
+
+  /** Старые персональные файлы могли остаться в публичном bucket до переноса (scripts/migrate-private-objects.ts). */
+  private legacyBucketForKey(key: string): string | null {
+    return this.s3PrivateBucket && isPrivateObjectKey(key) ? this.s3Bucket! : null;
   }
 
   /** Локальные файлы: явно LOCAL_UPLOADS_ENABLED=1 или dev при отсутствии S3 */
@@ -202,6 +230,7 @@ export class ObjectStorageService {
 
   /**
    * Обратное к getPublicUrlForKey: извлечь ключ объекта из публичного URL нашего хранилища.
+   * Для персональных файлов такой URL — только ссылка на объект в БД, публично он не открывается.
    */
   tryPublicUrlToKey(url: string): string | null {
     const u = url.trim();
@@ -227,7 +256,7 @@ export class ObjectStorageService {
       do {
         const out = await this.s3Client!.send(
           new ListObjectsV2Command({
-            Bucket: this.s3Bucket!,
+            Bucket: this.bucketForKey(`${normalized}/`),
             Prefix: normalized,
             ContinuationToken,
           }),
@@ -262,12 +291,55 @@ export class ObjectStorageService {
     return [];
   }
 
+  /** Поток объекта для отдачи через API (приватное скачивание); null — объекта нет. */
+  async openObjectStream(key: string): Promise<StoredObjectStream | null> {
+    const k = key.replace(/^\/+/, '');
+    if (this.isS3Ready()) {
+      const fromBucket = async (bucket: string): Promise<StoredObjectStream | null> => {
+        try {
+          const out = await this.s3Client!.send(new GetObjectCommand({ Bucket: bucket, Key: k }));
+          if (!out.Body || !(out.Body instanceof Readable)) return null;
+          return {
+            body: out.Body,
+            contentType: out.ContentType ?? null,
+            contentLength: typeof out.ContentLength === 'number' ? out.ContentLength : null,
+          };
+        } catch (e) {
+          const name = (e as { name?: string }).name;
+          if (name === 'NoSuchKey' || name === 'NotFound') return null;
+          throw e;
+        }
+      };
+      const found = await fromBucket(this.bucketForKey(k));
+      if (found) return found;
+      const legacy = this.legacyBucketForKey(k);
+      return legacy ? fromBucket(legacy) : null;
+    }
+    if (this.usesLocalDisk()) {
+      const root = resolve(this.localUploadRoot());
+      const full = resolve(root, k);
+      if (!full.startsWith(root + sep)) return null;
+      try {
+        const st = await stat(full);
+        if (!st.isFile()) return null;
+        return { body: createReadStream(full), contentType: null, contentLength: st.size };
+      } catch {
+        return null;
+      }
+    }
+    throw new ServiceUnavailableException('Хранилище не настроено');
+  }
+
   async removeObjectKey(key: string): Promise<void> {
     const k = key.replace(/^\/+/, '');
     if (this.isS3Ready()) {
       await this.s3Client!.send(
-        new DeleteObjectCommand({ Bucket: this.s3Bucket!, Key: k }),
+        new DeleteObjectCommand({ Bucket: this.bucketForKey(k), Key: k }),
       );
+      const legacy = this.legacyBucketForKey(k);
+      if (legacy) {
+        await this.s3Client!.send(new DeleteObjectCommand({ Bucket: legacy, Key: k }));
+      }
       return;
     }
     if (this.usesLocalDisk()) {
@@ -288,9 +360,9 @@ export class ObjectStorageService {
     if (this.isS3Ready()) {
       await this.s3Client!.send(
         new CopyObjectCommand({
-          Bucket: this.s3Bucket!,
+          Bucket: this.bucketForKey(to),
           Key: to,
-          CopySource: `${this.s3Bucket}/${from}`,
+          CopySource: `${this.bucketForKey(from)}/${from}`,
         }),
       );
       return;
@@ -350,7 +422,7 @@ export class ObjectStorageService {
     if (this.isS3Ready()) {
       await this.s3Client!.send(
         new PutObjectCommand({
-          Bucket: this.s3Bucket!,
+          Bucket: this.bucketForKey(key),
           Key: key,
           Body: buffer,
           ContentType: contentType,

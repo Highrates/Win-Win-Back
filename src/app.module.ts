@@ -14,6 +14,8 @@ import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { CatalogModule } from './modules/catalog/catalog.module';
 import { OrderChatModule } from './modules/order-chat/order-chat.module';
+import { AccountDocumentsModule } from './modules/account-documents/account-documents.module';
+import { PrivateFilesModule } from './modules/private-files/private-files.module';
 import { OrdersModule } from './modules/orders/orders.module';
 import { CollectionsModule } from './modules/collections/collections.module';
 import { ReferralsModule } from './modules/referrals/referrals.module';
@@ -58,6 +60,8 @@ import { TurnstileCaptchaModule } from './common/turnstile/turnstile-captcha.mod
     CatalogModule,
     ProductQaModule,
     OrderChatModule,
+    AccountDocumentsModule,
+    PrivateFilesModule,
     StaffModule,
     OrdersModule,
     CollectionsModule,

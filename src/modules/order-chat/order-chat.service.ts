@@ -18,9 +18,11 @@ import {
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ObjectStorageService } from '../storage/object-storage.service';
+import { isInlineStoredFile } from '../storage/stored-file';
 import { MailService } from '../auth/mail.service';
 import { StaffAccessService } from '../staff/staff-access.service';
-import type { PostOrderChatMessageDto } from './dto/order-chat.dto';
+import { documentSearchName, isNonMediaDocument } from '../account-documents/document-fields';
+import type { OrderChatAttachmentRefDto, PostOrderChatMessageDto } from './dto/order-chat.dto';
 import type {
   OrderChatMessageOut,
   OrderChatRealtimeEmitter,
@@ -144,6 +146,21 @@ export class OrderChatService {
     } as const;
   }
 
+  private attachmentCreateData(a: OrderChatAttachmentRefDto, ownerUserId: string | null, createdAt: Date) {
+    const filename = decodeUploadOriginalName(a.filename).slice(0, 512);
+    const mimeType = a.mimeType?.slice(0, 128) ?? null;
+    return {
+      fileUrl: a.fileUrl,
+      filename,
+      mimeType,
+      kind: a.kind,
+      ownerUserId,
+      createdAt,
+      isDocument: a.kind === ChatAttachmentKind.FILE && isNonMediaDocument(mimeType, filename),
+      searchName: documentSearchName(filename),
+    };
+  }
+
   private mapMessage(m: {
     id: string;
     conversationId: string;
@@ -186,10 +203,10 @@ export class OrderChatService {
         ? []
         : m.attachments.map((a) => ({
             id: a.id,
-            fileUrl: a.fileUrl,
             filename: a.filename,
             mimeType: a.mimeType,
             kind: a.kind,
+            inline: isInlineStoredFile(a.mimeType, a.filename),
           })),
     };
   }
@@ -332,20 +349,20 @@ export class OrderChatService {
       throw new ForbiddenException('Срок хранения переписки истёк');
     }
 
+    const ownerUserId =
+      att.length === 0 || authorRole === ChatMessageAuthorRole.CUSTOMER
+        ? jwtUserId
+        : ((await this.prisma.order.findUnique({ where: { id: orderId }, select: { userId: true } }))?.userId ??
+          null);
+    const createdAt = new Date();
     const row = await this.prisma.chatMessage.create({
       data: {
         conversationId: conv.id,
         authorUserId: jwtUserId,
         authorRole,
         body,
-        attachments: {
-          create: att.map((a) => ({
-            fileUrl: a.fileUrl,
-            filename: decodeUploadOriginalName(a.filename).slice(0, 512),
-            mimeType: a.mimeType?.slice(0, 128) ?? null,
-            kind: a.kind,
-          })),
-        },
+        createdAt,
+        attachments: { create: att.map((a) => this.attachmentCreateData(a, ownerUserId, createdAt)) },
       },
       include: {
         attachments: true,
@@ -1157,20 +1174,24 @@ export class OrderChatService {
       throw new ForbiddenException('Срок хранения переписки истёк');
     }
 
+    const ownerUserId =
+      att.length === 0 || authorRole === ChatMessageAuthorRole.CUSTOMER
+        ? jwtUserId
+        : ((
+            await this.prisma.sourcingRequest.findUnique({
+              where: { id: sourcingRequestId },
+              select: { userId: true },
+            })
+          )?.userId ?? null);
+    const createdAt = new Date();
     const row = await this.prisma.chatMessage.create({
       data: {
         conversationId: conv.id,
         authorUserId: jwtUserId,
         authorRole,
         body,
-        attachments: {
-          create: att.map((a) => ({
-            fileUrl: a.fileUrl,
-            filename: decodeUploadOriginalName(a.filename).slice(0, 512),
-            mimeType: a.mimeType?.slice(0, 128) ?? null,
-            kind: a.kind,
-          })),
-        },
+        createdAt,
+        attachments: { create: att.map((a) => this.attachmentCreateData(a, ownerUserId, createdAt)) },
       },
       include: {
         attachments: true,

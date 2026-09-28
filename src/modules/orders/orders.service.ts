@@ -401,6 +401,9 @@ export class OrdersService {
     if (status === OrderStatus.DRAFT) {
       throw new BadRequestException('Нельзя перевести заказ в статус «Черновик»');
     }
+    if (documentUrls) {
+      await this.syncOrderDocuments(orderId, documentUrls);
+    }
     if (prev.status === status) {
       const existing = await this.prisma.order.findUnique({
         where: { id: orderId },
@@ -411,7 +414,7 @@ export class OrdersService {
     }
     const order = await this.prisma.order.update({
       where: { id: orderId },
-      data: { status, documentUrls: documentUrls ?? undefined },
+      data: { status },
       include: { items: { include: { product: true } } },
     });
     await this.audit.log({
@@ -437,6 +440,39 @@ export class OrdersService {
     }
     await this.orderChat.onOrderStatusChanged(order.id, order.status);
     return order;
+  }
+
+  /**
+   * `{ kind: url }`: пустой url удаляет документ; uploadedAt ставится только при новом/изменённом url.
+   */
+  private async syncOrderDocuments(orderId: string, documentUrls: Record<string, string>) {
+    const existing = await this.prisma.orderDocument.findMany({
+      where: { orderId },
+      select: { kind: true, url: true },
+    });
+    const urlByKind = new Map(existing.map((d) => [d.kind, d.url]));
+    const ops: Prisma.PrismaPromise<unknown>[] = [];
+    for (const [rawKind, rawUrl] of Object.entries(documentUrls)) {
+      const kind = rawKind.trim();
+      if (!kind) continue;
+      const url = typeof rawUrl === 'string' ? rawUrl.trim() : '';
+      const prevUrl = urlByKind.get(kind);
+      if (!url) {
+        if (prevUrl !== undefined) {
+          ops.push(this.prisma.orderDocument.delete({ where: { orderId_kind: { orderId, kind } } }));
+        }
+        continue;
+      }
+      if (prevUrl === url) continue;
+      ops.push(
+        this.prisma.orderDocument.upsert({
+          where: { orderId_kind: { orderId, kind } },
+          create: { orderId, kind, url },
+          update: { url, uploadedAt: new Date() },
+        }),
+      );
+    }
+    if (ops.length) await this.prisma.$transaction(ops);
   }
 
   /** Удаление заказа на согласовании (отмена заявки до начала работы). */

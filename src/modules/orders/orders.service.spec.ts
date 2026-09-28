@@ -15,6 +15,12 @@ function buildService() {
     chatConversation: {
       findMany: vi.fn(async () => []),
     },
+    orderDocument: {
+      findMany: vi.fn(async () => [] as { kind: string; url: string }[]),
+      upsert: vi.fn((args: unknown) => ({ op: 'upsert', args })),
+      delete: vi.fn((args: unknown) => ({ op: 'delete', args })),
+    },
+    $transaction: vi.fn(async (ops: unknown[]) => ops),
   };
   const audit = { log: vi.fn(async () => undefined) };
   const mail = { sendOrderSubmittedStaff: vi.fn(async () => undefined) };
@@ -87,6 +93,42 @@ describe('OrdersService.updateStatus', () => {
       }),
     );
     expect(orderChat.onOrderStatusChanged).toHaveBeenCalledWith('ord1', OrderStatus.COMPLETED);
+  });
+
+  it('documentUrls: дата загрузки меняется только у нового/изменённого файла, пустой url удаляет', async () => {
+    const { service, prisma } = buildService();
+    prisma.order.findUnique
+      .mockResolvedValueOnce({ status: OrderStatus.PAID })
+      .mockResolvedValueOnce({ id: 'ord1', status: OrderStatus.PAID, items: [] });
+    prisma.orderDocument.findMany.mockResolvedValue([
+      { kind: 'invoice', url: 'https://s3/inv.pdf' },
+      { kind: 'act', url: 'https://s3/act-old.pdf' },
+      { kind: 'waybill', url: 'https://s3/wb.pdf' },
+    ]);
+
+    await service.updateStatus('ord1', OrderStatus.PAID, {
+      invoice: 'https://s3/inv.pdf',
+      act: 'https://s3/act-new.pdf',
+      waybill: '',
+      contract: 'https://s3/contract.pdf',
+    });
+
+    expect(prisma.orderDocument.upsert).toHaveBeenCalledTimes(2);
+    expect(prisma.orderDocument.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { orderId_kind: { orderId: 'ord1', kind: 'act' } },
+        update: { url: 'https://s3/act-new.pdf', uploadedAt: expect.any(Date) },
+      }),
+    );
+    expect(prisma.orderDocument.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: { orderId: 'ord1', kind: 'contract', url: 'https://s3/contract.pdf' },
+      }),
+    );
+    expect(prisma.orderDocument.delete).toHaveBeenCalledWith({
+      where: { orderId_kind: { orderId: 'ord1', kind: 'waybill' } },
+    });
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
   });
 
   it('неизвестный заказ → NotFoundException', async () => {

@@ -16,6 +16,7 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
     "prisma:seed": "prisma db seed",
+    "storage:migrate-private": "ts-node --compiler-options '{\"module\":\"CommonJS\"}' scripts/migrate-private-objects.ts",
     "meili:reindex": "ts-node --compiler-options '{\"module\":\"CommonJS\"}' scripts/reindex-products-meilisearch.ts",
     "catalog:seed-v1": "ts-node --compiler-options '{\"module\":\"CommonJS\"}' scripts/catalog/seed-catalog-v1-categories.ts",
     "catalog:seed-tags": "ts-node --compiler-options '{\"module\":\"CommonJS\"}' scripts/catalog/seed-catalog-tags.ts",

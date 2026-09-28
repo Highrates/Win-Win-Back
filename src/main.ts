@@ -1,12 +1,13 @@
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
-import { json, urlencoded } from 'express';
+import { json, urlencoded, type NextFunction, type Request, type Response } from 'express';
 import { mkdirSync } from 'fs';
 import { join } from 'path';
 import { AppModule } from './app.module';
 import { ConfigService } from '@nestjs/config';
 import { assertProductionAuthSecrets } from './config/resolve-secret';
+import { isPrivateObjectKey } from './modules/storage/private-objects';
 
 function repoRootDir(): string {
   const cwd = process.cwd().replace(/\/+$/, '');
@@ -54,6 +55,14 @@ async function bootstrap() {
       config.get<string>('LOCAL_UPLOADS_DIR')?.trim() ||
       join(backendRootDir(), '.data', 'local-uploads');
     mkdirSync(localDir, { recursive: true });
+    // Вложения чатов и заявок — только через GET /files/:ref с проверкой доступа.
+    app.use('/uploads', (req: Request, res: Response, next: NextFunction) => {
+      if (isPrivateObjectKey(req.path)) {
+        res.status(404).end();
+        return;
+      }
+      next();
+    });
     app.useStaticAssets(localDir, { prefix: '/uploads/' });
   }
 

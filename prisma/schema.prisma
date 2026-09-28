@@ -126,8 +126,17 @@ model ChatAttachment {
   filename  String
   mimeType  String?
   kind      ChatAttachmentKind @default(FILE)
+  /// Покупатель — владелец заказа / заявки переписки (для ленты «Документы» без джойнов).
+  ownerUserId String?
+  /// Файл-документ (не изображение / видео / аудио) — попадает в «Документы».
+  isDocument  Boolean  @default(false)
+  /// Имя файла для поиска: нижний регистр, ё → е.
+  searchName  String   @default("")
+  /// Совпадает с createdAt сообщения.
+  createdAt   DateTime @default(now())
 
   @@index([messageId])
+  @@index([ownerUserId, isDocument, createdAt(sort: Desc), id(sort: Desc)])
 }
 
 model ChatReadState {
@@ -1018,8 +1027,6 @@ model Order {
   customerName    String? @db.Text
   /// Адрес доставки
   deliveryAddress String? @db.Text
-  // Документы загружаются вручную — ссылки на файлы
-  documentUrls Json?    // { "invoice": "...", "act": "...", "waybill": "..." }
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   /// Последняя просмотренная клиентом версия опубликованного КП (1+). Новая публикация выше этого номера даёт «непрочитано» в ЛК.
@@ -1033,8 +1040,25 @@ model Order {
   buyerDesignerBonusProfileSnapshot   DesignerBonusProfile?   @relation("OrderBuyerDesignerBonusSnapshot", fields: [buyerDesignerBonusProfileIdSnapshot], references: [id], onDelete: SetNull)
 
   items OrderItem[]
+  documents OrderDocument[]
   chatConversation ChatConversation?
   commercialProposals CommercialProposal[]
+
+  @@index([userId, status])
+}
+
+/// Документы заказа, прикреплённые менеджером (счёт, акт, накладная…). Один документ на вид.
+model OrderDocument {
+  id         String   @id @default(cuid())
+  orderId    String
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  /// Вид: invoice, act, waybill, contract, upd или произвольный ключ.
+  kind       String
+  url        String   @db.Text
+  /// Дата загрузки текущей версии файла; не меняется при правках заказа.
+  uploadedAt DateTime @default(now())
+
+  @@unique([orderId, kind])
 }
 
 enum OrderStatus {
@@ -1237,8 +1261,14 @@ model SourcingRequestAttachment {
   filename  String
   mimeType  String?
   sortOrder Int             @default(0)
+  /// Файл-документ (не изображение / видео / аудио) — попадает в «Документы».
+  isDocument Boolean        @default(false)
+  /// Имя файла для поиска: нижний регистр, ё → е.
+  searchName String         @default("")
+  /// Когда файл приложен (дата в ленте «Документы»).
+  createdAt  DateTime       @default(now())
 
-  @@index([requestId])
+  @@index([requestId, isDocument])
 }
 
 // --- Коллекции (личные, шаринг по ссылке) ---

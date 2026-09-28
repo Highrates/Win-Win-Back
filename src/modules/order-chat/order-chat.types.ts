@@ -1,11 +1,13 @@
 import type { ChatAttachmentKind, ChatMessageAuthorRole } from '@prisma/client';
 
+/** Без адреса хранилища: файл открывается по `chat:<id>` через GET /files/:ref. */
 export type OrderChatAttachmentOut = {
   id: string;
-  fileUrl: string;
   filename: string;
   mimeType: string | null;
   kind: ChatAttachmentKind;
+  /** Откроется в браузере (PDF, текст, картинки); иначе скачается. */
+  inline: boolean;
 };
 
 export type OrderChatMessageOut = {

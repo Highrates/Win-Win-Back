@@ -14,6 +14,8 @@ type PreviewMeta = {
   preview: string;
   authorRole: ProductQaAuthorRole | null;
   lastAt: Date;
+  /** Хотя бы одна переписка (или публичный тред) заканчивается сообщением покупателя. */
+  awaitingStaffReply: boolean;
 };
 
 export type ListChatProductsOpts = {
@@ -100,7 +102,7 @@ export class ProductQaChatProductsService {
         lastMessagePreview: preview?.preview ?? '',
         publicQaPending: pending?.publicQaPending ?? 0,
         correspondenceAwaitingPublish: pending?.correspondenceAwaitingPublish ?? 0,
-        awaitingStaffReply: preview?.authorRole === ProductQaAuthorRole.USER,
+        awaitingStaffReply: preview?.awaitingStaffReply ?? false,
       };
     });
 
@@ -164,8 +166,13 @@ export class ProductQaChatProductsService {
       authorRole: ProductQaAuthorRole | null,
     ) => {
       const existing = byProduct.get(productId);
-      if (existing && existing.lastAt >= lastAt) return;
-      byProduct.set(productId, { lastAt, preview, authorRole });
+      const awaitingStaffReply =
+        (existing?.awaitingStaffReply ?? false) || authorRole === ProductQaAuthorRole.USER;
+      if (existing && existing.lastAt >= lastAt) {
+        existing.awaitingStaffReply = awaitingStaffReply;
+        return;
+      }
+      byProduct.set(productId, { lastAt, preview, authorRole, awaitingStaffReply });
     };
 
     for (const row of correspondences) {

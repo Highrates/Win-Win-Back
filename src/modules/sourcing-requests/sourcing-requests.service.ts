@@ -13,6 +13,8 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { MailService } from '../auth/mail.service';
 import { ObjectStorageService } from '../storage/object-storage.service';
+import { isInlineStoredFile } from '../storage/stored-file';
+import { documentSearchName, isNonMediaDocument } from '../account-documents/document-fields';
 import { OrderChatService } from '../order-chat/order-chat.service';
 import { assertSourcingStatusTransition } from './sourcing-status.constants';
 import { adminBucketStatuses, userScopeStatuses, resolveSourcingProductStoredName } from '@win-win/sourcing-request';
@@ -224,6 +226,8 @@ export class SourcingRequestsService {
               filename: att.filename,
               mimeType: att.mimeType,
               sortOrder: att.sortOrder,
+              isDocument: isNonMediaDocument(att.mimeType, att.filename),
+              searchName: documentSearchName(att.filename),
             },
           });
         }
@@ -591,9 +595,9 @@ export class SourcingRequestsService {
       })),
       attachments: row.attachments.map((a) => ({
         id: a.id,
-        url: a.url,
         filename: a.filename,
         mimeType: a.mimeType,
+        inline: isInlineStoredFile(a.mimeType, a.filename),
       })),
     };
   }
@@ -719,9 +723,9 @@ export class SourcingRequestsService {
       })),
       attachments: row.attachments.map((a) => ({
         id: a.id,
-        url: a.url,
         filename: a.filename,
         mimeType: a.mimeType,
+        inline: isInlineStoredFile(a.mimeType, a.filename),
       })),
     };
   }

@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Param,
   Patch,
@@ -9,12 +10,14 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { ProductQaAuthorRole } from '@prisma/client';
 import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../../common/decorators/current-user.decorator';
 import { PostProductQaMessageDto } from '../product-qa/dto/product-qa.dto';
 import { PRODUCT_QA_POST_THROTTLE } from '../product-qa/product-qa.constants';
+import { productQaAuthorRoleFromJwt } from '../product-qa/product-qa-auth.util';
 import { EditProductCorrespondenceMessageBodyDto } from './dto/product-correspondence.dto';
 import { ProductCorrespondenceService } from './product-correspondence.service';
 
@@ -50,6 +53,9 @@ export class ProductCorrespondencePublicController {
     @Param('slug') slug: string,
     @Body() dto: PostProductQaMessageDto,
   ) {
+    if (productQaAuthorRoleFromJwt(user.role) !== ProductQaAuthorRole.USER) {
+      throw new ForbiddenException('Ответы staff — только через private correspondence в админке');
+    }
     return this.correspondence.postBySlug(slug, user.sub, user.role, dto);
   }
 

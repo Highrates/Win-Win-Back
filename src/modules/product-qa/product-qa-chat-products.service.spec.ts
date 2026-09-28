@@ -64,6 +64,51 @@ describe('ProductQaChatProductsService', () => {
     );
   });
 
+  it('keeps awaitingStaffReply while any customer thread ends with a USER message', async () => {
+    const olderAt = new Date('2026-08-10T12:00:00.000Z');
+    const newerAt = new Date('2026-08-11T12:00:00.000Z');
+    prisma.product.findMany.mockResolvedValue([
+      { id: 'p1', slug: 'chair', name: 'Стул', lastChatActivityAt: newerAt, images: [] },
+    ]);
+    prisma.productCorrespondence.findMany.mockResolvedValue([
+      {
+        productId: 'p1',
+        lastMessageAt: olderAt,
+        messages: [{ body: 'Вопрос A', authorRole: ProductQaAuthorRole.USER, createdAt: olderAt }],
+      },
+      {
+        productId: 'p1',
+        lastMessageAt: newerAt,
+        messages: [{ body: 'Ответ B', authorRole: ProductQaAuthorRole.STAFF, createdAt: newerAt }],
+      },
+    ]);
+    prisma.$queryRaw.mockResolvedValue([]);
+
+    const out = await service.listChatProducts('staff', 'ADMIN', { limit: 10 });
+
+    expect(out.items[0]?.lastMessagePreview).toBe('Ответ B');
+    expect(out.items[0]?.awaitingStaffReply).toBe(true);
+  });
+
+  it('clears awaitingStaffReply when every thread ends with a STAFF message', async () => {
+    const at = new Date('2026-08-10T12:00:00.000Z');
+    prisma.product.findMany.mockResolvedValue([
+      { id: 'p1', slug: 'chair', name: 'Стул', lastChatActivityAt: at, images: [] },
+    ]);
+    prisma.productCorrespondence.findMany.mockResolvedValue([
+      {
+        productId: 'p1',
+        lastMessageAt: at,
+        messages: [{ body: 'Ответ', authorRole: ProductQaAuthorRole.STAFF, createdAt: at }],
+      },
+    ]);
+    prisma.$queryRaw.mockResolvedValue([]);
+
+    const out = await service.listChatProducts('staff', 'ADMIN', { limit: 10 });
+
+    expect(out.items[0]?.awaitingStaffReply).toBe(false);
+  });
+
   it('passes cursor filter to product query', async () => {
     prisma.product.findMany.mockResolvedValue([]);
     prisma.productCorrespondence.findMany.mockResolvedValue([]);
