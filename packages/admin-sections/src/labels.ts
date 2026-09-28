@@ -41,6 +41,7 @@ const NAV_EXTRA_RU: Record<Exclude<AdminNavLabelKey, AdminSectionId>, string> = 
   userGroups: 'Группы пользователей',
   referrals: 'Реферальная программа',
   site: 'Настройки сайта',
+  emailNotifications: 'Email-уведомления',
 };
 
 const NAV_EXTRA_ZH: Record<Exclude<AdminNavLabelKey, AdminSectionId>, string> = {
@@ -55,6 +56,7 @@ const NAV_EXTRA_ZH: Record<Exclude<AdminNavLabelKey, AdminSectionId>, string> = 
   userGroups: '用户组',
   referrals: '推荐计划',
   site: '网站设置',
+  emailNotifications: '邮件通知',
 };
 
 export function adminSectionLabel(

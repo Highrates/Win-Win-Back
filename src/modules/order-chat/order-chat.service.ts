@@ -764,11 +764,8 @@ export class OrderChatService {
   }
 
   private async resolveStaffNotifyEmails(): Promise<string[]> {
-    const raw = this.config.get<string>('ORDER_CHAT_STAFF_EMAIL')?.trim();
-    if (raw) {
-      return [...new Set(raw.split(/[,;]/).map((s) => s.trim()).filter(Boolean))];
-    }
-    return this.staffAccess.listOrderNotifyStaffEmails();
+    const { emails } = await this.staffAccess.resolveOrderNotifyRecipients(this.config.get<string>('ORDER_CHAT_STAFF_EMAIL'));
+    return emails;
   }
 
   /** Перед удалением заказа: файлы вложений чата из S3 (БД удалит сообщения каскадом). */
@@ -1394,6 +1391,7 @@ export class OrderChatService {
         orderId: sourcingRequestId,
         snippet,
         adminOrderUrl: `${frontBase}/admin/orders/sourcing/${sourcingRequestId}`,
+        kind: 'sourcing',
       });
       return;
     }
@@ -1406,6 +1404,7 @@ export class OrderChatService {
       orderDisplayId: shortId,
       snippet,
       accountOrdersUrl: `${frontBase}/account/orders?tab=work`,
+      kind: 'sourcing',
     });
   }
 }

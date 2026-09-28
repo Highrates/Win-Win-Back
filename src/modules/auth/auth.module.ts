@@ -43,6 +43,14 @@ import { InviteClaimService } from './invite-claim.service';
     PasswordResetService,
   ],
   controllers: [AuthController],
-  exports: [AuthService, AccountContactService, DesignerInviteService, InviteClaimService, MailService, JwtModule],
+  exports: [
+    AuthService,
+    AccountContactService,
+    DesignerInviteService,
+    InviteClaimService,
+    MailService,
+    AuthRateLimitService,
+    JwtModule,
+  ],
 })
 export class AuthModule {}

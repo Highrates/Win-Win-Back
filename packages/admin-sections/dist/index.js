@@ -19,3 +19,4 @@ __exportStar(require("./labels"), exports);
 __exportStar(require("./api-paths"), exports);
 __exportStar(require("./pathnames"), exports);
 __exportStar(require("./nav-manifest"), exports);
+__exportStar(require("./email-notifications"), exports);

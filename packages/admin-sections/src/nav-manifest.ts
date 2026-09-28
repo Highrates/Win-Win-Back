@@ -15,7 +15,8 @@ export type AdminNavLabelKey =
   | 'staff'
   | 'userGroups'
   | 'referrals'
-  | 'site';
+  | 'site'
+  | 'emailNotifications';
 
 export type AdminNavChild = {
   href: string;
@@ -117,6 +118,7 @@ export const ADMIN_NAV_MANIFEST = {
         activeMatch: 'referrals',
       },
       { href: '/admin/settings/site', labelKey: 'site', section: 'settings' },
+      { href: '/admin/settings/email-notifications', labelKey: 'emailNotifications', section: 'settings' },
     ] satisfies readonly AdminNavChild[],
   },
 } as const;

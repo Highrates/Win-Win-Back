@@ -99,7 +99,7 @@ export class AccountContactService {
     });
 
     try {
-      await this.mail.sendRegistrationOtp(newEmail, code);
+      await this.mail.sendRegistrationOtp(newEmail, code, 'change-email');
     } catch (e) {
       await this.prisma.accountContactChallenge.delete({ where: { id: challenge.id } }).catch(() => {});
       this.logger.error(`accountContact startEmail: ${formatMailSendError(e)}`);

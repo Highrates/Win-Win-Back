@@ -77,6 +77,17 @@ describe('StaffAccessService', () => {
     ]);
   });
 
+  it('resolveOrderNotifyRecipients prefers ORDER_CHAT_STAFF_EMAIL, falls back to staff', async () => {
+    expect(await svc.resolveOrderNotifyRecipients(' a@test; b@test ,a@test ')).toEqual({
+      emails: ['a@test', 'b@test'],
+      source: 'env',
+    });
+    expect(prisma.user.findMany).not.toHaveBeenCalled();
+
+    prisma.user.findMany.mockResolvedValue([{ email: 'admin@test' }]);
+    expect(await svc.resolveOrderNotifyRecipients('  ')).toEqual({ emails: ['admin@test'], source: 'staff' });
+  });
+
   it('listOrderNotifyStaffEmails returns admin and moderators with orders', async () => {
     prisma.user.findMany.mockResolvedValue([
       { email: ' admin@test ' },

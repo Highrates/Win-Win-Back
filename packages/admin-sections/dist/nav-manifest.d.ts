@@ -1,7 +1,7 @@
 import type { AdminSectionId } from './constants';
 /** Раздел или pseudo-раздел «staff» (только суперадмин). */
 export type AdminNavAccessSection = AdminSectionId | 'staff';
-export type AdminNavLabelKey = AdminSectionId | 'products' | 'categories' | 'collections' | 'contextTags' | 'productSets' | 'questions' | 'pricing' | 'staff' | 'userGroups' | 'referrals' | 'site';
+export type AdminNavLabelKey = AdminSectionId | 'products' | 'categories' | 'collections' | 'contextTags' | 'productSets' | 'questions' | 'pricing' | 'staff' | 'userGroups' | 'referrals' | 'site' | 'emailNotifications';
 export type AdminNavChild = {
     href: string;
     labelKey: AdminNavLabelKey;
@@ -117,6 +117,11 @@ export declare const ADMIN_NAV_MANIFEST: {
         } | {
             href: string;
             labelKey: "site";
+            section: "settings";
+            activeMatch?: undefined;
+        } | {
+            href: string;
+            labelKey: "emailNotifications";
             section: "settings";
             activeMatch?: undefined;
         })[];

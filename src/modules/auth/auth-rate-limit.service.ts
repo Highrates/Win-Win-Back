@@ -13,7 +13,7 @@ const TOO_MANY =
 export class AuthRateLimitService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async consumeSlot(bucketKey: string, maxPerWindow: number, windowMs: number): Promise<void> {
+  async consumeSlot(bucketKey: string, maxPerWindow: number, windowMs: number, tooManyMessage = TOO_MANY): Promise<void> {
     const key = bucketKey.trim().slice(0, 191);
     if (!key) return;
 
@@ -43,7 +43,7 @@ export class AuthRateLimitService {
     });
 
     if ((row?.count ?? 0) > maxPerWindow) {
-      throw new HttpException(TOO_MANY, HttpStatus.TOO_MANY_REQUESTS);
+      throw new HttpException(tooManyMessage, HttpStatus.TOO_MANY_REQUESTS);
     }
   }
 }

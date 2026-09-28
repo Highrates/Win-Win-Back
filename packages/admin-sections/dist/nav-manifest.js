@@ -69,6 +69,7 @@ exports.ADMIN_NAV_MANIFEST = {
                 activeMatch: 'referrals',
             },
             { href: '/admin/settings/site', labelKey: 'site', section: 'settings' },
+            { href: '/admin/settings/email-notifications', labelKey: 'emailNotifications', section: 'settings' },
         ],
     },
 };

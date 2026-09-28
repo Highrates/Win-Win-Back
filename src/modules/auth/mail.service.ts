@@ -3,20 +3,36 @@ import { ConfigService } from '@nestjs/config';
 import { resolve4 } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import * as nodemailer from 'nodemailer';
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
+import {
+  otpCodeMail,
+  passwordResetMail,
+  staffPasswordResetMail,
+  staffWelcomeMail,
+  type ChatEntityKind,
+  type MailContent,
+  type MailContext,
+  type OtpPurpose,
+} from './mail-templates';
+import {
+  EmailNotificationsService,
+  type EmailSendPath,
+} from '../email-notifications/email-notifications.service';
+import {
+  customerGreeting,
+  getEmailNotificationEventDef,
+  type EmailNotificationEventKey,
+  type EmailTemplateVars,
+} from '../email-notifications/email-notification-events';
+import { renderDefaultEmail } from '../email-notifications/email-notification-render';
 
 @Injectable()
 export class MailService {
   private readonly logger = new Logger(MailService.name);
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService,
+    private readonly notifications: EmailNotificationsService,
+  ) {}
 
   /**
    * На VPS без маршрута IPv6 nodemailer может выбрать AAAA → ENETUNREACH (см. 2a00:1450:… для Gmail).
@@ -71,158 +87,20 @@ export class MailService {
     });
   }
 
-  async sendRegistrationOtp(to: string, code: string): Promise<void> {
-    const from = this.config.get<string>('MAIL_FROM')?.trim() || this.config.get<string>('SMTP_USER');
-    if (!from) throw new Error('MAIL_FROM или SMTP_USER нужен для отправки письма');
-
-    const configuredHost = this.config.get<string>('SMTP_HOST')?.trim();
-    if (!configuredHost) {
-      throw new Error('SMTP_HOST, SMTP_USER и SMTP_PASSWORD должны быть заданы для отправки почты');
-    }
-    const endpoint = await this.smtpConnectTarget(configuredHost);
-    const transport = this.transporter(endpoint);
-    await transport.sendMail({
-      from,
-      to,
-      subject: 'Код подтверждения Wupapa',
-      text: `Ваш код подтверждения: ${code}\n\nЕсли вы не регистрировались на Wupapa, проигнорируйте письмо.`,
-      html: `<p>Ваш код подтверждения: <strong>${code}</strong></p><p>Если вы не регистрировались на Wupapa, проигнорируйте письмо.</p>`,
-    });
-    this.logger.log(`Registration OTP email sent to ${to}`);
+  mailContext(): MailContext {
+    const siteUrl =
+      this.config.get<string>('FRONTEND_PUBLIC_URL')?.replace(/\/+$/, '') ||
+      this.config.get<string>('NEXT_PUBLIC_SITE_URL')?.replace(/\/+$/, '') ||
+      'http://localhost:3000';
+    const logoUrl = this.config.get<string>('MAIL_LOGO_URL')?.trim() || `${siteUrl}/email/wupapa-logo.png`;
+    return { siteUrl, logoUrl };
   }
 
-  async sendPasswordResetLink(params: { to: string; resetLink: string }): Promise<void> {
-    const { to, resetLink } = params;
-    const from = this.config.get<string>('MAIL_FROM')?.trim() || this.config.get<string>('SMTP_USER');
-    if (!from) throw new Error('MAIL_FROM или SMTP_USER нужен для отправки письма');
-    const configuredHost = this.config.get<string>('SMTP_HOST')?.trim();
-    if (!configuredHost) {
-      throw new Error('SMTP_HOST, SMTP_USER и SMTP_PASSWORD должны быть заданы для отправки почты');
-    }
-    const endpoint = await this.smtpConnectTarget(configuredHost);
-    const transport = this.transporter(endpoint);
-    const subject = 'Сброс пароля Wupapa';
-    const text = [
-      `Вы запросили сброс пароля на Wupapa.`,
-      ``,
-      `Перейдите по ссылке (действительна 1 час):`,
-      resetLink,
-      ``,
-      `Если вы не запрашивали сброс, проигнорируйте письмо.`,
-    ].join('\n');
-    const html = [
-      `<p>Вы запросили сброс пароля на Wupapa.</p>`,
-      `<p><a href="${resetLink}">Задать новый пароль</a> (ссылка действительна 1 час)</p>`,
-      `<p style="color:#666;font-size:12px">Если вы не запрашивали сброс, проигнорируйте письмо.</p>`,
-    ].join('');
-    await transport.sendMail({ from, to, subject, text, html });
-    this.logger.log(`Password reset email sent to ${to}`);
-  }
-
-  async sendDesignerInvite(params: { to: string; inviteLink: string; inviterLabel: string; refCode: string }): Promise<void> {
-    const { to, inviteLink, inviterLabel, refCode } = params;
-    const from = this.config.get<string>('MAIL_FROM')?.trim() || this.config.get<string>('SMTP_USER');
-    if (!from) throw new Error('MAIL_FROM или SMTP_USER нужен для отправки письма');
-    const configuredHost = this.config.get<string>('SMTP_HOST')?.trim();
-    if (!configuredHost) {
-      throw new Error('SMTP_HOST, SMTP_USER и SMTP_PASSWORD должны быть заданы для отправки почты');
-    }
-    const endpoint = await this.smtpConnectTarget(configuredHost);
-    const transport = this.transporter(endpoint);
-    const subject = 'Приглашение стать партнёром Wupapa';
-    const text = [
-      `${inviterLabel} приглашает вас присоединиться к Wupapa как дизайнер-партнёр.`,
-      ``,
-      `Реферальный номер в приглашении: ${refCode}`,
-      ``,
-      `Перейдите по ссылке (действительна 14 дней):`,
-      inviteLink,
-      ``,
-      `Если вы не ждали это письмо, проигнорируйте его.`,
-    ].join('\n');
-    const html = [
-      `<p><strong>${inviterLabel}</strong> приглашает вас стать партнёром Wupapa.</p>`,
-      `<p>Реферальный номер: <strong>${refCode}</strong></p>`,
-      `<p><a href="${inviteLink}">Перейти к регистрации или входу</a> (ссылка действительна 14 дней)</p>`,
-      `<p style="color:#666;font-size:12px">Если вы не ждали письмо, проигнорируйте.</p>`,
-    ].join('');
-    await transport.sendMail({ from, to, subject, text, html });
-    this.logger.log(`Designer invite email sent to ${to}`);
-  }
-
-  async sendWinWinPartnerApproved(params: { to: string; name: string | null; referralCode: string }): Promise<void> {
-    const { to, name, referralCode } = params;
-    const from = this.config.get<string>('MAIL_FROM')?.trim() || this.config.get<string>('SMTP_USER');
-    if (!from) throw new Error('MAIL_FROM или SMTP_USER нужен для отправки письма');
-    const configuredHost = this.config.get<string>('SMTP_HOST')?.trim();
-    if (!configuredHost) {
-      throw new Error('SMTP_HOST, SMTP_USER и SMTP_PASSWORD должны быть заданы для отправки почты');
-    }
-    const endpoint = await this.smtpConnectTarget(configuredHost);
-    const transport = this.transporter(endpoint);
-    const hello = name?.trim() ? `${name.trim()}, поздравляем!` : 'Поздравляем!';
-    const subject = 'Вы стали партнёром Wupapa';
-    const text = [
-      hello,
-      ``,
-      `Ваш статус на Wupapa изменён: вы стали партнёром.`,
-      `Ваш реферальный номер: ${referralCode}`,
-      ``,
-      `Зайдите в личный кабинет, чтобы пригласить других дизайнеров и отслеживать доход.`,
-    ].join('\n');
-    const html = [
-      `<p><strong>${hello}</strong></p>`,
-      `<p>Ваш статус на Wupapa изменён: вы стали партнёром.</p>`,
-      `<p>Ваш реферальный номер: <strong>${referralCode}</strong></p>`,
-      `<p style="color:#666;font-size:12px">Зайдите в личный кабинет, чтобы пригласить других дизайнеров и отслеживать доход.</p>`,
-    ].join('');
-    await transport.sendMail({ from, to, subject, text, html });
-    this.logger.log(`WinWin partner approved email sent to ${to}`);
-  }
-
-  async sendOrderChatNotifyCustomer(params: {
-    to: string;
-    customerName: string | null;
-    orderDisplayId: string;
-    snippet: string;
-    accountOrdersUrl: string;
-  }): Promise<void> {
-    const { to, customerName, orderDisplayId, snippet, accountOrdersUrl } = params;
-    const from = this.config.get<string>('MAIL_FROM')?.trim() || this.config.get<string>('SMTP_USER');
-    if (!from) throw new Error('MAIL_FROM или SMTP_USER нужен для отправки письма');
-    const configuredHost = this.config.get<string>('SMTP_HOST')?.trim();
-    if (!configuredHost) {
-      throw new Error('SMTP_HOST, SMTP_USER и SMTP_PASSWORD должны быть заданы для отправки почты');
-    }
-    const endpoint = await this.smtpConnectTarget(configuredHost);
-    const transport = this.transporter(endpoint);
-    const hello = customerName?.trim() ? `${customerName.trim()}, ` : '';
-    const subject = `Новое сообщение по заказу ${orderDisplayId} — Wupapa`;
-    const text = [
-      `${hello}вам ответили в чате по заказу ${orderDisplayId}.`,
-      ``,
-      snippet,
-      ``,
-      `Открыть заказы и чат: ${accountOrdersUrl}`,
-    ].join('\n');
-    const html = [
-      `<p>${hello}вам ответили в чате по заказу <strong>${orderDisplayId}</strong>.</p>`,
-      `<blockquote style="margin:12px 0;padding:8px 12px;border-left:3px solid #ccc">${snippet.replace(/</g, '&lt;')}</blockquote>`,
-      `<p><a href="${accountOrdersUrl}">Перейти в личный кабинет → заказы</a></p>`,
-    ].join('');
-    await transport.sendMail({ from, to, subject, text, html });
-    this.logger.log(`Order chat notify (customer) sent to ${to}`);
-  }
-
-  async sendOrderChatNotifyStaff(params: {
-    recipients: string[];
-    orderDisplayId: string;
-    orderId: string;
-    snippet: string;
-    adminOrderUrl: string;
-  }): Promise<void> {
-    const dedup = [...new Set(params.recipients.map((e) => e.trim()).filter(Boolean))];
-    if (!dedup.length) return;
+  /** Первый адрес — в `to`, остальные — в `bcc`, чтобы сотрудники не видели адреса друг друга. */
+  private async deliver(recipients: string | string[], content: MailContent): Promise<number> {
+    const list = Array.isArray(recipients) ? recipients : [recipients];
+    const dedup = [...new Set(list.map((e) => e.trim()).filter(Boolean))];
+    if (!dedup.length) return 0;
     const from = this.config.get<string>('MAIL_FROM')?.trim() || this.config.get<string>('SMTP_USER');
     if (!from) throw new Error('MAIL_FROM или SMTP_USER нужен для отправки письма');
     const configuredHost = this.config.get<string>('SMTP_HOST')?.trim();
@@ -232,28 +110,127 @@ export class MailService {
     const endpoint = await this.smtpConnectTarget(configuredHost);
     const transport = this.transporter(endpoint);
     const [primary, ...bcc] = dedup;
-    const subject = `Новое сообщение в чате заказа ${params.orderDisplayId} — Wupapa`;
-    const text = [
-      `Клиент написал в чат по заказу ${params.orderDisplayId}.`,
-      ``,
-      params.snippet,
-      ``,
-      `Открыть заказ: ${params.adminOrderUrl}`,
-    ].join('\n');
-    const html = [
-      `<p>Клиент написал в чат по заказу <strong>${params.orderDisplayId}</strong>.</p>`,
-      `<blockquote style="margin:12px 0;padding:8px 12px;border-left:3px solid #ccc">${params.snippet.replace(/</g, '&lt;')}</blockquote>`,
-      `<p><a href="${params.adminOrderUrl}">Открыть заказ в админке</a></p>`,
-    ].join('');
     await transport.sendMail({
       from,
       to: primary,
       ...(bcc.length ? { bcc } : {}),
-      subject,
-      text,
-      html,
+      subject: content.subject,
+      text: content.text,
+      html: content.html,
     });
-    this.logger.log(`Order chat notify (staff) sent to ${dedup.length} recipient(s)`);
+    return dedup.length;
+  }
+
+  /**
+   * Письмо по шаблону из админки. Выключено — не отправляем вовсе;
+   * шаблон не загрузился (обычно недоступна БД) — отправляем тексты по умолчанию из реестра.
+   */
+  private async sendNotification(
+    recipients: string | string[],
+    eventKey: EmailNotificationEventKey,
+    vars: EmailTemplateVars,
+  ): Promise<number> {
+    const list = (Array.isArray(recipients) ? recipients : [recipients]).filter((e) => e.trim());
+    if (!list.length) return 0;
+    const ctx = this.mailContext();
+    let content: MailContent | null;
+    let path: EmailSendPath = 'rendered_db';
+    let fallbackReason: string | undefined;
+    try {
+      content = await this.notifications.build(eventKey, vars, ctx);
+    } catch (e) {
+      fallbackReason = e instanceof Error ? e.message : String(e);
+      this.logger.warn(`Шаблон ${eventKey} не загрузился (${fallbackReason}) — отправляем текст по умолчанию`);
+      content = renderDefaultEmail(ctx, getEmailNotificationEventDef(eventKey), vars);
+      path = 'rendered_legacy';
+    }
+    if (!content) {
+      await this.notifications.recordSendPath(eventKey, 'skipped_disabled');
+      this.logger.log(`Email ${eventKey} выключен в админке — не отправляем`);
+      return 0;
+    }
+    try {
+      const sent = await this.deliver(list, content);
+      await this.notifications.recordSendPath(eventKey, path, fallbackReason);
+      return sent;
+    } catch (e) {
+      await this.notifications.recordSendPath(eventKey, 'failed', e instanceof Error ? e.message : String(e));
+      throw e;
+    }
+  }
+
+  /** Тест из редактора уведомлений: тема с пометкой, чтобы не спутать с настоящим письмом. */
+  async sendTest(to: string, content: MailContent): Promise<void> {
+    await this.deliver(to, { ...content, subject: `[тест] ${content.subject}` });
+    this.logger.log(`Test notification email sent to ${to}`);
+  }
+
+  async sendRegistrationOtp(to: string, code: string, purpose: OtpPurpose = 'register'): Promise<void> {
+    await this.deliver(to, otpCodeMail(this.mailContext(), { code, purpose }));
+    this.logger.log(`OTP email (${purpose}) sent to ${to}`);
+  }
+
+  async sendPasswordResetLink(params: { to: string; resetLink: string }): Promise<void> {
+    await this.deliver(params.to, passwordResetMail(this.mailContext(), { resetLink: params.resetLink }));
+    this.logger.log(`Password reset email sent to ${params.to}`);
+  }
+
+  async sendDesignerInvite(params: { to: string; inviteLink: string; inviterLabel: string; refCode: string }): Promise<void> {
+    const sent = await this.sendNotification(params.to, 'designer_invite', {
+      'inviter.name': params.inviterLabel,
+      'invite.ref_code': params.refCode,
+      'invite.url': params.inviteLink,
+      'invite.ttl': '14 дней',
+    });
+    if (sent) this.logger.log(`Designer invite email sent to ${params.to}`);
+  }
+
+  async sendWinWinPartnerApproved(params: { to: string; name: string | null; referralCode: string }): Promise<void> {
+    const sent = await this.sendNotification(params.to, 'partner_approved', {
+      'customer.greeting': customerGreeting(params.name),
+      'partner.ref_code': params.referralCode,
+      'account.url': `${this.mailContext().siteUrl}/account/team`,
+    });
+    if (sent) this.logger.log(`WinWin partner approved email sent to ${params.to}`);
+  }
+
+  async sendOrderChatNotifyCustomer(params: {
+    to: string;
+    customerName: string | null;
+    orderDisplayId: string;
+    snippet: string;
+    accountOrdersUrl: string;
+    kind?: ChatEntityKind;
+  }): Promise<void> {
+    const sourcing = params.kind === 'sourcing';
+    const sent = await this.sendNotification(params.to, sourcing ? 'sourcing_chat_reply' : 'order_chat_reply', {
+      'customer.greeting': customerGreeting(params.customerName),
+      [sourcing ? 'request.id' : 'order.id']: params.orderDisplayId,
+      'chat.snippet': params.snippet,
+      'chat.url': params.accountOrdersUrl,
+    });
+    if (sent) this.logger.log(`Chat notify (customer, ${params.kind ?? 'order'}) sent to ${params.to}`);
+  }
+
+  async sendOrderChatNotifyStaff(params: {
+    recipients: string[];
+    orderDisplayId: string;
+    orderId: string;
+    snippet: string;
+    adminOrderUrl: string;
+    kind?: ChatEntityKind;
+  }): Promise<void> {
+    const sourcing = params.kind === 'sourcing';
+    const sent = await this.sendNotification(
+      params.recipients,
+      sourcing ? 'staff_sourcing_chat_message' : 'staff_order_chat_message',
+      {
+        [sourcing ? 'request.id' : 'order.id']: params.orderDisplayId,
+        'chat.snippet': params.snippet,
+        'admin.url': params.adminOrderUrl,
+      },
+    );
+    if (sent) this.logger.log(`Chat notify (staff, ${params.kind ?? 'order'}) sent to ${sent} recipient(s)`);
   }
 
   /** Уведомление о новой заявке на заказ (отправка на согласование). Те же получатели, что и для чата: `ORDER_CHAT_STAFF_EMAIL`. */
@@ -263,36 +240,12 @@ export class MailService {
     orderId: string;
     adminOrderUrl: string;
   }): Promise<void> {
-    const dedup = [...new Set(params.recipients.map((e) => e.trim()).filter(Boolean))];
-    if (!dedup.length) return;
-    const from = this.config.get<string>('MAIL_FROM')?.trim() || this.config.get<string>('SMTP_USER');
-    if (!from) throw new Error('MAIL_FROM или SMTP_USER нужен для отправки письма');
-    const configuredHost = this.config.get<string>('SMTP_HOST')?.trim();
-    if (!configuredHost) {
-      throw new Error('SMTP_HOST, SMTP_USER и SMTP_PASSWORD должны быть заданы для отправки почты');
-    }
-    const endpoint = await this.smtpConnectTarget(configuredHost);
-    const transport = this.transporter(endpoint);
-    const [primary, ...bcc] = dedup;
-    const subject = `Новая заявка на заказ ${params.orderDisplayId} — Wupapa`;
-    const text = [
-      `Клиент отправил заказ на согласование (заказ ${params.orderDisplayId}).`,
-      ``,
-      `Открыть в админке: ${params.adminOrderUrl}`,
-    ].join('\n');
-    const html = [
-      `<p>Клиент отправил заказ на согласование: <strong>${params.orderDisplayId}</strong>.</p>`,
-      `<p><a href="${params.adminOrderUrl}">Открыть заказ в админке</a></p>`,
-    ].join('');
-    await transport.sendMail({
-      from,
-      to: primary,
-      ...(bcc.length ? { bcc } : {}),
-      subject,
-      text,
-      html,
+    const sent = await this.sendNotification(params.recipients, 'staff_order_submitted', {
+      'order.id': params.orderDisplayId,
+      'order.status': 'На согласовании',
+      'admin.url': params.adminOrderUrl,
     });
-    this.logger.log(`Order pending-approval notify (staff) sent to ${dedup.length} recipient(s)`);
+    if (sent) this.logger.log(`Order pending-approval notify (staff) sent to ${sent} recipient(s)`);
   }
 
   /** Уведомление о новой заявке на подбор. Те же получатели: `ORDER_CHAT_STAFF_EMAIL`. */
@@ -302,39 +255,12 @@ export class MailService {
     requestTitle: string;
     adminSourcingUrl: string;
   }): Promise<void> {
-    const dedup = [...new Set(params.recipients.map((e) => e.trim()).filter(Boolean))];
-    if (!dedup.length) return;
-    const from = this.config.get<string>('MAIL_FROM')?.trim() || this.config.get<string>('SMTP_USER');
-    if (!from) throw new Error('MAIL_FROM или SMTP_USER нужен для отправки письма');
-    const configuredHost = this.config.get<string>('SMTP_HOST')?.trim();
-    if (!configuredHost) {
-      throw new Error('SMTP_HOST, SMTP_USER и SMTP_PASSWORD должны быть заданы для отправки почты');
-    }
-    const endpoint = await this.smtpConnectTarget(configuredHost);
-    const transport = this.transporter(endpoint);
-    const [primary, ...bcc] = dedup;
-    const title = params.requestTitle.trim() || 'Без названия';
-    const subject = `Новая заявка на подбор ${params.requestDisplayId} — Wupapa`;
-    const text = [
-      `Клиент отправил заявку на подбор (${params.requestDisplayId}).`,
-      `Тема: ${title}`,
-      ``,
-      `Открыть в админке: ${params.adminSourcingUrl}`,
-    ].join('\n');
-    const html = [
-      `<p>Клиент отправил заявку на подбор: <strong>${params.requestDisplayId}</strong>.</p>`,
-      `<p>Тема: <strong>${title}</strong></p>`,
-      `<p><a href="${params.adminSourcingUrl}">Открыть заявку в админке</a></p>`,
-    ].join('');
-    await transport.sendMail({
-      from,
-      to: primary,
-      ...(bcc.length ? { bcc } : {}),
-      subject,
-      text,
-      html,
+    const sent = await this.sendNotification(params.recipients, 'staff_sourcing_submitted', {
+      'request.id': params.requestDisplayId,
+      'request.title': params.requestTitle.trim() || 'Без названия',
+      'admin.url': params.adminSourcingUrl,
     });
-    this.logger.log(`Sourcing submit notify (staff) sent to ${dedup.length} recipient(s)`);
+    if (sent) this.logger.log(`Sourcing submit notify (staff) sent to ${sent} recipient(s)`);
   }
 
   /** Новый вопрос покупателя по товару. Получатели: `ORDER_CHAT_STAFF_EMAIL`. */
@@ -347,48 +273,15 @@ export class MailService {
     adminProductUrl: string;
     storefrontUrl: string;
   }): Promise<void> {
-    const dedup = [...new Set(params.recipients.map((e) => e.trim()).filter(Boolean))];
-    if (!dedup.length) return;
-    const from = this.config.get<string>('MAIL_FROM')?.trim() || this.config.get<string>('SMTP_USER');
-    if (!from) throw new Error('MAIL_FROM или SMTP_USER нужен для отправки письма');
-    const configuredHost = this.config.get<string>('SMTP_HOST')?.trim();
-    if (!configuredHost) {
-      throw new Error('SMTP_HOST, SMTP_USER и SMTP_PASSWORD должны быть заданы для отправки почты');
-    }
-    const endpoint = await this.smtpConnectTarget(configuredHost);
-    const transport = this.transporter(endpoint);
-    const [primary, ...bcc] = dedup;
-    const productTitle = escapeHtml(params.productTitle);
-    const topicTitle = escapeHtml(params.topicTitle);
-    const authorLabel = escapeHtml(params.authorLabel);
-    const bodyPreview = escapeHtml(params.bodyPreview);
-    const subject = `Новый вопрос по товару: ${params.productTitle} — Wupapa`;
-    const text = [
-      `Новый вопрос на витрине.`,
-      `Товар: ${params.productTitle}`,
-      `Тема: ${params.topicTitle}`,
-      `Автор: ${params.authorLabel}`,
-      ``,
-      params.bodyPreview,
-      ``,
-      `Админка: ${params.adminProductUrl}`,
-      `Витрина: ${params.storefrontUrl}`,
-    ].join('\n');
-    const html = [
-      `<p>Новый вопрос по товару <strong>${productTitle}</strong>.</p>`,
-      `<p>Тема: <strong>${topicTitle}</strong><br/>Автор: <strong>${authorLabel}</strong></p>`,
-      `<p style="white-space:pre-wrap">${bodyPreview}</p>`,
-      `<p><a href="${params.adminProductUrl}">Открыть в админке</a> · <a href="${params.storefrontUrl}">На витрине</a></p>`,
-    ].join('');
-    await transport.sendMail({
-      from,
-      to: primary,
-      ...(bcc.length ? { bcc } : {}),
-      subject,
-      text,
-      html,
+    const sent = await this.sendNotification(params.recipients, 'staff_product_qa_question', {
+      'product.title': params.productTitle,
+      'qa.topic': params.topicTitle,
+      'qa.author': params.authorLabel,
+      'qa.text': params.bodyPreview,
+      'admin.url': params.adminProductUrl,
+      'product.url': params.storefrontUrl,
     });
-    this.logger.log(`Product QA new question notify (staff) sent to ${dedup.length} recipient(s)`);
+    if (sent) this.logger.log(`Product QA new question notify (staff) sent to ${sent} recipient(s)`);
   }
 
   /** Ответ staff в private correspondence по товару. */
@@ -399,33 +292,13 @@ export class MailService {
     bodyPreview: string;
     accountQuestionsUrl: string;
   }): Promise<void> {
-    const { to, customerName, productTitle, bodyPreview, accountQuestionsUrl } = params;
-    const from = this.config.get<string>('MAIL_FROM')?.trim() || this.config.get<string>('SMTP_USER');
-    if (!from) throw new Error('MAIL_FROM или SMTP_USER нужен для отправки письма');
-    const configuredHost = this.config.get<string>('SMTP_HOST')?.trim();
-    if (!configuredHost) {
-      throw new Error('SMTP_HOST, SMTP_USER и SMTP_PASSWORD должны быть заданы для отправки почты');
-    }
-    const endpoint = await this.smtpConnectTarget(configuredHost);
-    const transport = this.transporter(endpoint);
-    const hello = customerName?.trim() ? `${customerName.trim()}, ` : '';
-    const title = escapeHtml(productTitle);
-    const preview = escapeHtml(bodyPreview);
-    const subject = `Ответ по товару «${productTitle}» — Wupapa`;
-    const text = [
-      `${hello}магазин ответил на ваш вопрос по товару «${productTitle}».`,
-      ``,
-      bodyPreview,
-      ``,
-      `Открыть переписку: ${accountQuestionsUrl}`,
-    ].join('\n');
-    const html = [
-      `<p>${hello}магазин ответил на ваш вопрос по товару <strong>${title}</strong>.</p>`,
-      `<p style="white-space:pre-wrap">${preview}</p>`,
-      `<p><a href="${accountQuestionsUrl}">Перейти в «Мои вопросы»</a></p>`,
-    ].join('');
-    await transport.sendMail({ from, to, subject, text, html });
-    this.logger.log(`Product QA staff reply notify (customer) sent to ${to}`);
+    const sent = await this.sendNotification(params.to, 'product_qa_reply', {
+      'customer.greeting': customerGreeting(params.customerName),
+      'product.title': params.productTitle,
+      'qa.text': params.bodyPreview,
+      'questions.url': params.accountQuestionsUrl,
+    });
+    if (sent) this.logger.log(`Product QA staff reply notify (customer) sent to ${params.to}`);
   }
 
   /** Вопрос покупателя не прошёл модерацию на витрине. */
@@ -436,35 +309,13 @@ export class MailService {
     bodyPreview: string;
     accountQuestionsUrl: string;
   }): Promise<void> {
-    const { to, customerName, productTitle, bodyPreview, accountQuestionsUrl } = params;
-    const from = this.config.get<string>('MAIL_FROM')?.trim() || this.config.get<string>('SMTP_USER');
-    if (!from) throw new Error('MAIL_FROM или SMTP_USER нужен для отправки письма');
-    const configuredHost = this.config.get<string>('SMTP_HOST')?.trim();
-    if (!configuredHost) {
-      throw new Error('SMTP_HOST, SMTP_USER и SMTP_PASSWORD должны быть заданы для отправки почты');
-    }
-    const endpoint = await this.smtpConnectTarget(configuredHost);
-    const transport = this.transporter(endpoint);
-    const hello = customerName?.trim() ? `${customerName.trim()}, ` : '';
-    const title = escapeHtml(productTitle);
-    const preview = escapeHtml(bodyPreview);
-    const subject = `Вопрос по товару «${productTitle}» не опубликован — Wupapa`;
-    const text = [
-      `${hello}к сожалению, ваш вопрос по товару «${productTitle}» не был опубликован на витрине.`,
-      `Вы по-прежнему можете получить ответ в личной переписке с магазином.`,
-      ``,
-      bodyPreview,
-      ``,
-      `Открыть «Мои вопросы»: ${accountQuestionsUrl}`,
-    ].join('\n');
-    const html = [
-      `<p>${hello}к сожалению, ваш вопрос по товару <strong>${title}</strong> не был опубликован на витрине.</p>`,
-      `<p>Вы по-прежнему можете получить ответ в личной переписке с магазином.</p>`,
-      `<p style="white-space:pre-wrap">${preview}</p>`,
-      `<p><a href="${accountQuestionsUrl}">Перейти в «Мои вопросы»</a></p>`,
-    ].join('');
-    await transport.sendMail({ from, to, subject, text, html });
-    this.logger.log(`Product QA reject notify (customer) sent to ${to}`);
+    const sent = await this.sendNotification(params.to, 'product_qa_rejected', {
+      'customer.greeting': customerGreeting(params.customerName),
+      'product.title': params.productTitle,
+      'qa.text': params.bodyPreview,
+      'questions.url': params.accountQuestionsUrl,
+    });
+    if (sent) this.logger.log(`Product QA reject notify (customer) sent to ${params.to}`);
   }
 
   async sendStaffAdminWelcome(params: {
@@ -473,39 +324,8 @@ export class MailService {
     loginUrl: string;
     staffDisplayName?: string | null;
   }): Promise<void> {
-    const { to, password, loginUrl, staffDisplayName } = params;
-    const from = this.config.get<string>('MAIL_FROM')?.trim() || this.config.get<string>('SMTP_USER');
-    if (!from) throw new Error('MAIL_FROM или SMTP_USER нужен для отправки письма');
-    const configuredHost = this.config.get<string>('SMTP_HOST')?.trim();
-    if (!configuredHost) {
-      throw new Error('SMTP_HOST, SMTP_USER и SMTP_PASSWORD должны быть заданы для отправки почты');
-    }
-    const endpoint = await this.smtpConnectTarget(configuredHost);
-    const transport = this.transporter(endpoint);
-    const hello = staffDisplayName?.trim()
-      ? `Здравствуйте, ${staffDisplayName.trim()}!`
-      : 'Здравствуйте!';
-    const subject = 'Доступ в админ-панель Wupapa';
-    const text = [
-      hello,
-      '',
-      'Вам выдан доступ в админ-панель Wupapa.',
-      '',
-      `Страница входа: ${loginUrl}`,
-      `Email для входа: ${to}`,
-      `Пароль: ${password}`,
-      '',
-      'Сохраните пароль в надёжном месте. Если вы не ожидали это письмо, обратитесь к администратору Wupapa.',
-    ].join('\n');
-    const html = [
-      `<p>${hello}</p>`,
-      `<p>Вам выдан доступ в <strong>админ-панель Wupapa</strong>.</p>`,
-      `<p><a href="${loginUrl}">Войти в админку</a></p>`,
-      `<p>Email: <strong>${to}</strong><br/>Пароль: <strong>${password}</strong></p>`,
-      `<p style="color:#666;font-size:12px">Сохраните пароль в надёжном месте. Если вы не ожидали письмо, обратитесь к администратору Wupapa.</p>`,
-    ].join('');
-    await transport.sendMail({ from, to, subject, text, html });
-    this.logger.log(`Staff admin welcome email sent to ${to}`);
+    await this.deliver(params.to, staffWelcomeMail(this.mailContext(), params));
+    this.logger.log(`Staff admin welcome email sent to ${params.to}`);
   }
 
   async sendStaffAdminPasswordReset(params: {
@@ -514,38 +334,7 @@ export class MailService {
     loginUrl: string;
     staffDisplayName?: string | null;
   }): Promise<void> {
-    const { to, password, loginUrl, staffDisplayName } = params;
-    const from = this.config.get<string>('MAIL_FROM')?.trim() || this.config.get<string>('SMTP_USER');
-    if (!from) throw new Error('MAIL_FROM или SMTP_USER нужен для отправки письма');
-    const configuredHost = this.config.get<string>('SMTP_HOST')?.trim();
-    if (!configuredHost) {
-      throw new Error('SMTP_HOST, SMTP_USER и SMTP_PASSWORD должны быть заданы для отправки почты');
-    }
-    const endpoint = await this.smtpConnectTarget(configuredHost);
-    const transport = this.transporter(endpoint);
-    const hello = staffDisplayName?.trim()
-      ? `Здравствуйте, ${staffDisplayName.trim()}!`
-      : 'Здравствуйте!';
-    const subject = 'Новый пароль админ-панели Wupapa';
-    const text = [
-      hello,
-      '',
-      'Администратор сбросил ваш пароль для входа в админ-панель Wupapa.',
-      '',
-      `Страница входа: ${loginUrl}`,
-      `Email для входа: ${to}`,
-      `Новый пароль: ${password}`,
-      '',
-      'Сохраните пароль в надёжном месте. Если вы не ожидали это письмо, обратитесь к администратору Wupapa.',
-    ].join('\n');
-    const html = [
-      `<p>${hello}</p>`,
-      `<p>Администратор сбросил ваш пароль для входа в <strong>админ-панель Wupapa</strong>.</p>`,
-      `<p><a href="${loginUrl}">Войти в админку</a></p>`,
-      `<p>Email: <strong>${to}</strong><br/>Новый пароль: <strong>${password}</strong></p>`,
-      `<p style="color:#666;font-size:12px">Сохраните пароль в надёжном месте. Если вы не ожидали письмо, обратитесь к администратору Wupapa.</p>`,
-    ].join('');
-    await transport.sendMail({ from, to, subject, text, html });
-    this.logger.log(`Staff admin password reset email sent to ${to}`);
+    await this.deliver(params.to, staffPasswordResetMail(this.mailContext(), params));
+    this.logger.log(`Staff admin password reset email sent to ${params.to}`);
   }
 }

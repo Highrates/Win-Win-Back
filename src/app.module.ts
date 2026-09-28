@@ -39,6 +39,8 @@ import { ProductQaModule } from './modules/product-qa/product-qa.module';
 import { StaffModule } from './modules/staff/staff.module';
 import { SearchModule } from './modules/search/search.module';
 import { TurnstileCaptchaModule } from './common/turnstile/turnstile-captcha.module';
+import { EmailNotificationsModule } from './modules/email-notifications/email-notifications.module';
+import { EmailNotificationsAdminModule } from './modules/email-notifications/email-notifications-admin.module';
 
 @Module({
   imports: [
@@ -55,6 +57,7 @@ import { TurnstileCaptchaModule } from './common/turnstile/turnstile-captcha.mod
     PrismaModule,
     TurnstileCaptchaModule,
     MeilisearchModule,
+    EmailNotificationsModule,
     AuthModule,
     UsersModule,
     CatalogModule,
@@ -84,6 +87,7 @@ import { TurnstileCaptchaModule } from './common/turnstile/turnstile-captcha.mod
     SourcingRequestsModule,
     AssistantModule,
     SearchModule,
+    EmailNotificationsAdminModule,
   ],
   providers: [
     {

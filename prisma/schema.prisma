@@ -1759,3 +1759,42 @@ model AssistantAuditEvent {
   @@index([createdAt])
   @@index([kind, createdAt])
 }
+
+/// Редактируемые email-уведомления (админка → Настройки → Email-уведомления).
+/// Реестр событий и тексты по умолчанию — в коде (`email-notification-events.ts`), здесь только правки.
+/// Строка появляется при первой правке или отправке.
+model EmailNotificationTemplate {
+  eventKey           String    @id
+  enabled            Boolean   @default(true)
+  /// NULL — текст по умолчанию из кода
+  subject            String?
+  title              String?
+  body               String?   @db.Text
+  /// rendered_db | rendered_legacy | skipped_disabled | failed
+  lastSendPath       String?
+  lastSendAt         DateTime?
+  /// Последний сбой (rendered_legacy | failed) — не перезаписывается следующей успешной отправкой
+  lastErrorPath      String?
+  lastErrorAt        DateTime?
+  lastErrorMessage   String?
+  lastEditedByUserId String?
+  lastEditedByEmail  String?
+  lastEditedAt       DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+}
+
+/// Снимок шаблона до правки (история в редакторе).
+model EmailNotificationTemplateRevision {
+  id          String   @id @default(cuid())
+  eventKey    String
+  subject     String
+  title       String
+  body        String   @db.Text
+  enabled     Boolean
+  actorUserId String?
+  actorEmail  String?
+  createdAt   DateTime @default(now())
+
+  @@index([eventKey, createdAt])
+}

@@ -144,6 +144,18 @@ export class StaffAccessService {
     return this.canAccessSection(userId, role, 'orders');
   }
 
+  /**
+   * Адресаты служебных писем (чаты, новые заказы и заявки, вопросы о товарах):
+   * `ORDER_CHAT_STAFF_EMAIL` (через запятую / точку с запятой), если задана, иначе админы и модераторы с разделом «Заказы».
+   */
+  async resolveOrderNotifyRecipients(
+    envValue: string | null | undefined,
+  ): Promise<{ emails: string[]; source: 'env' | 'staff' }> {
+    const fromEnv = [...new Set((envValue ?? '').split(/[,;]/).map((s) => s.trim()).filter(Boolean))];
+    if (fromEnv.length) return { emails: fromEnv, source: 'env' };
+    return { emails: await this.listOrderNotifyStaffEmails(), source: 'staff' };
+  }
+
   async listOrderNotifyStaffEmails(): Promise<string[]> {
     const rows = await this.prisma.user.findMany({
       where: {

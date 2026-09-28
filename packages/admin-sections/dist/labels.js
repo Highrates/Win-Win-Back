@@ -41,6 +41,7 @@ const NAV_EXTRA_RU = {
     userGroups: 'Группы пользователей',
     referrals: 'Реферальная программа',
     site: 'Настройки сайта',
+    emailNotifications: 'Email-уведомления',
 };
 const NAV_EXTRA_ZH = {
     products: '商品',
@@ -54,6 +55,7 @@ const NAV_EXTRA_ZH = {
     userGroups: '用户组',
     referrals: '推荐计划',
     site: '网站设置',
+    emailNotifications: '邮件通知',
 };
 function adminSectionLabel(id, locale = 'ru') {
     return locale === 'zh' ? LABELS_ZH[id] : LABELS_RU[id];
