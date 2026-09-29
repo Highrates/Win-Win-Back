@@ -123,7 +123,10 @@ export function buildCasePublicCore(
 ) {
   const pids = parseStringIds(c.productIds, 80);
   const coverUrls = parseCoverUrls(c.coverImageUrls ?? null);
-  const layoutCase = c.coverLayout === '16:9' ? ('16:9' as const) : ('4:3' as const);
+  const layoutCase =
+    c.coverLayout === '16:9' || c.coverLayout === '9:16'
+      ? (c.coverLayout as '16:9' | '9:16')
+      : ('4:3' as const);
   const rawDesc = c.descriptionHtml?.trim() ? c.descriptionHtml.trim() : '';
   const descriptionHtml = rawDesc ? sanitizeProfileAboutHtml(rawDesc) : null;
   return {

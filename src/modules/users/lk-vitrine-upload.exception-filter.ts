@@ -18,6 +18,8 @@ export class LkVitrineUploadExceptionFilter implements ExceptionFilter {
       message = 'Файл обложки не больше 5 МБ';
     } else if (path.includes('/me/profile/rich-media')) {
       message = 'Файл больше 100 МБ';
+    } else if (path.includes('/cases/me/media')) {
+      message = 'Файл больше 100 МБ';
     }
     return res.status(413).type('application/json').json({ statusCode: 413, message });
   }

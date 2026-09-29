@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UploadedFile,
   UseFilters,
   UseGuards,
@@ -18,7 +19,12 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { LkVitrineUploadExceptionFilter } from '../users/lk-vitrine-upload.exception-filter';
-import { AdminPatchCaseLikesBoostDto, CreateMyCaseDto, UpdateMyCaseDto } from './dto/cases.dto';
+import {
+  AdminPatchCaseLikesBoostDto,
+  BulkDeleteMyCasesDto,
+  CreateMyCaseDto,
+  UpdateMyCaseDto,
+} from './dto/cases.dto';
 import { CasesService } from './cases.service';
 
 const LK_CASE_MEDIA_MAX = 100 * 1024 * 1024;
@@ -30,13 +36,18 @@ export class CasesController {
   constructor(private readonly svc: CasesService) {}
 
   @Get('me')
-  listMy(@CurrentUser('sub') userId: string) {
-    return this.svc.listMyCases(userId);
+  listMy(@CurrentUser('sub') userId: string, @Query('q') q?: string) {
+    return this.svc.listMyCases(userId, { q });
   }
 
   @Post('me')
   createMy(@CurrentUser('sub') userId: string, @Body() dto: CreateMyCaseDto) {
     return this.svc.createMyCase(userId, dto);
+  }
+
+  @Post('me/bulk-delete')
+  bulkDeleteMy(@CurrentUser('sub') userId: string, @Body() dto: BulkDeleteMyCasesDto) {
+    return this.svc.bulkDeleteMyCases(userId, dto.ids ?? []);
   }
 
   @Get('me/:id')
@@ -58,11 +69,16 @@ export class CasesController {
     return this.svc.deleteMyCase(userId, id);
   }
 
-  /** S3 upload: обложки и RichBlock (в ту же папку пользователя, что и профиль). */
+  /** S3 upload: обложки (`kind=cover`) и RichBlock (`kind=rich`, по умолчанию). */
   @Post('me/media')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: LK_CASE_MEDIA_MAX } }))
-  uploadMyMedia(@CurrentUser('sub') userId: string, @UploadedFile() file: Express.Multer.File) {
-    return this.svc.uploadMyCaseMedia(userId, file);
+  uploadMyMedia(
+    @CurrentUser('sub') userId: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body('kind') kindRaw?: string,
+  ) {
+    const kind = kindRaw === 'cover' ? 'cover' : 'rich';
+    return this.svc.uploadMyCaseMedia(userId, file, kind);
   }
 
   // ---- Admin ----
@@ -112,4 +128,3 @@ export class CasesController {
     return this.svc.deleteCaseForAdmin(adminUserId, role, id);
   }
 }
-

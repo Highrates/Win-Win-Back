@@ -5,11 +5,21 @@ export type PublicSiteSettingsPayload = {
   heroImageUrls: string[];
   designerServiceOptions: string[];
   caseRoomTypeOptions: string[];
+  designerCityOptions: string[];
 };
 
 @Injectable()
 export class SiteSettingsService {
   constructor(private readonly prisma: PrismaService) {}
+
+  private static parseStringList(raw: unknown, max = 200): string[] {
+    return Array.isArray(raw)
+      ? raw
+          .map((x) => (typeof x === 'string' ? x.trim() : ''))
+          .filter((x) => x.length > 0)
+          .slice(0, max)
+      : [];
+  }
 
   private static parseHeroUrlList(raw: unknown): string[] {
     return Array.isArray(raw)
@@ -19,37 +29,21 @@ export class SiteSettingsService {
       : [];
   }
 
-  private static parseDesignerServices(raw: unknown): string[] {
-    return Array.isArray(raw)
-      ? raw
-          .map((x) => (typeof x === 'string' ? x.trim() : ''))
-          .filter((x) => x.length > 0)
-          .slice(0, 200)
-      : [];
-  }
-
-  private static parseCaseRoomTypes(raw: unknown): string[] {
-    return Array.isArray(raw)
-      ? raw
-          .map((x) => (typeof x === 'string' ? x.trim() : ''))
-          .filter((x) => x.length > 0)
-          .slice(0, 200)
-      : [];
-  }
-
   async getPublic(): Promise<PublicSiteSettingsPayload> {
     try {
       const row = await this.prisma.siteSettings.findUnique({ where: { id: 'site' } });
       return {
         heroImageUrls: SiteSettingsService.parseHeroUrlList(row?.heroImageUrls),
-        designerServiceOptions: SiteSettingsService.parseDesignerServices(row?.designerServiceOptions),
-        caseRoomTypeOptions: SiteSettingsService.parseCaseRoomTypes(row?.caseRoomTypeOptions),
+        designerServiceOptions: SiteSettingsService.parseStringList(row?.designerServiceOptions),
+        caseRoomTypeOptions: SiteSettingsService.parseStringList(row?.caseRoomTypeOptions),
+        designerCityOptions: SiteSettingsService.parseStringList(row?.designerCityOptions),
       };
     } catch {
       return {
         heroImageUrls: [],
         designerServiceOptions: [],
         caseRoomTypeOptions: [],
+        designerCityOptions: [],
       };
     }
   }
@@ -62,6 +56,7 @@ export class SiteSettingsService {
     heroImageUrls?: string[];
     designerServiceOptions?: string[];
     caseRoomTypeOptions?: string[];
+    designerCityOptions?: string[];
   }): Promise<PublicSiteSettingsPayload> {
     const heroImageUrls =
       patch.heroImageUrls === undefined
@@ -74,18 +69,17 @@ export class SiteSettingsService {
     const designerServiceOptions =
       patch.designerServiceOptions === undefined
         ? undefined
-        : patch.designerServiceOptions
-            .map((x) => String(x ?? '').trim())
-            .filter((x) => x.length > 0)
-            .slice(0, 200);
+        : SiteSettingsService.parseStringList(patch.designerServiceOptions);
 
     const caseRoomTypeOptions =
       patch.caseRoomTypeOptions === undefined
         ? undefined
-        : patch.caseRoomTypeOptions
-            .map((x) => String(x ?? '').trim())
-            .filter((x) => x.length > 0)
-            .slice(0, 200);
+        : SiteSettingsService.parseStringList(patch.caseRoomTypeOptions);
+
+    const designerCityOptions =
+      patch.designerCityOptions === undefined
+        ? undefined
+        : SiteSettingsService.parseStringList(patch.designerCityOptions);
 
     try {
       await this.prisma.siteSettings.upsert({
@@ -95,11 +89,13 @@ export class SiteSettingsService {
           heroImageUrls: heroImageUrls ?? [],
           designerServiceOptions: designerServiceOptions !== undefined ? designerServiceOptions : [],
           caseRoomTypeOptions: caseRoomTypeOptions !== undefined ? caseRoomTypeOptions : [],
+          designerCityOptions: designerCityOptions !== undefined ? designerCityOptions : [],
         },
         update: {
           ...(heroImageUrls !== undefined ? { heroImageUrls } : {}),
           ...(designerServiceOptions !== undefined ? { designerServiceOptions } : {}),
           ...(caseRoomTypeOptions !== undefined ? { caseRoomTypeOptions } : {}),
+          ...(designerCityOptions !== undefined ? { designerCityOptions } : {}),
         },
       });
     } catch (e) {

@@ -1643,6 +1643,9 @@ model SiteSettings {
   /// Типы помещений для кейсов дизайнера (массив строк).
   caseRoomTypeOptions Json?
 
+  /// Города для профиля дизайнера (массив строк).
+  designerCityOptions Json?
+
   updatedAt DateTime @updatedAt
 }
 

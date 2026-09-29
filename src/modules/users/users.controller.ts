@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Patch, Post, UploadedFile, UseFilters, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Patch, Post, UploadedFile, UseFilters, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { UsersService } from './users.service';
 import { LkVitrineUploadExceptionFilter } from './lk-vitrine-upload.exception-filter';
@@ -27,6 +27,14 @@ export class UsersController {
   @Get('me')
   me(@CurrentUser('sub') userId: string) {
     return this.usersService.findByIdPublic(userId);
+  }
+
+  /** Мягкое удаление своего аккаунта (как в админке: деактивация + анонимизация). */
+  @Delete('me')
+  @HttpCode(204)
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
+  deleteMe(@CurrentUser('sub') userId: string) {
+    return this.usersService.deleteMyRetailAccount(userId);
   }
 
   @Get('me/profile')

@@ -114,7 +114,10 @@ export class DesignersService {
     return { items, total, page, limit };
   }
 
-  async findBySlug(slug: string) {
+  async findBySlug(slug: string, casesPage = 1, casesLimit = 36, hasProducts = false) {
+    const page = Number.isFinite(casesPage) && casesPage > 0 ? Math.floor(casesPage) : 1;
+    const limit = Math.min(60, Math.max(1, Number.isFinite(casesLimit) ? Math.floor(casesLimit) : 36));
+
     const row = await this.prisma.designer.findFirst({
       where: { slug, ...designerPartnerWhere },
       select: {
@@ -140,9 +143,17 @@ export class DesignersService {
     const rawAbout = prof?.aboutHtml?.trim() ? prof.aboutHtml.trim() : '';
     const aboutHtml = rawAbout ? sanitizeProfileAboutHtml(rawAbout) : null;
 
+    const casesCount = await this.prisma.case.count({ where: { userId: row.userId } });
+    const casesWhere: Prisma.CaseWhereInput = {
+      userId: row.userId,
+      ...(hasProducts ? { caseProducts: { some: {} } } : {}),
+    };
+    const casesTotal = await this.prisma.case.count({ where: casesWhere });
     const caseRows = await this.prisma.case.findMany({
-      where: { userId: row.userId },
+      where: casesWhere,
       orderBy: { createdAt: 'desc' },
+      skip: (page - 1) * limit,
+      take: limit,
       select: {
         id: true,
         title: true,
@@ -168,7 +179,11 @@ export class DesignersService {
       city: prof?.city?.trim() || null,
       servicesLine: servicesLineFromJson(prof?.services ?? null),
       likesDisplayCount: Math.max(0, row.likesUserCount ?? 0),
-      casesCount: caseRows.length,
+      casesCount,
+      casesPage: page,
+      casesLimit: limit,
+      casesTotal,
+      hasProducts: hasProducts || undefined,
       coverLayout: layout,
       coverImageUrls: coverUrls,
       aboutHtml,
@@ -177,17 +192,25 @@ export class DesignersService {
   }
 
   /** Кейсы всех публичных партнёров-дизайнеров (новые сверху) для страницы «Проекты». */
-  async listAllPublicCases(productIdRaw?: string) {
+  async listAllPublicCases(productIdRaw?: string, pageRaw = 1, limitRaw = 48) {
     const productId = productIdRaw?.trim();
-    const caseRows = await this.prisma.case.findMany({
-      where: {
-        ...(productId ? { caseProducts: { some: { productId } } } : {}),
-        user: {
-          designer: { is: { isPublic: true } },
-          profile: { is: { winWinPartnerApproved: true } },
-        },
+    const page = Number.isFinite(pageRaw) && pageRaw > 0 ? Math.floor(pageRaw) : 1;
+    const limit = Math.min(60, Math.max(1, Number.isFinite(limitRaw) ? Math.floor(limitRaw) : 48));
+
+    const where: Prisma.CaseWhereInput = {
+      ...(productId ? { caseProducts: { some: { productId } } } : {}),
+      user: {
+        designer: { is: { isPublic: true } },
+        profile: { is: { winWinPartnerApproved: true } },
       },
+    };
+
+    const total = await this.prisma.case.count({ where });
+    const caseRows = await this.prisma.case.findMany({
+      where,
       orderBy: { createdAt: 'desc' },
+      skip: (page - 1) * limit,
+      take: limit,
       select: {
         id: true,
         title: true,
@@ -225,6 +248,6 @@ export class DesignersService {
         });
       });
 
-    return { items };
+    return { items, total, page, limit };
   }
 }

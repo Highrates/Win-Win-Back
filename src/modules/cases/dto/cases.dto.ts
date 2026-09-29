@@ -43,8 +43,8 @@ export class CreateMyCaseDto {
   descriptionHtml?: string | null;
 
   @IsOptional()
-  @IsIn(['4:3', '16:9'])
-  coverLayout?: '4:3' | '16:9' | null;
+  @IsIn(['4:3', '16:9', '9:16'])
+  coverLayout?: '4:3' | '16:9' | '9:16' | null;
 
   @IsOptional()
   @IsArray()
@@ -101,8 +101,8 @@ export class UpdateMyCaseDto {
   descriptionHtml?: string | null;
 
   @IsOptional()
-  @IsIn(['4:3', '16:9'])
-  coverLayout?: '4:3' | '16:9' | null;
+  @IsIn(['4:3', '16:9', '9:16'])
+  coverLayout?: '4:3' | '16:9' | '9:16' | null;
 
   @IsOptional()
   @IsArray()
@@ -132,4 +132,13 @@ export class AdminPatchCaseLikesBoostDto {
   @Min(0)
   @Max(10_000_000)
   likesAdminBoost!: number;
+}
+
+/** Массовое удаление своих кейсов. */
+export class BulkDeleteMyCasesDto {
+  @IsArray()
+  @ArrayMaxSize(100)
+  @IsString({ each: true })
+  @MinLength(1, { each: true })
+  ids!: string[];
 }

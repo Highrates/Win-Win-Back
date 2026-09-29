@@ -35,6 +35,7 @@ export class SiteSettingsController {
       heroImageUrls: dto.heroImageUrls,
       designerServiceOptions: dto.designerServiceOptions,
       caseRoomTypeOptions: dto.caseRoomTypeOptions,
+      designerCityOptions: dto.designerCityOptions,
     });
   }
 }

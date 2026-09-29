@@ -149,10 +149,22 @@ export class CasesService {
     }
   }
 
-  async listMyCases(userId: string) {
+  async listMyCases(userId: string, opts?: { q?: string }) {
     await this.assertPartnerDesigner(userId);
+    const q = opts?.q?.trim() ?? '';
     return this.prisma.case.findMany({
-      where: { userId },
+      where: {
+        userId,
+        ...(q
+          ? {
+              OR: [
+                { title: { contains: q, mode: 'insensitive' } },
+                { shortDescription: { contains: q, mode: 'insensitive' } },
+                { location: { contains: q, mode: 'insensitive' } },
+              ],
+            }
+          : {}),
+      },
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -173,7 +185,7 @@ export class CasesService {
       year?: number | null;
       budget?: string | null;
       descriptionHtml?: string | null;
-      coverLayout?: '4:3' | '16:9' | null;
+      coverLayout?: '4:3' | '16:9' | '9:16' | null;
       coverImageUrls?: string[] | null;
       roomTypes?: string[] | null;
       productIds?: string[] | null;
@@ -223,7 +235,7 @@ export class CasesService {
       year?: number | null;
       budget?: string | null;
       descriptionHtml?: string | null;
-      coverLayout?: '4:3' | '16:9' | null;
+      coverLayout?: '4:3' | '16:9' | '9:16' | null;
       coverImageUrls?: string[] | null;
       roomTypes?: string[] | null;
       productIds?: string[] | null;
@@ -300,6 +312,31 @@ export class CasesService {
     return { ok: true as const };
   }
 
+  async bulkDeleteMyCases(userId: string, idsRaw: string[]) {
+    await this.assertPartnerDesigner(userId);
+    const ids = [...new Set(idsRaw.map((x) => x.trim()).filter(Boolean))].slice(0, 100);
+    if (!ids.length) throw new BadRequestException('Укажите кейсы для удаления');
+
+    const rows = await this.prisma.case.findMany({
+      where: { userId, id: { in: ids } },
+      select: { id: true, coverImageUrls: true, descriptionHtml: true },
+    });
+    if (!rows.length) return { ok: true as const, deleted: 0 };
+
+    const urls: string[] = [];
+    for (const row of rows) {
+      urls.push(...referencedUrlsFromCase(row));
+      await this.detachCaseProductsBeforeDelete(row.id);
+    }
+    await this.prisma.case.deleteMany({
+      where: { userId, id: { in: rows.map((r) => r.id) } },
+    });
+    for (const u of [...new Set(urls)]) {
+      this.media.tryDeleteObjectByPublicUrlIfUnreferenced(u).catch(() => undefined);
+    }
+    return { ok: true as const, deleted: rows.length };
+  }
+
   private async uploadToUserFolder(userId: string, file: Express.Multer.File) {
     const prof = await this.prisma.userProfile.findUnique({
       where: { userId },
@@ -313,9 +350,17 @@ export class CasesService {
     return { publicUrl: row.publicUrl, mediaObjectId: row.id };
   }
 
-  async uploadMyCaseMedia(userId: string, file: Express.Multer.File) {
+  async uploadMyCaseMedia(
+    userId: string,
+    file: Express.Multer.File,
+    kind: 'cover' | 'rich' = 'rich',
+  ) {
     await this.assertPartnerDesigner(userId);
-    this.media.assertLkProfileRichFile(file);
+    if (kind === 'cover') {
+      this.media.assertLkVitrineImage(file, 'cover');
+    } else {
+      this.media.assertLkProfileRichFile(file);
+    }
     return this.uploadToUserFolder(userId, file);
   }
 

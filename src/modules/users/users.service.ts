@@ -1303,6 +1303,15 @@ export class UsersService {
 
   /** Мягкое удаление клиента: деактивация + анонимизация (заказы и история сохраняются). */
   async deleteRetailUserForAdmin(_actorUserId: string, id: string): Promise<void> {
+    await this.anonymizeAndDeactivateRetailUser(id);
+  }
+
+  /** Самоудаление из ЛК — тот же soft-delete, что и у админа. */
+  async deleteMyRetailAccount(userId: string): Promise<void> {
+    await this.anonymizeAndDeactivateRetailUser(userId);
+  }
+
+  private async anonymizeAndDeactivateRetailUser(id: string): Promise<void> {
     const user = await this.prisma.user.findFirst({
       where: { id, role: UserRole.USER },
       select: { id: true, isActive: true },
