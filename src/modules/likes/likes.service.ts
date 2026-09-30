@@ -278,6 +278,9 @@ export class LikesService {
               profile: { select: { avatarUrl: true } },
             },
           },
+          brand: {
+            select: { slug: true, name: true, logoUrl: true },
+          },
         },
       },
     } as const;
@@ -355,8 +358,16 @@ export class LikesService {
     const caseRowsOnly = caseLikeRows.map((r) => r.case);
     const caseProductById = await buildProductSummaryMapForCases(this.catalog, caseRowsOnly);
     const cases = caseLikeRows.map(({ case: c }) => {
-      const des = c.user.designer;
-      const prof = c.user.profile;
+      const brand = c.brand;
+      if (brand) {
+        return buildCasePublicDto(c, caseProductById, null, {
+          slug: brand.slug,
+          displayName: brand.name,
+          logoUrl: brand.logoUrl,
+        });
+      }
+      const des = c.user?.designer;
+      const prof = c.user?.profile;
       const designerPhoto = des?.photoUrl?.trim() || prof?.avatarUrl?.trim() || null;
       return buildCasePublicDto(c, caseProductById, {
         slug: des?.slug?.trim() ?? '',
@@ -374,7 +385,9 @@ export class LikesService {
         where: { userId: { in: designerUserIds } },
         _count: { _all: true },
       });
-      for (const g of grouped) caseCountsByUserId.set(g.userId, g._count._all);
+      for (const g of grouped) {
+        if (g.userId) caseCountsByUserId.set(g.userId, g._count._all);
+      }
     }
 
     return {

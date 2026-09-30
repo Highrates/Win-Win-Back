@@ -166,6 +166,15 @@ export class CreateBrandAdminDto {
 
   @IsOptional()
   @IsString()
+  catalogPdfUrl?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  siteUrl?: string | null;
+
+  @IsOptional()
+  @IsString()
   seoTitle?: string | null;
 
   @IsOptional()
@@ -218,6 +227,15 @@ export class UpdateBrandAdminDto {
   @IsString()
   @MaxLength(400)
   shortDescription?: string | null;
+
+  @IsOptional()
+  @IsString()
+  catalogPdfUrl?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  siteUrl?: string | null;
 
   @IsOptional()
   @IsString()

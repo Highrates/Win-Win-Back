@@ -3,10 +3,18 @@ import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { enrichProductsWithLikedByMe } from '../../common/utils/enrich-products-liked-by-me';
 import { collectCategoryAndDescendantIds } from '../catalog/category-scope';
+import { CatalogService } from '../catalog/catalog.service';
+import {
+  buildCasePublicDto,
+  buildProductSummaryMapForCases,
+} from '../designers/case-public-dto.builder';
 
 @Injectable()
 export class BrandsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private catalog: CatalogService,
+  ) {}
 
   private async categoryScopeIds(categoryId: string): Promise<string[]> {
     const trimmed = categoryId.trim();
@@ -131,6 +139,78 @@ export class BrandsService {
     });
 
     const productsWithLikes = await enrichProductsWithLikedByMe(this.prisma, products, userId);
-    return { ...brandRest, products: productsWithLikes };
+    const casesCount = await this.prisma.case.count({
+      where: { brandId: row.id, isPublished: true },
+    });
+    return { ...brandRest, products: productsWithLikes, casesCount };
+  }
+
+  /** Публичные проекты брендов для `/projects` (source=brands). */
+  async listPublicCases(opts?: {
+    brandSlug?: string;
+    productId?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const brandSlug = opts?.brandSlug?.trim() || '';
+    const productId = opts?.productId?.trim() || '';
+    const page = Number.isFinite(opts?.page) && (opts?.page ?? 0) > 0 ? Math.floor(opts!.page!) : 1;
+    const limit = Math.min(
+      60,
+      Math.max(1, Number.isFinite(opts?.limit) ? Math.floor(opts!.limit!) : 48),
+    );
+
+    let brandId: string | undefined;
+    if (brandSlug) {
+      const b = await this.prisma.brand.findFirst({
+        where: { slug: brandSlug, isActive: true },
+        select: { id: true },
+      });
+      if (!b) return { items: [], total: 0, page, limit };
+      brandId = b.id;
+    }
+
+    const where: Prisma.CaseWhereInput = {
+      brandId: brandId ? brandId : { not: null },
+      isPublished: true,
+      brand: { is: { isActive: true } },
+      ...(productId ? { caseProducts: { some: { productId } } } : {}),
+    };
+
+    const total = await this.prisma.case.count({ where });
+    const caseRows = await this.prisma.case.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip: (page - 1) * limit,
+      take: limit,
+      select: {
+        id: true,
+        title: true,
+        shortDescription: true,
+        descriptionHtml: true,
+        coverLayout: true,
+        coverImageUrls: true,
+        roomTypes: true,
+        productIds: true,
+        likesUserCount: true,
+        likesAdminBoost: true,
+        brand: {
+          select: { slug: true, name: true, logoUrl: true },
+        },
+      },
+    });
+
+    const productById = await buildProductSummaryMapForCases(this.catalog, caseRows);
+    const items = caseRows
+      .filter((c) => c.brand != null)
+      .map((c) =>
+        buildCasePublicDto(c, productById, null, {
+          slug: c.brand!.slug,
+          displayName: c.brand!.name,
+          logoUrl: c.brand!.logoUrl,
+        }),
+      );
+
+    return { items, total, page, limit };
   }
 }

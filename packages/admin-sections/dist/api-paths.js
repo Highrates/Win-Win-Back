@@ -14,6 +14,8 @@ function resolveAdminSectionFromApiPath(pathOnly) {
         return 'applications';
     if (p.includes('/users/admin'))
         return 'clients';
+    if (p.includes('/cases/admin/brands'))
+        return 'brands';
     if (p.includes('/cases/admin/'))
         return 'clients';
     if (p.includes('/designer-projects/admin'))

@@ -14,6 +14,7 @@ export function resolveAdminSectionFromApiPath(pathOnly: string): AdminApiAccess
   if (p.includes('/users/admin/partner-applications')) return 'applications';
   if (p.includes('/users/admin')) return 'clients';
 
+  if (p.includes('/cases/admin/brands')) return 'brands';
   if (p.includes('/cases/admin/')) return 'clients';
   if (p.includes('/designer-projects/admin')) return 'clients';
 

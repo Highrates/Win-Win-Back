@@ -22,6 +22,7 @@ import { ReferralsModule } from './modules/referrals/referrals.module';
 import { BlogModule } from './modules/blog/blog.module';
 import { BrandsModule } from './modules/brands/brands.module';
 import { DesignersModule } from './modules/designers/designers.module';
+import { ProjectsModule } from './modules/projects/projects.module';
 import { CartModule } from './modules/cart/cart.module';
 import { PagesModule } from './modules/pages/pages.module';
 import { PublicCollectionsModule } from './modules/public-collections/public-collections.module';
@@ -72,6 +73,7 @@ import { EmailNotificationsAdminModule } from './modules/email-notifications/ema
     BlogModule,
     BrandsModule,
     DesignersModule,
+    ProjectsModule,
     CartModule,
     PagesModule,
     PublicCollectionsModule,

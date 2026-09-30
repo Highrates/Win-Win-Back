@@ -81,6 +81,68 @@ export class CasesController {
     return this.svc.uploadMyCaseMedia(userId, file, kind);
   }
 
+  // ---- Admin brand cases (до `admin/:id`, иначе `brands` станет id) ----
+
+  @Get('admin/brands/:brandId/cases')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.MODERATOR)
+  listBrandCasesAdmin(
+    @CurrentUser('sub') adminUserId: string,
+    @CurrentUser('role') role: UserRole,
+    @Param('brandId') brandId: string,
+  ) {
+    return this.svc.listBrandCasesForAdmin(adminUserId, role, brandId);
+  }
+
+  @Post('admin/brands/:brandId/cases')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.MODERATOR)
+  createBrandCaseAdmin(
+    @CurrentUser('sub') adminUserId: string,
+    @CurrentUser('role') role: UserRole,
+    @Param('brandId') brandId: string,
+    @Body() dto: CreateMyCaseDto,
+  ) {
+    return this.svc.createBrandCaseForAdmin(adminUserId, role, brandId, dto);
+  }
+
+  @Get('admin/brands/:brandId/cases/:caseId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.MODERATOR)
+  getBrandCaseAdmin(
+    @CurrentUser('sub') adminUserId: string,
+    @CurrentUser('role') role: UserRole,
+    @Param('brandId') brandId: string,
+    @Param('caseId') caseId: string,
+  ) {
+    return this.svc.getBrandCaseForAdmin(adminUserId, role, brandId, caseId);
+  }
+
+  @Patch('admin/brands/:brandId/cases/:caseId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.MODERATOR)
+  updateBrandCaseAdmin(
+    @CurrentUser('sub') adminUserId: string,
+    @CurrentUser('role') role: UserRole,
+    @Param('brandId') brandId: string,
+    @Param('caseId') caseId: string,
+    @Body() dto: UpdateMyCaseDto,
+  ) {
+    return this.svc.updateBrandCaseForAdmin(adminUserId, role, brandId, caseId, dto);
+  }
+
+  @Delete('admin/brands/:brandId/cases/:caseId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.MODERATOR)
+  deleteBrandCaseAdmin(
+    @CurrentUser('sub') adminUserId: string,
+    @CurrentUser('role') role: UserRole,
+    @Param('brandId') brandId: string,
+    @Param('caseId') caseId: string,
+  ) {
+    return this.svc.deleteBrandCaseForAdmin(adminUserId, role, brandId, caseId);
+  }
+
   // ---- Admin ----
 
   @Get('admin/users/:userId')

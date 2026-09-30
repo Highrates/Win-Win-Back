@@ -92,7 +92,7 @@ export class DesignersService {
         _count: { _all: true },
       });
       for (const g of grouped) {
-        caseCountsByUserId.set(g.userId, g._count._all);
+        if (g.userId) caseCountsByUserId.set(g.userId, g._count._all);
       }
     }
 
@@ -143,9 +143,12 @@ export class DesignersService {
     const rawAbout = prof?.aboutHtml?.trim() ? prof.aboutHtml.trim() : '';
     const aboutHtml = rawAbout ? sanitizeProfileAboutHtml(rawAbout) : null;
 
-    const casesCount = await this.prisma.case.count({ where: { userId: row.userId } });
+    const casesCount = await this.prisma.case.count({
+      where: { userId: row.userId, isPublished: true },
+    });
     const casesWhere: Prisma.CaseWhereInput = {
       userId: row.userId,
+      isPublished: true,
       ...(hasProducts ? { caseProducts: { some: {} } } : {}),
     };
     const casesTotal = await this.prisma.case.count({ where: casesWhere });
@@ -198,6 +201,7 @@ export class DesignersService {
     const limit = Math.min(60, Math.max(1, Number.isFinite(limitRaw) ? Math.floor(limitRaw) : 48));
 
     const where: Prisma.CaseWhereInput = {
+      isPublished: true,
       ...(productId ? { caseProducts: { some: { productId } } } : {}),
       user: {
         designer: { is: { isPublic: true } },
@@ -236,10 +240,10 @@ export class DesignersService {
     const productById = await buildProductSummaryMapForCases(this.catalog, caseRows);
 
     const items = caseRows
-      .filter((c) => c.user.designer != null)
+      .filter((c) => c.user?.designer != null)
       .map((c) => {
-        const des = c.user.designer!;
-        const prof = c.user.profile;
+        const des = c.user!.designer!;
+        const prof = c.user!.profile;
         const designerPhoto = des.photoUrl?.trim() || prof?.avatarUrl?.trim() || null;
         return buildCasePublicDto(c, productById, {
           slug: des.slug,

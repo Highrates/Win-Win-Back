@@ -490,12 +490,15 @@ model UserProfile {
   updatedAt    DateTime  @updatedAt
 }
 
-/// Кейсы дизайнера (создаются в ЛК; доступны только одобренным партнёрам Wupapa).
+/// Кейсы витрины: дизайнер (ЛК) или бренд (админка). Ровно один владелец: userId XOR brandId.
 model Case {
   id String @id @default(cuid())
 
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  brandId String?
+  brand   Brand?  @relation(fields: [brandId], references: [id], onDelete: Cascade)
 
   title            String
   shortDescription String? @db.VarChar(400)
@@ -506,9 +509,9 @@ model Case {
   /// HTML из RichBlock
   descriptionHtml String? @db.Text
 
-  /// Сетка обложки: "4:3" | "16:9"
+  /// Сетка обложки: "4:3" | "16:9" | "9:16"
   coverLayout String?
-  /// URL обложек (1–2 для 4:3, 1 для 16:9)
+  /// URL обложек (1–2 для 4:3, 1 для 16:9 / 9:16)
   coverImageUrls Json?
 
   /// Типы помещений (массив строк, значения из SiteSettings.caseRoomTypeOptions)
@@ -525,10 +528,15 @@ model Case {
   /// Админское «добавление» к публичному счётчику.
   likesAdminBoost Int @default(0)
 
+  /// Публичная витрина: черновики бренд-проектов не попадают на /projects.
+  isPublished Boolean @default(true)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([userId, createdAt(sort: Desc)])
+  @@index([brandId, createdAt(sort: Desc)])
+  @@index([isPublished, createdAt(sort: Desc)])
 }
 
 model ProductLike {
@@ -594,6 +602,8 @@ model Brand {
   /// Превью товара для блока Best Brands на главной (левая колонка)
   productPreviewImageUrl String?
   galleryImageUrls    Json? // до 3 URL доп. изображений (массив строк)
+  /// PDF-каталог бренда (витрина `/brands/[slug]`)
+  catalogPdfUrl       String?
   seoTitle            String?
   seoDescription      String?   @db.Text
   sortOrder   Int       @default(0)
@@ -606,6 +616,8 @@ model Brand {
   curatedProductSets       CuratedProductSet[]
   /// Библиотека материалов бренда (используется в модификациях товаров этого бренда).
   materials BrandMaterial[]
+  /// Проекты бренда на витрине `/projects`.
+  cases Case[]
 }
 
 /// Материал бренда (группа в библиотеке «Материалы → Цвета»).

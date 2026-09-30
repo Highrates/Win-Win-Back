@@ -219,6 +219,7 @@ export class CasesService {
         coverImageUrls: coverImageUrls == null ? Prisma.JsonNull : coverImageUrls,
         roomTypes: roomTypes == null ? Prisma.JsonNull : roomTypes,
         productIds: productIds == null ? Prisma.JsonNull : productIds,
+        isPublished: true,
       },
     });
     await this.syncCaseProductLinks(created.id, productIds ?? []);
@@ -442,6 +443,245 @@ export class CasesService {
       httpMethod: 'DELETE',
       actorUserId: adminUserId,
       metadata: { ownerUserId: row.userId },
+    });
+    for (const u of urls) {
+      this.media.tryDeleteObjectByPublicUrlIfUnreferenced(u).catch(() => undefined);
+    }
+    return { ok: true as const };
+  }
+
+  private caseBodyFromDto(dto: {
+    title?: string;
+    shortDescription?: string | null;
+    location?: string | null;
+    year?: number | null;
+    budget?: string | null;
+    descriptionHtml?: string | null;
+    coverLayout?: '4:3' | '16:9' | '9:16' | null;
+    coverImageUrls?: string[] | null;
+    roomTypes?: string[] | null;
+    productIds?: string[] | null;
+    isPublished?: boolean | null;
+  }): {
+    title?: string;
+    shortDescription?: string | null;
+    location?: string | null;
+    year?: number | null;
+    budget?: string | null;
+    descriptionHtml?: string | null;
+    coverLayout?: string | null;
+    coverImageUrls?: string[] | null;
+    roomTypes?: string[] | null;
+    productIds?: string[] | null;
+    isPublished?: boolean;
+  } {
+    const out: {
+      title?: string;
+      shortDescription?: string | null;
+      location?: string | null;
+      year?: number | null;
+      budget?: string | null;
+      descriptionHtml?: string | null;
+      coverLayout?: string | null;
+      coverImageUrls?: string[] | null;
+      roomTypes?: string[] | null;
+      productIds?: string[] | null;
+      isPublished?: boolean;
+    } = {};
+    if (dto.title !== undefined) {
+      const t = dto.title.trim();
+      if (!t) throw new BadRequestException('Введите название проекта');
+      out.title = t;
+    }
+    if (dto.shortDescription !== undefined) out.shortDescription = dto.shortDescription?.trim() || null;
+    if (dto.location !== undefined) out.location = dto.location?.trim() || null;
+    if (dto.year !== undefined) out.year = dto.year ?? null;
+    if (dto.budget !== undefined) out.budget = dto.budget?.trim() || null;
+    if (dto.coverLayout !== undefined) out.coverLayout = dto.coverLayout ?? null;
+    if (dto.coverImageUrls !== undefined) {
+      out.coverImageUrls = dto.coverImageUrls
+        ? dto.coverImageUrls.map((x) => x.trim()).filter(Boolean)
+        : null;
+    }
+    if (dto.roomTypes !== undefined) {
+      out.roomTypes = dto.roomTypes ? dto.roomTypes.map((x) => x.trim()).filter(Boolean) : null;
+    }
+    if (dto.productIds !== undefined) {
+      out.productIds = dto.productIds ? parseStringArray(dto.productIds, 80) : null;
+    }
+    if (dto.descriptionHtml !== undefined) {
+      out.descriptionHtml =
+        dto.descriptionHtml == null || String(dto.descriptionHtml).trim() === ''
+          ? null
+          : sanitizeProfileAboutHtml(dto.descriptionHtml);
+    }
+    if (dto.isPublished !== undefined && dto.isPublished !== null) {
+      out.isPublished = Boolean(dto.isPublished);
+    }
+    return out;
+  }
+
+  private async assertBrandExists(brandId: string): Promise<void> {
+    const row = await this.prisma.brand.findUnique({ where: { id: brandId }, select: { id: true } });
+    if (!row) throw new NotFoundException('Бренд не найден');
+  }
+
+  async listBrandCasesForAdmin(adminUserId: string, role: UserRole, brandId: string) {
+    await this.staffAccess.assertStaffCanAccessSection(adminUserId, role, 'brands');
+    await this.assertBrandExists(brandId);
+    return this.prisma.case.findMany({
+      where: { brandId },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async getBrandCaseForAdmin(adminUserId: string, role: UserRole, brandId: string, caseId: string) {
+    await this.staffAccess.assertStaffCanAccessSection(adminUserId, role, 'brands');
+    const row = await this.prisma.case.findFirst({ where: { id: caseId, brandId } });
+    if (!row) throw new NotFoundException('Проект не найден');
+    return row;
+  }
+
+  async createBrandCaseForAdmin(
+    adminUserId: string,
+    role: UserRole,
+    brandId: string,
+    dto: {
+      title: string;
+      shortDescription?: string | null;
+      location?: string | null;
+      year?: number | null;
+      budget?: string | null;
+      descriptionHtml?: string | null;
+      coverLayout?: '4:3' | '16:9' | '9:16' | null;
+      coverImageUrls?: string[] | null;
+      roomTypes?: string[] | null;
+      productIds?: string[] | null;
+      isPublished?: boolean | null;
+    },
+  ) {
+    await this.staffAccess.assertStaffCanAccessSection(adminUserId, role, 'brands');
+    await this.assertBrandExists(brandId);
+    const body = this.caseBodyFromDto({ ...dto, title: dto.title });
+    if (!body.title) throw new BadRequestException('Введите название проекта');
+
+    const created = await this.prisma.case.create({
+      data: {
+        brandId,
+        userId: null,
+        title: body.title,
+        shortDescription: body.shortDescription ?? null,
+        location: body.location ?? null,
+        year: body.year ?? null,
+        budget: body.budget ?? null,
+        descriptionHtml: body.descriptionHtml ?? null,
+        coverLayout: body.coverLayout ?? '9:16',
+        coverImageUrls:
+          body.coverImageUrls == null ? Prisma.JsonNull : body.coverImageUrls,
+        roomTypes: body.roomTypes == null ? Prisma.JsonNull : body.roomTypes,
+        productIds: body.productIds == null ? Prisma.JsonNull : body.productIds,
+        isPublished: body.isPublished ?? true,
+      },
+    });
+    await this.syncCaseProductLinks(created.id, body.productIds ?? []);
+    await this.audit.log({
+      action: AuditAction.CREATE,
+      entityType: 'Case',
+      entityId: created.id,
+      path: `/api/v1/cases/admin/brands/${encodeURIComponent(brandId)}/cases`,
+      httpMethod: 'POST',
+      actorUserId: adminUserId,
+      metadata: { brandId },
+    });
+    return created;
+  }
+
+  async updateBrandCaseForAdmin(
+    adminUserId: string,
+    role: UserRole,
+    brandId: string,
+    caseId: string,
+    dto: {
+      title?: string;
+      shortDescription?: string | null;
+      location?: string | null;
+      year?: number | null;
+      budget?: string | null;
+      descriptionHtml?: string | null;
+      coverLayout?: '4:3' | '16:9' | '9:16' | null;
+      coverImageUrls?: string[] | null;
+      roomTypes?: string[] | null;
+      productIds?: string[] | null;
+      isPublished?: boolean | null;
+    },
+  ) {
+    await this.staffAccess.assertStaffCanAccessSection(adminUserId, role, 'brands');
+    const before = await this.prisma.case.findFirst({
+      where: { id: caseId, brandId },
+      select: { id: true, coverImageUrls: true, descriptionHtml: true },
+    });
+    if (!before) throw new NotFoundException('Проект не найден');
+    const beforeUrls = referencedUrlsFromCase(before);
+    const body = this.caseBodyFromDto(dto);
+    const patch: Prisma.CaseUpdateInput = {};
+    if (body.title !== undefined) patch.title = body.title;
+    if (body.shortDescription !== undefined) patch.shortDescription = body.shortDescription;
+    if (body.location !== undefined) patch.location = body.location;
+    if (body.year !== undefined) patch.year = body.year;
+    if (body.budget !== undefined) patch.budget = body.budget;
+    if (body.coverLayout !== undefined) patch.coverLayout = body.coverLayout;
+    if (body.coverImageUrls !== undefined) {
+      patch.coverImageUrls = body.coverImageUrls == null ? Prisma.JsonNull : body.coverImageUrls;
+    }
+    if (body.roomTypes !== undefined) {
+      patch.roomTypes = body.roomTypes == null ? Prisma.JsonNull : body.roomTypes;
+    }
+    if (body.productIds !== undefined) {
+      patch.productIds = body.productIds == null ? Prisma.JsonNull : body.productIds;
+    }
+    if (body.descriptionHtml !== undefined) patch.descriptionHtml = body.descriptionHtml;
+    if (body.isPublished !== undefined) patch.isPublished = body.isPublished;
+
+    const updated = await this.prisma.case.update({ where: { id: caseId }, data: patch });
+    if (body.productIds !== undefined) {
+      await this.syncCaseProductLinks(caseId, body.productIds ?? []);
+    } else {
+      await this.syncCaseProductLinks(caseId, this.parseProductIdsFromCaseJson(updated.productIds));
+    }
+
+    const afterUrls = referencedUrlsFromCase(updated);
+    const afterSet = new Set(afterUrls);
+    for (const u of beforeUrls) {
+      if (!afterSet.has(u)) {
+        this.media.tryDeleteObjectByPublicUrlIfUnreferenced(u).catch(() => undefined);
+      }
+    }
+    return updated;
+  }
+
+  async deleteBrandCaseForAdmin(
+    adminUserId: string,
+    role: UserRole,
+    brandId: string,
+    caseId: string,
+  ) {
+    await this.staffAccess.assertStaffCanAccessSection(adminUserId, role, 'brands');
+    const row = await this.prisma.case.findFirst({
+      where: { id: caseId, brandId },
+      select: { id: true, coverImageUrls: true, descriptionHtml: true },
+    });
+    if (!row) throw new NotFoundException('Проект не найден');
+    const urls = referencedUrlsFromCase(row);
+    await this.detachCaseProductsBeforeDelete(caseId);
+    await this.prisma.case.delete({ where: { id: caseId } });
+    await this.audit.log({
+      action: AuditAction.DELETE,
+      entityType: 'Case',
+      entityId: caseId,
+      path: `/api/v1/cases/admin/brands/${encodeURIComponent(brandId)}/cases/${encodeURIComponent(caseId)}`,
+      httpMethod: 'DELETE',
+      actorUserId: adminUserId,
+      metadata: { brandId },
     });
     for (const u of urls) {
       this.media.tryDeleteObjectByPublicUrlIfUnreferenced(u).catch(() => undefined);

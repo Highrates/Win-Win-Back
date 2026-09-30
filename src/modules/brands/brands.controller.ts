@@ -17,6 +17,23 @@ export class BrandsController {
     return this.brandsService.findAll(categoryId);
   }
 
+  /** Публичные проекты брендов (витрина `/projects`). Выше `:slug`. */
+  @Public()
+  @Get('cases')
+  listPublicCases(
+    @Query('brand') brand?: string,
+    @Query('product') product?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.brandsService.listPublicCases({
+      brandSlug: brand,
+      productId: product,
+      page: page ? parseInt(page, 10) : 1,
+      limit: limit ? parseInt(limit, 10) : 48,
+    });
+  }
+
   @Public()
   @Get(':slug')
   findBySlug(

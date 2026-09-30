@@ -143,19 +143,34 @@ export function buildCasePublicCore(
   };
 }
 
-/** Публичный кейс + опционально мета дизайнера (избранное, список проектов). */
+export type CaseBrandMeta = {
+  slug: string;
+  displayName: string;
+  logoUrl: string | null;
+};
+
+/** Публичный кейс + опционально мета дизайнера или бренда. */
 export function buildCasePublicDto(
   c: CasePublicRowInput,
   productById: Map<string, CaseProductSummaryDto>,
   designer?: CaseDesignerMeta | null,
+  brand?: CaseBrandMeta | null,
 ) {
   const core = buildCasePublicCore(c, productById);
-  if (!designer) return core;
+  const withDesigner = designer
+    ? {
+        ...core,
+        designerSlug: designer.slug,
+        designerDisplayName: designer.displayName,
+        designerPhotoUrl: designer.photoUrl,
+      }
+    : core;
+  if (!brand) return withDesigner;
   return {
-    ...core,
-    designerSlug: designer.slug,
-    designerDisplayName: designer.displayName,
-    designerPhotoUrl: designer.photoUrl,
+    ...withDesigner,
+    brandSlug: brand.slug,
+    brandDisplayName: brand.displayName,
+    brandLogoUrl: brand.logoUrl,
   };
 }
 

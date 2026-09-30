@@ -631,6 +631,8 @@ export class CatalogAdminService {
         galleryImageUrls: this.galleryToPrisma(dto.galleryImageUrls),
         description: dto.description?.trim() || null,
         shortDescription: this.normBrandShortDescription(dto.shortDescription),
+        catalogPdfUrl: dto.catalogPdfUrl == null ? null : dto.catalogPdfUrl.trim() || null,
+        siteUrl: dto.siteUrl == null ? null : dto.siteUrl.trim() || null,
         seoTitle: dto.seoTitle?.trim() || null,
         seoDescription: dto.seoDescription?.trim() || null,
       },
@@ -674,6 +676,12 @@ export class CatalogAdminService {
     if (dto.description !== undefined) data.description = dto.description?.trim() || null;
     if (dto.shortDescription !== undefined) {
       data.shortDescription = this.normBrandShortDescription(dto.shortDescription);
+    }
+    if (dto.catalogPdfUrl !== undefined) {
+      data.catalogPdfUrl = dto.catalogPdfUrl === null ? null : dto.catalogPdfUrl.trim() || null;
+    }
+    if (dto.siteUrl !== undefined) {
+      data.siteUrl = dto.siteUrl === null ? null : dto.siteUrl.trim() || null;
     }
     if (dto.seoTitle !== undefined) data.seoTitle = dto.seoTitle?.trim() || null;
     if (dto.seoDescription !== undefined) {
@@ -777,9 +785,9 @@ export class CatalogAdminService {
         caseId: l.case.id,
         title: l.case.title,
         createdAt: l.case.createdAt,
-        designerSlug: l.case.user.designer?.slug ?? null,
-        designerDisplayName: l.case.user.designer?.displayName ?? null,
-        ownerEmail: l.case.user.email,
+        designerSlug: l.case.user?.designer?.slug ?? null,
+        designerDisplayName: l.case.user?.designer?.displayName ?? null,
+        ownerEmail: l.case.user?.email ?? null,
       })),
     };
   }
