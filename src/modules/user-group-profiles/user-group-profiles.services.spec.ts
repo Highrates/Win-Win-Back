@@ -318,6 +318,9 @@ describe('ReferralsService.getPartnerProgramSummary', () => {
       userProfile: {
         findUnique: vi.fn().mockResolvedValue({ winWinPartnerApproved: true }),
       },
+      user: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
       referral: {
         findMany: vi
           .fn()
@@ -355,6 +358,7 @@ describe('ReferralsService.getPartnerProgramSummary', () => {
     expect(summary.designerBonus.bonusPercent).toBe(0);
     expect(summary.totals.pipelineOutlookRub).toBe('0.00');
     expect(summary.totals.teamCompletedRub).toBe('0.00');
+    expect(summary.linesMayBeIncomplete).toBe(false);
   });
 });
 

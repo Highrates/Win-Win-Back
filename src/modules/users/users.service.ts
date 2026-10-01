@@ -1013,6 +1013,11 @@ export class UsersService {
     }
     const level1 = l1.length;
     const level2 = l1.reduce((acc, row) => acc + row.l2.length, 0);
+    // ЛК: без email (PII). Админская структура — через getWinWinReferralStructureForAdmin.
+    const l1Public = l1.map(({ email: _e, l2, ...row }) => ({
+      ...row,
+      l2: l2.map(({ email: _e2, ...m }) => m),
+    }));
     return {
       inviter: inviter
         ? {
@@ -1022,7 +1027,7 @@ export class UsersService {
           }
         : null,
       counts: { total: level1 + level2, level1, level2 },
-      l1,
+      l1: l1Public,
     };
   }
 

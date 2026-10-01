@@ -20,6 +20,8 @@ export type PartnerProgramBonusLineDto = {
   orderUpdatedAt: string;
   catalogTotalRub: string;
   purchaserUserId: string;
+  /** Имя покупателя (профиль / карточка дизайнера); null если не удалось резолвить. */
+  purchaserName: string | null;
   tier: 1 | 2;
   percentApplied: number;
   bonusRub: string;
@@ -28,6 +30,9 @@ export type PartnerProgramBonusLineDto = {
   /** Собственные завершённые заказы партнёра (бонус «со своего заказа»), не реферальные L1/L2. */
   source?: 'REFERRAL' | 'OWN_ORDER';
 };
+
+/** Лимит выборки заказов для сводки в ЛК (без полной пагинации). */
+export const PARTNER_PROGRAM_SUMMARY_ORDERS_TAKE = 120;
 
 export type PartnerProgramSummaryDto = {
   isWinWinPartner: boolean;
@@ -53,6 +58,11 @@ export type PartnerProgramSummaryDto = {
   };
   personalLines: PartnerProgramBonusLineDto[];
   teamLines: PartnerProgramBonusLineDto[];
+  /**
+   * true, если выборка заказов упёрлась в PARTNER_PROGRAM_SUMMARY_ORDERS_TAKE —
+   * в таблицах/суммах могут быть не все начисления.
+   */
+  linesMayBeIncomplete: boolean;
 };
 
 function catalogTotalFromItems(items: { price: Prisma.Decimal; quantity: number }[]): Prisma.Decimal {
@@ -165,7 +175,7 @@ export class ReferralsService {
       where: { userId, status: OrderStatus.COMPLETED },
       include: { items: { select: { price: true, quantity: true } } },
       orderBy: { updatedAt: 'desc' },
-      take: 120,
+      take: PARTNER_PROGRAM_SUMMARY_ORDERS_TAKE,
     });
     const lines: PartnerProgramBonusLineDto[] = [];
     for (const o of ownOrders) {
@@ -186,6 +196,7 @@ export class ReferralsService {
         orderUpdatedAt: o.updatedAt.toISOString(),
         catalogTotalRub: catalog.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toFixed(2),
         purchaserUserId: userId,
+        purchaserName: null,
         tier: 1,
         percentApplied: pct,
         bonusRub: bonus.toFixed(2),
@@ -195,7 +206,52 @@ export class ReferralsService {
       });
     }
     lines.sort((a, b) => Date.parse(b.orderUpdatedAt) - Date.parse(a.orderUpdatedAt));
+    await this.attachPurchaserNames(lines);
     return lines;
+  }
+
+  private buildPurchaserDisplayName(input: {
+    firstName: string | null | undefined;
+    lastName: string | null | undefined;
+    email: string | null | undefined;
+    designerDisplayName: string | null | undefined;
+  }): string | null {
+    const fromDesigner = input.designerDisplayName?.trim();
+    if (fromDesigner) return fromDesigner;
+    const parts = [input.firstName, input.lastName]
+      .filter((x) => x && String(x).trim())
+      .map((x) => String(x).trim());
+    if (parts.length) return parts.join(' ');
+    const local = input.email?.trim() ? input.email.trim().split('@')[0] : '';
+    return local || null;
+  }
+
+  private async attachPurchaserNames(lines: PartnerProgramBonusLineDto[]): Promise<void> {
+    const ids = [...new Set(lines.map((l) => l.purchaserUserId).filter(Boolean))];
+    if (ids.length === 0) return;
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: ids } },
+      select: {
+        id: true,
+        email: true,
+        profile: { select: { firstName: true, lastName: true } },
+        designer: { select: { displayName: true } },
+      },
+    });
+    const byId = new Map(
+      users.map((u) => [
+        u.id,
+        this.buildPurchaserDisplayName({
+          firstName: u.profile?.firstName,
+          lastName: u.profile?.lastName,
+          email: u.email,
+          designerDisplayName: u.designer?.displayName,
+        }),
+      ]),
+    );
+    for (const line of lines) {
+      line.purchaserName = byId.get(line.purchaserUserId) ?? null;
+    }
   }
 
   private makePartnerProgramSummary(
@@ -205,6 +261,7 @@ export class ReferralsService {
     totals: PartnerProgramSummaryDto['totals'],
     personalLines: PartnerProgramBonusLineDto[],
     teamLines: PartnerProgramBonusLineDto[],
+    linesMayBeIncomplete = false,
   ): PartnerProgramSummaryDto {
     return {
       isWinWinPartner,
@@ -219,6 +276,7 @@ export class ReferralsService {
       totals,
       personalLines,
       teamLines,
+      linesMayBeIncomplete,
     };
   }
 
@@ -254,6 +312,7 @@ export class ReferralsService {
 
     const ownOrderLines = await this.buildOwnOrderBonusLines(userId);
     const ownCompleted = this.sumBonusRub(ownOrderLines);
+    const ownOrdersCapped = ownOrderLines.length >= PARTNER_PROGRAM_SUMMARY_ORDERS_TAKE;
 
     if (!isWinWinPartner) {
       const completed = ownCompleted.toFixed(2);
@@ -271,6 +330,7 @@ export class ReferralsService {
         },
         ownOrderLines,
         [],
+        ownOrdersCapped,
       );
     }
 
@@ -290,6 +350,7 @@ export class ReferralsService {
         },
         ownOrderLines,
         [],
+        ownOrdersCapped,
       );
     }
 
@@ -309,9 +370,11 @@ export class ReferralsService {
             },
             include: { items: { select: { price: true, quantity: true } } },
             orderBy: { updatedAt: 'desc' },
-            take: 120,
+            take: PARTNER_PROGRAM_SUMMARY_ORDERS_TAKE,
           })
         : [];
+    const referralOrdersCapped =
+      buyerIds.length > 0 && orders.length >= PARTNER_PROGRAM_SUMMARY_ORDERS_TAKE;
 
     const personalLines: PartnerProgramBonusLineDto[] = [];
     const teamLines: PartnerProgramBonusLineDto[] = [];
@@ -352,6 +415,7 @@ export class ReferralsService {
         orderUpdatedAt: o.updatedAt.toISOString(),
         catalogTotalRub: catalog.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toFixed(2),
         purchaserUserId: buyerId,
+        purchaserName: null,
         tier,
         percentApplied: percent,
         bonusRub: bonus.toFixed(2),
@@ -377,6 +441,7 @@ export class ReferralsService {
       Date.parse(b.orderUpdatedAt) - Date.parse(a.orderUpdatedAt);
     personalLines.sort(cmpUpdated);
     teamLines.sort(cmpUpdated);
+    await this.attachPurchaserNames([...personalLines, ...teamLines]);
 
     const payableFromCompleted = personalCompleted.add(teamCompleted);
     const pipelineOutlook = personalPipeline.add(teamPipeline);
@@ -395,6 +460,7 @@ export class ReferralsService {
       },
       personalLines,
       teamLines,
+      ownOrdersCapped || referralOrdersCapped,
     );
   }
 
