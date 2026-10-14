@@ -265,12 +265,26 @@ export class OrdersService {
     });
   }
 
-  /** Детали заказа для ЛК: как `findOne`, плюс счётчик непрочитанных сообщений от сотрудника в чате. */
+  /** Детали заказа для ЛК: как `findOne`, плюс счётчик непрочитанных и телефон профиля. */
   async findOneDetailForUser(userId: string, orderId: string) {
-    const order = await this.findOne(userId, orderId);
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, userId },
+      include: {
+        items: {
+          orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+          include: { product: { include: { images: true, brand: true } } },
+        },
+        user: { select: { phone: true } },
+      },
+    });
     if (!order) return null;
     const unreadMap = await this.orderChat.unreadStaffCountsForCustomerOrders(userId, [order.id]);
-    return { ...order, unreadStaffChatCount: unreadMap[order.id] ?? 0 };
+    const { user, ...rest } = order;
+    return {
+      ...rest,
+      customerPhone: user.phone ?? null,
+      unreadStaffChatCount: unreadMap[order.id] ?? 0,
+    };
   }
 
   /** Клиент открыл карточку заказа — фиксируем просмотр последнего опубликованного КП (сброс «новой версии» в ЛК). */

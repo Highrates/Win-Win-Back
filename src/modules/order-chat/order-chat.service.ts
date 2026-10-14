@@ -495,6 +495,7 @@ export class OrderChatService {
   ): Promise<number> {
     const where: Prisma.OrderWhereInput = {
       userId,
+      customerArchivedAt: null,
       ...(orderStatuses?.length
         ? { status: { in: orderStatuses } }
         : { status: { not: OrderStatus.DRAFT } }),
@@ -551,12 +552,17 @@ export class OrderChatService {
     return n;
   }
 
-  async unreadCountForCustomer(
+  /**
+   * Сводка бейджей ЛК: непрочитанный чат (только сообщения) + агрегат непросмотренных КП
+   * по всем заказам/заявкам в scope (не зависит от пагинации ленты).
+   */
+  async unreadSummaryForCustomer(
     userId: string,
     opts?: { orderStatuses?: OrderStatus[] },
-  ): Promise<number> {
+  ): Promise<{ count: number; hasUnseenCommercialProposal: boolean; unseenKpCount: number }> {
     const orderWhere: Prisma.OrderWhereInput = {
       userId,
+      customerArchivedAt: null,
       ...(opts?.orderStatuses?.length
         ? { status: { in: opts.orderStatuses } }
         : { status: { not: OrderStatus.DRAFT } }),
@@ -576,7 +582,7 @@ export class OrderChatService {
       },
     });
 
-    let total = 0;
+    let chatCount = 0;
     for (const c of convs) {
       const lastRead = c.readStates[0]?.lastReadAt ?? new Date(0);
       const n = await this.prisma.chatMessage.count({
@@ -587,7 +593,7 @@ export class OrderChatService {
           createdAt: { gt: lastRead },
         },
       });
-      total += n;
+      chatCount += n;
     }
 
     const sourcingStatuses =
@@ -617,12 +623,27 @@ export class OrderChatService {
           createdAt: { gt: lastRead },
         },
       });
-      total += n;
+      chatCount += n;
     }
 
-    total += await this.countOrdersWithUnseenPublishedCommercialProposal(userId, opts?.orderStatuses);
-    total += await this.countSourcingWithUnseenPublishedCommercialProposal(userId, sourcingStatuses);
-    return total;
+    const unseenKpCount =
+      (await this.countOrdersWithUnseenPublishedCommercialProposal(userId, opts?.orderStatuses)) +
+      (await this.countSourcingWithUnseenPublishedCommercialProposal(userId, sourcingStatuses));
+
+    return {
+      count: chatCount,
+      unseenKpCount,
+      hasUnseenCommercialProposal: unseenKpCount > 0,
+    };
+  }
+
+  /** @deprecated используйте unreadSummaryForCustomer — count больше не включает KP. */
+  async unreadCountForCustomer(
+    userId: string,
+    opts?: { orderStatuses?: OrderStatus[] },
+  ): Promise<number> {
+    const summary = await this.unreadSummaryForCustomer(userId, opts);
+    return summary.count;
   }
 
   /** Непрочитанные сообщения сотрудника по каждому заказу (для списка заказов в ЛК). */

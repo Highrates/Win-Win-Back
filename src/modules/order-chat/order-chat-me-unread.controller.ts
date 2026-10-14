@@ -12,9 +12,13 @@ export class OrderChatMeUnreadController {
   @Get('me/unread-count')
   async unread(@CurrentUser('sub') userId: string, @Query('scope') scope?: string) {
     const workStatuses = scope === 'work' ? [...CUSTOMER_IN_WORK_STATUSES] : undefined;
-    const count = await this.chat.unreadCountForCustomer(userId, {
+    const summary = await this.chat.unreadSummaryForCustomer(userId, {
       orderStatuses: workStatuses,
     });
-    return { count };
+    return {
+      count: summary.count,
+      hasUnseenCommercialProposal: summary.hasUnseenCommercialProposal,
+      unseenKpCount: summary.unseenKpCount,
+    };
   }
 }

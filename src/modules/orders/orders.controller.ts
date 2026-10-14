@@ -1,4 +1,5 @@
 import { Body, Controller, Get, NotFoundException, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { OrderStatus } from '@prisma/client';
 import { CommercialProposalService } from './commercial-proposal.service';
 import { OrdersService } from './orders.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -38,7 +39,17 @@ export class OrdersController {
     if (!order) throw new NotFoundException();
     const latestCommercialProposal =
       await this.commercialProposals.getLatestPublishedForOrder(orderId);
-    return { ...order, latestCommercialProposal };
+    const decisionVersion = order.customerKpDecisionVersion ?? 0;
+    const canRespondToCommercialProposal =
+      latestCommercialProposal != null &&
+      order.status === OrderStatus.PROPOSAL_FORMED &&
+      (order.customerKpDecision == null || decisionVersion < latestCommercialProposal.versionNumber);
+    return {
+      ...order,
+      latestCommercialProposal,
+      canRespondToCommercialProposal,
+      commercialProposalVersion: latestCommercialProposal?.versionNumber ?? null,
+    };
   }
 
   @Patch(':id/archive')
