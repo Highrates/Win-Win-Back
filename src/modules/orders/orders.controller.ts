@@ -1,8 +1,12 @@
-import { Controller, Get, NotFoundException, Param, Patch, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, NotFoundException, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { CommercialProposalService } from './commercial-proposal.service';
 import { OrdersService } from './orders.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import {
+  AcceptCommercialProposalDto,
+  RecordCommercialProposalDecisionDto,
+} from './dto/customer-kp-decision.dto';
 
 /** Создание заказов только через `orders/me/preparation/*` + submit → согласование. */
 @Controller('orders')
@@ -37,8 +41,31 @@ export class OrdersController {
     return { ...order, latestCommercialProposal };
   }
 
+  @Patch(':id/archive')
+  archive(@CurrentUser('sub') userId: string, @Param('id') orderId: string) {
+    return this.ordersService.archiveOrderForCustomer(userId, orderId);
+  }
+
   @Patch(':id/commercial-proposal-seen')
   ackCommercialProposalSeen(@CurrentUser('sub') userId: string, @Param('id') orderId: string) {
     return this.ordersService.ackCommercialProposalSeenForCustomer(userId, orderId);
+  }
+
+  @Post(':id/commercial-proposal/accept')
+  acceptCommercialProposal(
+    @CurrentUser('sub') userId: string,
+    @Param('id') orderId: string,
+    @Body() dto: AcceptCommercialProposalDto,
+  ) {
+    return this.ordersService.acceptCommercialProposalForCustomer(userId, orderId, dto);
+  }
+
+  @Post(':id/commercial-proposal/decision')
+  recordCommercialProposalDecision(
+    @CurrentUser('sub') userId: string,
+    @Param('id') orderId: string,
+    @Body() dto: RecordCommercialProposalDecisionDto,
+  ) {
+    return this.ordersService.recordCommercialProposalDecisionForCustomer(userId, orderId, dto);
   }
 }

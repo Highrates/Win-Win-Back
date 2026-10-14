@@ -21,12 +21,25 @@ export type OrderStatusFlow = (typeof ORDER_STATUS_FLOW)[number];
 
 export type OrderStatusCode = OrderStatusFlow | typeof ORDER_STATUS_DRAFT;
 
-/** Следующий статус заказа при публикации КП (после «На согласовании»). */
-export const KP_PUBLISH_NEXT_STATUSES = ORDER_STATUS_FLOW.filter(
-  (s) => s !== 'PENDING_APPROVAL',
-) as readonly Exclude<OrderStatusFlow, 'PENDING_APPROVAL'>[];
+/**
+ * Следующий статус заказа при первой публикации КП из PENDING_APPROVAL.
+ * Только согласование предложения / принятие — без прыжка в оплату/доставку/завершение.
+ */
+export const KP_PUBLISH_NEXT_STATUSES = ['PROPOSAL_FORMED', 'APPROVED'] as const satisfies readonly OrderStatusFlow[];
 
 export type KpPublishNextOrderStatus = (typeof KP_PUBLISH_NEXT_STATUSES)[number];
+
+/**
+ * Статусы заказа, в которых разрешена публикация / republish КП.
+ * С PENDING_SIGNATURE / PENDING_PAYMENT+ — нет (нельзя откатывать оплаченный/в пути заказ).
+ */
+export const KP_PUBLISH_ALLOWED_ORDER_STATUSES = [
+  'PENDING_APPROVAL',
+  'PROPOSAL_FORMED',
+  'APPROVED',
+] as const satisfies readonly OrderStatusFlow[];
+
+export type KpPublishAllowedOrderStatus = (typeof KP_PUBLISH_ALLOWED_ORDER_STATUSES)[number];
 
 export const CUSTOMER_IN_WORK_STATUSES_LIST: readonly OrderStatusFlow[] = ORDER_STATUS_FLOW.filter(
   (s) => s !== 'COMPLETED',

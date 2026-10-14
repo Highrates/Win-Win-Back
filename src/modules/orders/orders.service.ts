@@ -1,6 +1,20 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { AuditAction, CommercialProposalStatus, OrderStatus, Prisma, UserRole } from '@prisma/client';
+import {
+  AuditAction,
+  CommercialProposalStatus,
+  CustomerKpDecision,
+  LegalType,
+  OrderStatus,
+  Prisma,
+  UserRole,
+} from '@prisma/client';
 import { orderItemSnapshotMetaRows } from '@win-win/order-item-snapshot';
 import { PrismaService } from '../../prisma/prisma.service';
 import { priceToNumber } from '../../meilisearch/product-search-doc';
@@ -10,6 +24,11 @@ import { OrderChatService } from '../order-chat/order-chat.service';
 import { ReferralsService } from '../referrals/referrals.service';
 import { OrderProgramSnapshotService } from '../user-groups/order-program-snapshot.service';
 import { CatalogTierPricingService } from '../catalog/catalog-tier-pricing.service';
+import type {
+  AcceptCommercialProposalDto,
+  CustomerKpRequisitesDto,
+  RecordCommercialProposalDecisionDto,
+} from './dto/customer-kp-decision.dto';
 import type {
   AddOrderPreparationLineDto,
   PatchOrderPreparationDto,
@@ -25,6 +44,13 @@ import {
   createdAtInRange,
   parseDashboardDateRange,
 } from '../../common/utils/dashboard-date-range';
+import {
+  digitsOnly,
+  isValidRussianBankAccount,
+  isValidRussianBic,
+  isValidRussianInn,
+  isValidRussianPhone,
+} from '../../common/utils/russian-bank-requisites';
 
 const USER_ORDER_LIST_WHERE: Prisma.OrderWhereInput = {
   status: { not: OrderStatus.DRAFT },
@@ -109,37 +135,61 @@ export class OrdersService {
     };
     const [orders, total] = await Promise.all([
       this.prisma.order.findMany({
-        where,
+        where: {
+          AND: [where, { customerArchivedAt: null }],
+        },
         orderBy: { updatedAt: 'desc' },
         skip: (page - 1) * limit,
         take: limit,
-        include: {
+        select: {
+          id: true,
+          status: true,
+          totalAmount: true,
+          currency: true,
+          createdAt: true,
+          updatedAt: true,
+          customerKpDecision: true,
+          customerKpDecisionVersion: true,
+          customerLastSeenCommercialProposalVersion: true,
           items: {
             orderBy: { sortOrder: 'asc' },
-            include: {
+            select: {
+              quantity: true,
+              snapshot: true,
               product: {
-                include: {
+                select: {
+                  name: true,
+                  slug: true,
                   images: { orderBy: { sortOrder: 'asc' }, select: { url: true } },
                 },
               },
             },
           },
-        commercialProposals: {
-          where: { status: CommercialProposalStatus.PUBLISHED },
-          orderBy: { versionNumber: 'desc' },
-          take: 1,
-          select: {
-            versionNumber: true,
-            publishedAt: true,
-            lines: {
-              orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
-              select: { quantity: true, offerUnitPrice: true, discountPercent: true, deliveryEta: true },
+          commercialProposals: {
+            where: { status: CommercialProposalStatus.PUBLISHED },
+            orderBy: { versionNumber: 'desc' },
+            take: 1,
+            select: {
+              versionNumber: true,
+              publishedAt: true,
+              lines: {
+                orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+                select: {
+                  quantity: true,
+                  offerUnitPrice: true,
+                  discountPercent: true,
+                  deliveryEta: true,
+                },
+              },
             },
           },
         },
+      }),
+      this.prisma.order.count({
+        where: {
+          AND: [where, { customerArchivedAt: null }],
         },
       }),
-      this.prisma.order.count({ where }),
     ]);
     const unreadStaffByOrderId = await this.orderChat.unreadStaffCountsForCustomerOrders(
       userId,
@@ -147,7 +197,12 @@ export class OrdersService {
     );
     return {
       items: orders.map((o) => {
-        const { commercialProposals, customerLastSeenCommercialProposalVersion, ...rest } = o;
+        const {
+          commercialProposals,
+          customerLastSeenCommercialProposalVersion,
+          customerKpDecisionVersion,
+          ...rest
+        } = o;
         const latest = commercialProposals[0];
         const commercialProposalOffer = latest?.lines?.length
           ? commercialProposalOfferFromLines(latest.lines)
@@ -158,12 +213,20 @@ export class OrdersService {
         const commercialProposalDeliveryEta = deliveryEtas.length ? deliveryEtas.join(' · ') : null;
         const seen = customerLastSeenCommercialProposalVersion ?? 0;
         const hasUnseenCommercialProposal = latest != null && latest.versionNumber > seen;
+        const decisionVersion = customerKpDecisionVersion ?? 0;
+        const canRespondToCommercialProposal =
+          latest != null &&
+          o.status === OrderStatus.PROPOSAL_FORMED &&
+          (o.customerKpDecision == null || decisionVersion < latest.versionNumber);
         return {
           ...rest,
           commercialProposalOffer,
           commercialProposalDeliveryEta,
           commercialProposalPublishedAt: latest?.publishedAt?.toISOString() ?? null,
+          commercialProposalVersion: latest?.versionNumber ?? null,
           hasUnseenCommercialProposal,
+          canRespondToCommercialProposal,
+          customerKpDecision: o.customerKpDecision ?? null,
           unreadStaffChatCount: unreadStaffByOrderId[o.id] ?? 0,
         };
       }),
@@ -171,6 +234,23 @@ export class OrdersService {
       page,
       limit,
     };
+  }
+
+  /** Клиент скрывает заказ из списков ЛК (soft archive). */
+  async archiveOrderForCustomer(userId: string, orderId: string) {
+    const row = await this.prisma.order.findFirst({
+      where: { id: orderId, userId, customerArchivedAt: null },
+      select: { id: true, status: true },
+    });
+    if (!row) throw new NotFoundException();
+    if (row.status === OrderStatus.DRAFT) {
+      throw new BadRequestException('Черновик нельзя архивировать — удалите его в подготовке заказа');
+    }
+    await this.prisma.order.update({
+      where: { id: orderId },
+      data: { customerArchivedAt: new Date() },
+    });
+    return { ok: true as const };
   }
 
   async findOne(userId: string, orderId: string) {
@@ -211,6 +291,237 @@ export class OrdersService {
       data: { customerLastSeenCommercialProposalVersion: v },
     });
     return { ok: true as const, customerLastSeenCommercialProposalVersion: v };
+  }
+
+  private async assertCustomerCanRespondToKp(
+    userId: string,
+    orderId: string,
+    expectedVersion: number,
+  ) {
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, userId },
+      select: {
+        id: true,
+        status: true,
+        customerKpDecision: true,
+        customerKpDecisionVersion: true,
+      },
+    });
+    if (!order) throw new NotFoundException();
+    if (order.status !== OrderStatus.PROPOSAL_FORMED) {
+      throw new BadRequestException('Ответ на КП доступен только пока предложение на согласовании');
+    }
+    const latest = await this.prisma.commercialProposal.findFirst({
+      where: { orderId, status: CommercialProposalStatus.PUBLISHED },
+      orderBy: { versionNumber: 'desc' },
+      select: { versionNumber: true },
+    });
+    if (!latest) throw new BadRequestException('Нет опубликованного коммерческого предложения');
+    if (latest.versionNumber !== expectedVersion) {
+      throw new ConflictException('КП обновлено');
+    }
+    const decidedFor =
+      order.customerKpDecision != null &&
+      (order.customerKpDecisionVersion ?? 0) >= latest.versionNumber;
+    if (decidedFor) {
+      throw new BadRequestException('Вы уже ответили на это коммерческое предложение');
+    }
+    return { order, latestVersion: latest.versionNumber };
+  }
+
+  /** Повторная проверка latest PUBLISHED внутри tx — защита от TOCTOU при параллельном publish. */
+  private async assertLatestPublishedKpVersionInTx(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    expectedVersion: number,
+  ) {
+    const latest = await tx.commercialProposal.findFirst({
+      where: { orderId, status: CommercialProposalStatus.PUBLISHED },
+      orderBy: { versionNumber: 'desc' },
+      select: { versionNumber: true },
+    });
+    if (!latest || latest.versionNumber !== expectedVersion) {
+      throw new ConflictException('КП обновлено');
+    }
+  }
+
+  /** Клиент принял КП и передал реквизиты → APPROVED. */
+  async acceptCommercialProposalForCustomer(
+    userId: string,
+    orderId: string,
+    dto: AcceptCommercialProposalDto,
+  ) {
+    const expectedVersion = dto.expectedVersion;
+    await this.assertCustomerCanRespondToKp(userId, orderId, expectedVersion);
+    const req = dto.requisites;
+    this.assertRequisites(req);
+
+    const requisitesJson = {
+      legalType: req.legalType,
+      contactName: req.contactName.trim(),
+      phone: req.phone?.trim() ? digitsOnly(req.phone) || req.phone.trim() : null,
+      companyName: req.companyName?.trim() || null,
+      inn: req.inn?.trim() ? digitsOnly(req.inn) : null,
+      kpp: req.kpp?.trim() ? digitsOnly(req.kpp) : null,
+      legalAddress: req.legalAddress?.trim() || null,
+      bankName: req.bankName?.trim() || null,
+      bankAccount: req.bankAccount?.trim() ? digitsOnly(req.bankAccount) : null,
+      bic: req.bic?.trim() ? digitsOnly(req.bic) : null,
+      correspondentAccount: req.correspondentAccount?.trim()
+        ? digitsOnly(req.correspondentAccount)
+        : null,
+    } as const;
+
+    const legalType = req.legalType as LegalType;
+    const nameParts = req.contactName.trim().split(/\s+/).filter(Boolean);
+    const firstName = nameParts[0] ?? null;
+    const lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : null;
+
+    await this.prisma.$transaction(async (tx) => {
+      await this.assertLatestPublishedKpVersionInTx(tx, orderId, expectedVersion);
+
+      const updated = await tx.order.updateMany({
+        where: {
+          id: orderId,
+          userId,
+          status: OrderStatus.PROPOSAL_FORMED,
+          OR: [
+            { customerKpDecision: null },
+            { customerKpDecisionVersion: { lt: expectedVersion } },
+          ],
+        },
+        data: {
+          status: OrderStatus.APPROVED,
+          customerKpDecision: CustomerKpDecision.ACCEPTED,
+          customerKpDecisionAt: new Date(),
+          customerKpDecisionVersion: expectedVersion,
+          customerKpRequisites: requisitesJson,
+          customerLastSeenCommercialProposalVersion: expectedVersion,
+        },
+      });
+      if (updated.count !== 1) {
+        throw new ConflictException('КП обновлено');
+      }
+
+      /** Профиль: юр./банк поля. Телефон, БИК и корр. счёт — только снимок КП (см. копирайт модалки). */
+      await tx.userProfile.upsert({
+        where: { userId },
+        create: {
+          userId,
+          firstName,
+          lastName,
+          legalType,
+          companyName: requisitesJson.companyName,
+          inn: requisitesJson.inn,
+          kpp: requisitesJson.kpp,
+          legalAddress: requisitesJson.legalAddress,
+          bankName: requisitesJson.bankName,
+          bankAccount: requisitesJson.bankAccount,
+        },
+        update: {
+          ...(firstName ? { firstName } : {}),
+          ...(lastName ? { lastName } : {}),
+          legalType,
+          companyName: requisitesJson.companyName,
+          inn: requisitesJson.inn,
+          kpp: requisitesJson.kpp,
+          legalAddress: requisitesJson.legalAddress,
+          bankName: requisitesJson.bankName,
+          bankAccount: requisitesJson.bankAccount,
+        },
+      });
+    });
+
+    return {
+      ok: true as const,
+      status: OrderStatus.APPROVED,
+      customerKpDecision: CustomerKpDecision.ACCEPTED,
+      customerKpDecisionVersion: expectedVersion,
+    };
+  }
+
+  /** Клиент запросил правки / отклонил КП (после сообщения в чате). */
+  async recordCommercialProposalDecisionForCustomer(
+    userId: string,
+    orderId: string,
+    dto: RecordCommercialProposalDecisionDto,
+  ) {
+    const expectedVersion = dto.expectedVersion;
+    await this.assertCustomerCanRespondToKp(userId, orderId, expectedVersion);
+    const decision =
+      dto.decision === 'REJECTED' ? CustomerKpDecision.REJECTED : CustomerKpDecision.CHANGES_REQUESTED;
+
+    await this.prisma.$transaction(async (tx) => {
+      await this.assertLatestPublishedKpVersionInTx(tx, orderId, expectedVersion);
+
+      const updated = await tx.order.updateMany({
+        where: {
+          id: orderId,
+          userId,
+          status: OrderStatus.PROPOSAL_FORMED,
+          OR: [
+            { customerKpDecision: null },
+            { customerKpDecisionVersion: { lt: expectedVersion } },
+          ],
+        },
+        data: {
+          customerKpDecision: decision,
+          customerKpDecisionAt: new Date(),
+          customerKpDecisionVersion: expectedVersion,
+          customerLastSeenCommercialProposalVersion: expectedVersion,
+        },
+      });
+      if (updated.count !== 1) {
+        throw new ConflictException('КП обновлено');
+      }
+    });
+
+    return {
+      ok: true as const,
+      customerKpDecision: decision,
+      customerKpDecisionVersion: expectedVersion,
+    };
+  }
+
+  private assertRequisites(req: CustomerKpRequisitesDto) {
+    if (!req.contactName?.trim()) {
+      throw new BadRequestException('Укажите контактное имя');
+    }
+    if (req.legalType !== 'INDIVIDUAL') {
+      if (!req.companyName?.trim()) throw new BadRequestException('Укажите название организации');
+      const inn = req.inn?.trim() ?? '';
+      if (!inn) throw new BadRequestException('Укажите ИНН');
+      if (!isValidRussianInn(inn)) throw new BadRequestException('Некорректный ИНН');
+      if (req.legalType === 'LLC') {
+        const kpp = req.kpp?.trim() ?? '';
+        if (kpp && !/^\d{9}$/.test(digitsOnly(kpp))) {
+          throw new BadRequestException('КПП должен содержать 9 цифр');
+        }
+      }
+    } else if (req.inn?.trim() && !isValidRussianInn(req.inn)) {
+      throw new BadRequestException('Некорректный ИНН');
+    }
+
+    const phone = req.phone?.trim() ?? '';
+    if (phone && !isValidRussianPhone(phone)) {
+      throw new BadRequestException('Некорректный телефон (ожидается номер РФ)');
+    }
+
+    const bic = req.bic?.trim() ?? '';
+    const account = req.bankAccount?.trim() ?? '';
+    if (bic && !isValidRussianBic(bic)) {
+      throw new BadRequestException('Некорректный БИК');
+    }
+    if (account && !bic) {
+      throw new BadRequestException('Укажите БИК вместе с расчётным счётом');
+    }
+    if (account && bic && !isValidRussianBankAccount(account, bic)) {
+      throw new BadRequestException('Некорректный расчётный счёт для указанного БИК');
+    }
+    const corr = req.correspondentAccount?.trim() ?? '';
+    if (corr && !/^\d{20}$/.test(digitsOnly(corr))) {
+      throw new BadRequestException('Корр. счёт должен содержать 20 цифр');
+    }
   }
 
   async findManyForAdmin(
@@ -417,19 +728,38 @@ export class OrdersService {
       data: { status },
       include: { items: { include: { product: true } } },
     });
+    await this.emitOrderStatusChangedSideEffects(orderId, prev.status, status, {
+      path: `/api/v1/orders/admin/${orderId}/status`,
+      httpMethod: 'PATCH',
+      hasDocumentUrls: !!documentUrls && Object.keys(documentUrls).length > 0,
+    });
+    return order;
+  }
+
+  /**
+   * Audit / chat / referrals после того, как статус уже записан в БД
+   * (в т.ч. из publish КП внутри общей транзакции).
+   */
+  async emitOrderStatusChangedSideEffects(
+    orderId: string,
+    from: OrderStatus,
+    to: OrderStatus,
+    meta?: { path?: string; httpMethod?: string; hasDocumentUrls?: boolean },
+  ) {
+    if (from === to) return;
     await this.audit.log({
       action: AuditAction.UPDATE,
       entityType: 'Order',
       entityId: orderId,
-      path: `/api/v1/orders/admin/${orderId}/status`,
-      httpMethod: 'PATCH',
+      path: meta?.path ?? `/api/v1/orders/admin/${orderId}/status`,
+      httpMethod: meta?.httpMethod ?? 'PATCH',
       metadata: {
-        from: prev.status,
-        to: status,
-        hasDocumentUrls: !!documentUrls && Object.keys(documentUrls).length > 0,
+        from,
+        to,
+        hasDocumentUrls: meta?.hasDocumentUrls ?? false,
       },
     });
-    if (status === OrderStatus.COMPLETED) {
+    if (to === OrderStatus.COMPLETED) {
       try {
         await this.referrals.ensureRewardsForCompletedOrder(orderId);
       } catch (e) {
@@ -438,8 +768,7 @@ export class OrdersService {
         );
       }
     }
-    await this.orderChat.onOrderStatusChanged(order.id, order.status);
-    return order;
+    await this.orderChat.onOrderStatusChanged(orderId, to);
   }
 
   /**

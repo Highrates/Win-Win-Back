@@ -8,10 +8,17 @@ import {
   OrderStatus,
   Prisma,
 } from '@prisma/client';
+import {
+  KP_PUBLISH_ALLOWED_ORDER_STATUSES,
+  KP_PUBLISH_NEXT_STATUSES,
+} from '@win-win/order-status';
 import { PrismaService } from '../../prisma/prisma.service';
 import { OrderSettingsService } from '../order-settings/order-settings.service';
 import type { CommercialProposalLineInputDto, PublishCommercialProposalDto } from './dto/commercial-proposal.dto';
 import { OrdersService } from './orders.service';
+
+const KP_PUBLISH_ALLOWED = new Set<string>(KP_PUBLISH_ALLOWED_ORDER_STATUSES);
+const KP_PUBLISH_NEXT = new Set<string>(KP_PUBLISH_NEXT_STATUSES);
 
 function dec(n: number): Prisma.Decimal {
   return new Prisma.Decimal(Number.isFinite(n) ? n.toFixed(2) : '0');
@@ -465,7 +472,6 @@ export class CommercialProposalService {
   async publish(
     orderId: string,
     staffUserId: string,
-    staffRole: string,
     dto?: PublishCommercialProposalDto,
   ) {
     await this.assertOrderForKp(orderId);
@@ -475,6 +481,31 @@ export class CommercialProposalService {
     });
     if (!draft) throw new BadRequestException('Нет черновика КП');
     if (draft.lines.length === 0) throw new BadRequestException('Добавьте хотя бы одну позицию в КП');
+
+    const orderBefore = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { status: true },
+    });
+    if (!orderBefore) throw new NotFoundException('Заказ не найден');
+    if (!KP_PUBLISH_ALLOWED.has(orderBefore.status)) {
+      throw new BadRequestException(
+        'Публикация КП доступна только на согласовании / сформированном предложении / после принятия (до оплаты и отгрузки)',
+      );
+    }
+
+    /** Новое КП снова ждёт ответа клиента — возвращаем на согласование предложения. */
+    let statusAfter: OrderStatus = orderBefore.status;
+    if (orderBefore.status === OrderStatus.PENDING_APPROVAL) {
+      const next = (dto?.nextOrderStatus as OrderStatus | undefined) ?? OrderStatus.PROPOSAL_FORMED;
+      if (!KP_PUBLISH_NEXT.has(next)) {
+        throw new BadRequestException(
+          'После публикации КП статус может быть только «Предложение сформировано» или «Согласован»',
+        );
+      }
+      statusAfter = next;
+    } else if (orderBefore.status === OrderStatus.APPROVED) {
+      statusAfter = OrderStatus.PROPOSAL_FORMED;
+    }
 
     const maxRow = await this.prisma.commercialProposal.aggregate({
       where: { orderId, versionNumber: { gt: 0 } },
@@ -520,16 +551,24 @@ export class CommercialProposalService {
           },
         },
       });
+
+      await tx.order.update({
+        where: { id: orderId },
+        data: {
+          customerKpDecision: null,
+          customerKpDecisionAt: null,
+          customerKpDecisionVersion: null,
+          customerKpRequisites: Prisma.JsonNull,
+          status: statusAfter,
+        },
+      });
     });
 
-    const cur = await this.prisma.order.findUnique({
-      where: { id: orderId },
-      select: { status: true },
-    });
-    if (cur?.status === OrderStatus.PENDING_APPROVAL) {
-      const next =
-        (dto?.nextOrderStatus as OrderStatus | undefined) ?? OrderStatus.PROPOSAL_FORMED;
-      const updated = await this.orders.updateStatus(orderId, next);
+    if (orderBefore.status !== statusAfter) {
+      await this.orders.emitOrderStatusChangedSideEffects(orderId, orderBefore.status, statusAfter, {
+        path: `/api/v1/orders/admin/${orderId}/commercial-proposals/publish`,
+        httpMethod: 'POST',
+      });
     }
 
     const summary = await this.getSummary(orderId);

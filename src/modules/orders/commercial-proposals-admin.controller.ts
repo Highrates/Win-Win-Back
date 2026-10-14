@@ -60,6 +60,6 @@ export class CommercialProposalsAdminController {
     @CurrentUser() user: JwtPayload,
     @Body() body?: PublishCommercialProposalDto,
   ) {
-    return this.kp.publish(orderId, user.sub, user.role, body);
+    return this.kp.publish(orderId, user.sub, body);
   }
 }

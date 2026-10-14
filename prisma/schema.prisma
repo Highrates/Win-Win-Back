@@ -1043,6 +1043,15 @@ model Order {
   updatedAt   DateTime  @updatedAt
   /// Последняя просмотренная клиентом версия опубликованного КП (1+). Новая публикация выше этого номера даёт «непрочитано» в ЛК.
   customerLastSeenCommercialProposalVersion Int?
+  /// Ответ клиента на последнее опубликованное КП (после чата / принятия с реквизитами).
+  customerKpDecision CustomerKpDecision?
+  customerKpDecisionAt DateTime?
+  /// Версия КП, на которую дан ответ (сбрасывается при новой публикации).
+  customerKpDecisionVersion Int?
+  /// Снимок реквизитов при принятии КП.
+  customerKpRequisites Json?
+  /// Клиент скрыл заказ из списков ЛК (soft archive).
+  customerArchivedAt DateTime?
   /// Снимок профиля рефералов покупателя на момент отправки заказа (enabled, min сумма).
   buyerReferralProgramProfileIdSnapshot String?
   /// Снимок профиля бонуса дизайнера покупателя на момент отправки заказа.
@@ -1108,6 +1117,13 @@ model OrderItem {
 enum CommercialProposalStatus {
   DRAFT
   PUBLISHED
+}
+
+/// Решение клиента по опубликованному КП.
+enum CustomerKpDecision {
+  ACCEPTED
+  CHANGES_REQUESTED
+  REJECTED
 }
 
 model CommercialProposal {

@@ -1,5 +1,5 @@
-import { NotFoundException } from '@nestjs/common';
-import { AuditAction, OrderStatus } from '@prisma/client';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { AuditAction, CommercialProposalStatus, CustomerKpDecision, OrderStatus } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { OrdersService } from './orders.service';
 
@@ -7,10 +7,18 @@ function buildService() {
   const prisma = {
     order: {
       findUnique: vi.fn(),
+      findFirst: vi.fn(),
       findMany: vi.fn(async () => []),
       count: vi.fn(async () => 0),
       update: vi.fn(),
+      updateMany: vi.fn(),
       groupBy: vi.fn(async () => []),
+    },
+    commercialProposal: {
+      findFirst: vi.fn(),
+    },
+    userProfile: {
+      upsert: vi.fn(),
     },
     chatConversation: {
       findMany: vi.fn(async () => []),
@@ -20,7 +28,10 @@ function buildService() {
       upsert: vi.fn((args: unknown) => ({ op: 'upsert', args })),
       delete: vi.fn((args: unknown) => ({ op: 'delete', args })),
     },
-    $transaction: vi.fn(async (ops: unknown[]) => ops),
+    $transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => {
+      if (typeof fn === 'function') return fn(prisma);
+      return fn;
+    }),
   };
   const audit = { log: vi.fn(async () => undefined) };
   const mail = { sendOrderSubmittedStaff: vi.fn(async () => undefined) };
@@ -205,5 +216,107 @@ describe('OrdersService.findManyForAdmin period filter', () => {
         ]),
       }),
     );
+  });
+});
+
+describe('OrdersService customer KP path', () => {
+  const baseOrder = {
+    id: 'ord-kp',
+    status: OrderStatus.PROPOSAL_FORMED,
+    customerKpDecision: null,
+    customerKpDecisionVersion: null,
+  };
+
+  it('assert: mismatch expectedVersion → 409', async () => {
+    const { service, prisma } = buildService();
+    prisma.order.findFirst.mockResolvedValue(baseOrder);
+    prisma.commercialProposal.findFirst.mockResolvedValue({ versionNumber: 2 });
+
+    await expect(
+      service.recordCommercialProposalDecisionForCustomer('u1', 'ord-kp', {
+        decision: 'REJECTED',
+        expectedVersion: 1,
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('decision: условный updateMany с expectedVersion', async () => {
+    const { service, prisma } = buildService();
+    prisma.order.findFirst.mockResolvedValue(baseOrder);
+    prisma.commercialProposal.findFirst.mockResolvedValue({
+      versionNumber: 3,
+      status: CommercialProposalStatus.PUBLISHED,
+    });
+    prisma.order.updateMany.mockResolvedValue({ count: 1 });
+
+    const out = await service.recordCommercialProposalDecisionForCustomer('u1', 'ord-kp', {
+      decision: 'CHANGES_REQUESTED',
+      expectedVersion: 3,
+    });
+
+    expect(out.customerKpDecision).toBe(CustomerKpDecision.CHANGES_REQUESTED);
+    expect(out.customerKpDecisionVersion).toBe(3);
+    expect(prisma.order.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          customerKpDecision: CustomerKpDecision.CHANGES_REQUESTED,
+          customerKpDecisionVersion: 3,
+        }),
+      }),
+    );
+  });
+
+  it('accept: невалидный ИНН → BadRequest', async () => {
+    const { service, prisma } = buildService();
+    prisma.order.findFirst.mockResolvedValue(baseOrder);
+    prisma.commercialProposal.findFirst.mockResolvedValue({ versionNumber: 1 });
+
+    await expect(
+      service.acceptCommercialProposalForCustomer('u1', 'ord-kp', {
+        expectedVersion: 1,
+        requisites: {
+          legalType: 'LLC',
+          contactName: 'Иван Иванов',
+          companyName: 'ООО Ромашка',
+          inn: '1234567890',
+        },
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.order.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('accept: валидные реквизиты → APPROVED + profile upsert', async () => {
+    const { service, prisma } = buildService();
+    prisma.order.findFirst.mockResolvedValue(baseOrder);
+    prisma.commercialProposal.findFirst.mockResolvedValue({ versionNumber: 1 });
+    prisma.order.updateMany.mockResolvedValue({ count: 1 });
+    prisma.userProfile.upsert.mockResolvedValue({});
+
+    const out = await service.acceptCommercialProposalForCustomer('u1', 'ord-kp', {
+      expectedVersion: 1,
+      requisites: {
+        legalType: 'LLC',
+        contactName: 'Иван Иванов',
+        companyName: 'ООО Ромашка',
+        inn: '7707083893',
+        bankName: 'Сбер',
+        bankAccount: '40817810099910004316',
+        bic: '044525225',
+        phone: '+7 900 111-22-33',
+      },
+    });
+
+    expect(out.status).toBe(OrderStatus.APPROVED);
+    expect(prisma.userProfile.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          inn: '7707083893',
+          bankAccount: '40817810099910004316',
+        }),
+      }),
+    );
+    const upsertArg = prisma.userProfile.upsert.mock.calls[0]?.[0];
+    expect(upsertArg.create).not.toHaveProperty('bic');
+    expect(upsertArg.create).not.toHaveProperty('phone');
   });
 });
