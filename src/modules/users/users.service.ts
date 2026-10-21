@@ -728,23 +728,24 @@ export class UsersService {
     return { new: total };
   }
 
-  /** Дашборд: новые заявки партнёров за период (ещё в очереди). */
+  /**
+   * Дашборд: новые партнёры за период (момент одобрения).
+   * Очередь заявок — отдельно (`partner-applications` / pending-count), не KPI «Новые».
+   */
   async getDashboardPartnersSummaryForAdmin(opts?: {
     from?: string;
     to?: string;
   }): Promise<{ new: number }> {
-    const submittedAt = createdAtInRange(parseDashboardDateRange(opts?.from, opts?.to));
+    const approvedAt = createdAtInRange(parseDashboardDateRange(opts?.from, opts?.to));
+    if (!approvedAt) return { new: 0 };
     const total = await this.prisma.user.count({
       where: {
         role: UserRole.USER,
         isActive: true,
         profile: {
           is: {
-            partnerApplicationSubmittedAt: submittedAt
-              ? { gte: submittedAt.gte, lt: submittedAt.lt }
-              : { not: null },
-            winWinPartnerApproved: false,
-            partnerApplicationRejectedAt: null,
+            winWinPartnerApproved: true,
+            winWinPartnerApprovedAt: { gte: approvedAt.gte, lt: approvedAt.lt },
           },
         },
       },
@@ -788,6 +789,7 @@ export class UsersService {
         where: { userId: targetUserId },
         data: {
           winWinPartnerApproved: true,
+          winWinPartnerApprovedAt: new Date(),
           winWinReferralCode: publicCode,
           partnerApplicationRejectedAt: null,
         },

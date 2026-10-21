@@ -464,6 +464,8 @@ model UserProfile {
   profileOnboardingPending Boolean @default(true)
   /// Партнёр Wupapa: одобрено админом (реферальная программа, разделы Кейсы/Команда/Проекты и т.д.)
   winWinPartnerApproved Boolean @default(false)
+  /// Когда одобрили (для KPI дашборда «новые партнёры» за период)
+  winWinPartnerApprovedAt DateTime?
   /// Заявка на партнёра: сопроводительный текст
   partnerApplicationCoverLetter  String?   @db.Text
   /// Заявка: URL CV в хранилище
