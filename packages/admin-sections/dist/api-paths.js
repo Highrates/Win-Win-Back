@@ -10,8 +10,11 @@ function resolveAdminSectionFromApiPath(pathOnly) {
         return 'staff';
     if (p.includes('/assistant/admin'))
         return 'assistant';
-    if (p.includes('/users/admin/partner-applications'))
+    // Заявки / KPI партнёров (не путать с clients: signup-summary и список USER).
+    if (p.includes('/users/admin/partner-applications') ||
+        p.includes('/users/admin/partners-summary')) {
         return 'applications';
+    }
     if (p.includes('/users/admin'))
         return 'clients';
     if (p.includes('/cases/admin/brands'))

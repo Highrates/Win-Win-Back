@@ -16,6 +16,10 @@ describe('admin-sections', () => {
     expect(resolveAdminSectionFromApiPath('/api/v1/users/admin/partner-applications')).toBe(
       'applications',
     );
+    expect(resolveAdminSectionFromApiPath('/api/v1/users/admin/partners-summary')).toBe(
+      'applications',
+    );
+    expect(resolveAdminSectionFromApiPath('/api/v1/users/admin/signup-summary')).toBe('clients');
     expect(resolveAdminSectionFromApiPath('/api/v1/settings/admin/staff')).toBe('staff');
   });
 

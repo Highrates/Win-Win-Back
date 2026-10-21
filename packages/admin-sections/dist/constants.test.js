@@ -14,6 +14,8 @@ const pathnames_1 = require("./pathnames");
         (0, vitest_1.expect)((0, api_paths_1.resolveAdminSectionFromApiPath)('/api/v1/catalog/admin/brands/x')).toBe('brands');
         (0, vitest_1.expect)((0, api_paths_1.resolveAdminSectionFromApiPath)('/api/v1/catalog/admin/media/objects')).toBe('objects');
         (0, vitest_1.expect)((0, api_paths_1.resolveAdminSectionFromApiPath)('/api/v1/users/admin/partner-applications')).toBe('applications');
+        (0, vitest_1.expect)((0, api_paths_1.resolveAdminSectionFromApiPath)('/api/v1/users/admin/partners-summary')).toBe('applications');
+        (0, vitest_1.expect)((0, api_paths_1.resolveAdminSectionFromApiPath)('/api/v1/users/admin/signup-summary')).toBe('clients');
         (0, vitest_1.expect)((0, api_paths_1.resolveAdminSectionFromApiPath)('/api/v1/settings/admin/staff')).toBe('staff');
     });
     (0, vitest_1.it)('maps pathnames and access', () => {
