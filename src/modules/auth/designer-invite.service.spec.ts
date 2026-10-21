@@ -165,6 +165,65 @@ describe('DesignerInviteService', () => {
     });
   });
 
+  it('sendInvite: отклоняет email сотрудника', async () => {
+    const prisma = {
+      user: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValueOnce({
+            id: 'U1',
+            email: 'inv@example.com',
+            profile: { winWinPartnerApproved: true, winWinReferralCode: 'REF123' },
+          })
+          .mockResolvedValueOnce({ role: 'MODERATOR' }),
+      },
+      designerInvite: {
+        count: vi.fn(),
+        create: vi.fn(),
+      },
+    } as any;
+    const config = { get: vi.fn() } as any;
+    const users = { ensureWinWinReferralCodeForUser: vi.fn().mockResolvedValue('REF123') } as any;
+    const mail = { sendDesignerInvite: vi.fn() } as any;
+
+    const svc = new DesignerInviteService(prisma, config, {} as any, mail, users, {} as any);
+    await expect(svc.sendInvite('U1', 'staff@example.com')).rejects.toMatchObject({
+      message: expect.stringContaining('сотруднику'),
+    });
+    expect(prisma.designerInvite.create).not.toHaveBeenCalled();
+    expect(mail.sendDesignerInvite).not.toHaveBeenCalled();
+  });
+
+  it('verifyToken: accountKind staff для MODERATOR', async () => {
+    const prisma = {
+      designerInvite: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'I1',
+          emailNorm: 'staff@mail.ru',
+          refCode: 'REF1',
+          consumedAt: null,
+          expiresAt: new Date(Date.now() + 86400000),
+          inviter: { id: 'U1', email: 'p@x.com' },
+        }),
+      },
+      user: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'S1', role: 'MODERATOR' }),
+      },
+    } as any;
+    const jwt = {
+      verifyAsync: vi.fn().mockResolvedValue({ sub: 'I1', typ: 'dinv' }),
+    } as any;
+    const config = {
+      get: vi.fn((key: string) => (key === 'JWT_SECRET' ? 'dev-secret' : undefined)),
+    } as any;
+
+    const svc = new DesignerInviteService(prisma, config, jwt, {} as any, {} as any, {} as any);
+    const r = await svc.verifyToken('tok');
+    expect(r.accountExists).toBe(true);
+    expect(r.accountKind).toBe('staff');
+    expect(r.email).toBe('staff@mail.ru');
+  });
+
   it('claimByTokenForUser: применяет ref и помечает инвайт consumed', async () => {
     const prisma = {
       user: { findFirst: vi.fn().mockResolvedValue({ id: 'U1', email: 'a@b.com' }) },

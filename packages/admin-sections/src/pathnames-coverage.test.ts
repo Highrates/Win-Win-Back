@@ -24,8 +24,10 @@ function listAdminPageFiles(dir: string): string[] {
 /** `app/(admin)/admin/.../page.tsx` → `/admin/...` с sample-id вместо `[param]`. */
 function pageFileToPathname(filePath: string): string {
   const rel = relative(ADMIN_PAGES_ROOT, filePath).replace(/\\/g, '/');
-  if (rel === 'page.tsx') return '/admin';
-  const route = rel.replace(/\/page\.tsx$/, '');
+  // Route groups `(shell)` не входят в URL.
+  const withoutGroups = rel.replace(/\/\([^/]+\)/g, '').replace(/^\([^/]+\)\//, '');
+  if (withoutGroups === 'page.tsx') return '/admin';
+  const route = withoutGroups.replace(/\/page\.tsx$/, '');
   const withSamples = route.replace(/\[[^\]]+\]/g, 'sample-id');
   return `/admin/${withSamples}`.replace(/\/+/g, '/');
 }

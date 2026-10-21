@@ -110,6 +110,19 @@ export class DesignerInviteService {
       throw new BadRequestException('Нельзя пригласить самого себя');
     }
 
+    const existingAccount = await this.prisma.user.findFirst({
+      where: { email, isActive: true },
+      select: { role: true },
+    });
+    if (
+      existingAccount &&
+      (existingAccount.role === UserRole.ADMIN || existingAccount.role === UserRole.MODERATOR)
+    ) {
+      throw new BadRequestException(
+        'Этот email принадлежит сотруднику Wupapa. Укажите другой адрес для приглашения партнёра.',
+      );
+    }
+
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const dayCount = await this.prisma.designerInvite.count({
       where: { inviterId: inviterUserId, createdAt: { gte: since } },
@@ -178,12 +191,17 @@ export class DesignerInviteService {
     }
     const existing = await this.prisma.user.findFirst({
       where: { email: row.emailNorm, isActive: true },
-      select: { id: true },
+      select: { id: true, role: true },
     });
+    const isStaff =
+      existing != null &&
+      (existing.role === UserRole.ADMIN || existing.role === UserRole.MODERATOR);
     return {
       email: row.emailNorm,
       prefillRef: row.refCode,
       accountExists: Boolean(existing),
+      /** `none` — можно регистрировать; `customer` — войти в ЛК; `staff` — нельзя принять как партнёр. */
+      accountKind: !existing ? ('none' as const) : isStaff ? ('staff' as const) : ('customer' as const),
     };
   }
 
