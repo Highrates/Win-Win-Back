@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  calcCnyFromRetailRub,
   TYPICAL_SOURCING_VOLUME_M3,
   TYPICAL_SOURCING_WEIGHT_KG,
   type PricingProfileCalcInput,
@@ -87,5 +88,30 @@ describe('budget → reverse → forward (сквозной calc)', () => {
     if (!forward.ok) return;
     expect(forward.retailRub).toBeGreaterThan(0);
     expect(forward.retailRub).toBeCloseTo(budget, -2);
+  });
+});
+
+describe('Excel PI: rub→cny→rub at fixed dims (no typical)', () => {
+  it('identity ±tolerance on explicit weight/volume', () => {
+    const retailRub = 48_750;
+    const weightKg = 12;
+    const volumeM3 = 0.08;
+    const rev = calcCnyFromRetailRub(sampleProfile, retailRub, {
+      costPriceCny: 1,
+      grossWeightKg: weightKg,
+      volumeM3,
+    });
+    expect(rev.ok).toBe(true);
+    if (!rev.ok) return;
+
+    const fwd = forwardRetailFromProfileCalc(sampleProfile, {
+      costPriceCny: rev.costPriceCny,
+      weightKg,
+      volumeM3,
+    });
+    expect(fwd.ok).toBe(true);
+    if (!fwd.ok) return;
+    // Integer ¥ rounding → small ₽ drift; stay well under 1% of retail.
+    expect(Math.abs(fwd.retailRub - retailRub)).toBeLessThan(retailRub * 0.01 + 50);
   });
 });

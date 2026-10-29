@@ -253,8 +253,14 @@ export class OrdersService {
     return { ok: true as const };
   }
 
+  /** Не отдаём внутренние записки менеджера в клиентские API. */
+  private omitAdminNotes<T extends { adminNotes?: string | null }>(order: T): Omit<T, 'adminNotes'> {
+    const { adminNotes: _adminNotes, ...rest } = order;
+    return rest;
+  }
+
   async findOne(userId: string, orderId: string) {
-    return this.prisma.order.findFirst({
+    const order = await this.prisma.order.findFirst({
       where: { id: orderId, userId },
       include: {
         items: {
@@ -263,6 +269,7 @@ export class OrdersService {
         },
       },
     });
+    return order ? this.omitAdminNotes(order) : null;
   }
 
   /** Детали заказа для ЛК: как `findOne`, плюс счётчик непрочитанных и телефон профиля. */
@@ -279,7 +286,7 @@ export class OrdersService {
     });
     if (!order) return null;
     const unreadMap = await this.orderChat.unreadStaffCountsForCustomerOrders(userId, [order.id]);
-    const { user, ...rest } = order;
+    const { user, ...rest } = this.omitAdminNotes(order);
     return {
       ...rest,
       customerPhone: user.phone ?? null,
@@ -707,6 +714,21 @@ export class OrdersService {
           include: { product: { include: { images: true, brand: true } } },
         },
       },
+    });
+  }
+
+  /** Внутренние записки менеджера (только админка). */
+  async updateAdminNotes(orderId: string, adminNotes: string) {
+    const exists = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { id: true },
+    });
+    if (!exists) throw new NotFoundException('Order not found');
+    const normalized = adminNotes.trim() ? adminNotes : null;
+    return this.prisma.order.update({
+      where: { id: orderId },
+      data: { adminNotes: normalized },
+      select: { id: true, adminNotes: true, updatedAt: true },
     });
   }
 

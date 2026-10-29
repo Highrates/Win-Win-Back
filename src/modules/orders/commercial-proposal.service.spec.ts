@@ -55,7 +55,17 @@ describe('CommercialProposalService.publish', () => {
       emitOrderStatusChangedSideEffects: vi.fn(async () => undefined),
     };
     const orderSettings = {};
-    svc = new CommercialProposalService(prisma as never, orders as never, orderSettings as never);
+    const piExcel = {};
+    const config = { get: vi.fn() };
+    const pricingAdmin = { loadDefaultProfileCalcContext: vi.fn() };
+    svc = new CommercialProposalService(
+      prisma as never,
+      orders as never,
+      orderSettings as never,
+      piExcel as never,
+      config as never,
+      pricingAdmin as never,
+    );
 
     prisma.order.findUnique
       .mockResolvedValueOnce({

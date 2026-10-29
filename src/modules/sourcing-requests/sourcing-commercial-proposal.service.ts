@@ -1,9 +1,11 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   CommercialProposalStatus,
   Prisma,
@@ -16,6 +18,7 @@ import {
   TYPICAL_SOURCING_VOLUME_M3,
   TYPICAL_SOURCING_WEIGHT_KG,
 } from '@win-win/sourcing-request';
+import { fetchAllowedMediaBuffer } from '../../common/media-fetch-allowlist';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PricingAdminService } from '../catalog/pricing-admin.service';
 import type { PricingProfileCalcInput } from '../catalog/pricing-calculation';
@@ -23,6 +26,17 @@ import {
   forwardRetailFromProfileCalc,
   reverseRetailToCnyFromProfileCalc,
 } from '../catalog/sourcing-kp-pricing-calc';
+import {
+  formatDisplayId,
+  pushFieldChange,
+  sourcingLineToExportLine,
+} from '../pi-excel/pi-excel-map';
+import {
+  matchSourcingPatches,
+  type SourcingDraftLineForMerge,
+} from '../pi-excel/pi-excel-merge';
+import { PiExcelService } from '../pi-excel/pi-excel.service';
+import type { PiExcelLineChange } from '../pi-excel/pi-excel.types';
 import type {
   InitSourcingCommercialProposalDraftDto,
   SourcingCommercialProposalLineInputDto,
@@ -99,6 +113,8 @@ export class SourcingCommercialProposalService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly pricingAdmin: PricingAdminService,
+    private readonly piExcel: PiExcelService,
+    private readonly config: ConfigService,
   ) {}
 
   private async assertRequestForKp(sourcingRequestId: string) {
@@ -440,7 +456,11 @@ export class SourcingCommercialProposalService {
     return this.serializeProposal(created);
   }
 
-  async putDraft(sourcingRequestId: string, lines: SourcingCommercialProposalLineInputDto[]) {
+  async putDraft(
+    sourcingRequestId: string,
+    lines: SourcingCommercialProposalLineInputDto[],
+    opts?: { expectedUpdatedAt?: string | null },
+  ) {
     await this.assertRequestForKp(sourcingRequestId);
     const draft = await this.prisma.sourcingCommercialProposal.findFirst({
       where: {
@@ -450,6 +470,9 @@ export class SourcingCommercialProposalService {
       },
     });
     if (!draft) throw new NotFoundException('Сначала создайте черновик КП');
+    if (opts?.expectedUpdatedAt) {
+      this.assertDraftNotStale(draft.updatedAt, opts.expectedUpdatedAt);
+    }
 
     const sorted = [...lines].sort((a, b) => a.sortOrder - b.sortOrder);
     const calcCtx = await this.requireDefaultProfileCalcContext();
@@ -479,6 +502,10 @@ export class SourcingCommercialProposalService {
           },
         });
       }
+      await tx.sourcingCommercialProposal.update({
+        where: { id: draft.id },
+        data: { updatedAt: new Date() },
+      });
     });
 
     const full = await this.prisma.sourcingCommercialProposal.findUniqueOrThrow({
@@ -646,4 +673,306 @@ export class SourcingCommercialProposalService {
     if (row.status === SourcingRequestStatus.PENDING_REVIEW) return [];
     return this.getAllPublishedForSourcingRequest(sourcingRequestId);
   }
+
+  /**
+   * Excel import contract (sourcing):
+   * - **merge-only** onto existing DRAFT (no delete/recreate).
+   * - if no draft + apply → create once from request items, then merge.
+   * - if no draft + **dryRun** → virtual lines from request (no `initDraft` side-effect).
+   * - Destructive copy-from-published is not part of Excel import.
+   */
+  private async loadDraftLinesForExcelImport(
+    sourcingRequestId: string,
+    opts: { dryRun: boolean },
+  ): Promise<{
+    lines: SourcingDraftLineForMerge[];
+    created: boolean;
+    mode: 'merged' | 'created';
+    draftUpdatedAt: string | null;
+  }> {
+    try {
+      const draft = await this.getDraft(sourcingRequestId);
+      return {
+        lines: draft.lines.map((l) => ({
+          id: l.id,
+          sourceSourcingRequestItemId: l.sourceSourcingRequestItemId,
+          sortOrder: l.sortOrder,
+          productName: l.productName,
+          description: l.description,
+          imageUrls: l.imageUrls,
+          quantity: l.quantity,
+          unit: l.unit,
+          costPriceCny: l.costPriceCny,
+          grossWeightKg: l.grossWeightKg,
+          volumeM3: l.volumeM3,
+          offerUnitPrice: l.offerUnitPrice,
+          deliveryEta: l.deliveryEta,
+        })),
+        created: false,
+        mode: 'merged',
+        draftUpdatedAt: draft.updatedAt,
+      };
+    } catch (e) {
+      if (!(e instanceof NotFoundException)) throw e;
+    }
+
+    if (opts.dryRun) {
+      const request = await this.loadRequestForKpInit(sourcingRequestId);
+      const calcCtx = await this.requireDefaultProfileCalcContext();
+      const creates = this.buildLineCreatesFromRequestItems(request, calcCtx.calcIn);
+      if (creates.length === 0) {
+        throw new BadRequestException('В заявке нет позиций для КП');
+      }
+      return {
+        lines: creates.map((l, i) => {
+          const sourceId =
+            typeof l.sourceSourcingRequestItemId === 'string'
+              ? l.sourceSourcingRequestItemId
+              : null;
+          return {
+            id: `virtual:${sourceId ?? `idx-${i}`}`,
+            sourceSourcingRequestItemId: sourceId,
+            sortOrder: typeof l.sortOrder === 'number' ? l.sortOrder : i,
+            productName: String(l.productName ?? ''),
+            description: (l.description as string | null | undefined) ?? null,
+            imageUrls: [],
+            quantity: typeof l.quantity === 'number' ? l.quantity : 1,
+            unit: String(l.unit ?? 'шт'),
+            costPriceCny: numFromDecimal(l.costPriceCny as Prisma.Decimal),
+            grossWeightKg:
+              l.grossWeightKg != null ? numFromDecimal(l.grossWeightKg as Prisma.Decimal) : null,
+            volumeM3: l.volumeM3 != null ? numFromDecimal(l.volumeM3 as Prisma.Decimal) : null,
+            offerUnitPrice: numFromDecimal(l.offerUnitPrice as Prisma.Decimal),
+            deliveryEta: (l.deliveryEta as string | null | undefined) ?? null,
+          };
+        }),
+        created: false,
+        mode: 'created',
+        draftUpdatedAt: null,
+      };
+    }
+
+    const draft = await this.initDraft(sourcingRequestId);
+    return {
+      lines: draft.lines.map((l) => ({
+        id: l.id,
+        sourceSourcingRequestItemId: l.sourceSourcingRequestItemId,
+        sortOrder: l.sortOrder,
+        productName: l.productName,
+        description: l.description,
+        imageUrls: l.imageUrls,
+        quantity: l.quantity,
+        unit: l.unit,
+        costPriceCny: l.costPriceCny,
+        grossWeightKg: l.grossWeightKg,
+        volumeM3: l.volumeM3,
+        offerUnitPrice: l.offerUnitPrice,
+        deliveryEta: l.deliveryEta,
+      })),
+      created: true,
+      mode: 'created',
+      draftUpdatedAt: draft.updatedAt,
+    };
+  }
+
+  private assertDraftNotStale(draftUpdatedAt: Date, expectedUpdatedAt: string) {
+    const expectedMs = Date.parse(expectedUpdatedAt);
+    if (!Number.isFinite(expectedMs)) {
+      throw new BadRequestException('Некорректный expectedUpdatedAt');
+    }
+    if (draftUpdatedAt.getTime() !== expectedMs) {
+      throw new ConflictException(
+        'Черновик КП уже изменён. Обновите превью Excel и примените снова.',
+      );
+    }
+  }
+
+  async exportExcel(
+    sourcingRequestId: string,
+    source: 'request' | 'draft' | 'published',
+    versionNumber?: number,
+  ): Promise<{ buffer: Buffer; filename: string }> {
+    const request = await this.assertRequestForKp(sourcingRequestId);
+    const display = formatDisplayId(sourcingRequestId);
+    let lines;
+
+    if (source === 'request') {
+      lines = request.items.map((it, idx) =>
+        sourcingLineToExportLine({
+          no: idx + 1,
+          sourceSourcingRequestItemId: it.id,
+          productName: it.name?.trim() || `Товар ${idx + 1}`,
+          description: it.description,
+          quantity: it.quantity,
+          costPriceCny: 0,
+          grossWeightKg: null,
+          volumeM3: null,
+          imageUrl: null,
+        }),
+      );
+    } else if (source === 'draft') {
+      const draft = await this.getDraft(sourcingRequestId);
+      lines = draft.lines.map((l, idx) =>
+        sourcingLineToExportLine({
+          no: idx + 1,
+          sourceSourcingRequestItemId: l.sourceSourcingRequestItemId,
+          productName: l.productName,
+          description: l.description,
+          quantity: l.quantity,
+          costPriceCny: l.costPriceCny,
+          grossWeightKg: l.grossWeightKg,
+          volumeM3: l.volumeM3,
+          imageUrl: l.imageUrls[0] ?? null,
+        }),
+      );
+    } else {
+      const ver = versionNumber ?? 0;
+      if (ver < 1) throw new BadRequestException('Укажите version для published');
+      const pub = await this.getPublished(sourcingRequestId, ver);
+      lines = pub.lines.map((l, idx) =>
+        sourcingLineToExportLine({
+          no: idx + 1,
+          sourceSourcingRequestItemId: l.sourceSourcingRequestItemId,
+          productName: l.productName,
+          description: l.description,
+          quantity: l.quantity,
+          costPriceCny: l.costPriceCny,
+          grossWeightKg: l.grossWeightKg,
+          volumeM3: l.volumeM3,
+          imageUrl: l.imageUrls[0] ?? null,
+        }),
+      );
+    }
+
+    if (lines.length === 0) {
+      throw new BadRequestException('Нет позиций для выгрузки в Excel');
+    }
+
+    const buffer = await this.piExcel.buildWorkbook({
+      lines,
+      invoiceNo: display,
+      entityLabel: 'SOURCING',
+      currencyLabel: 'CNY (¥)',
+      fetchImage: (url) => fetchAllowedMediaBuffer(this.config, url),
+    });
+    const suffix = source === 'published' ? `v${versionNumber}` : source;
+    return { buffer, filename: `PI-CNY-sourcing-${display}-${suffix}.xlsx` };
+  }
+
+  async importExcelToDraft(
+    sourcingRequestId: string,
+    file: Express.Multer.File | undefined,
+    opts?: { dryRun?: boolean; expectedUpdatedAt?: string | null },
+  ) {
+    const dryRun = Boolean(opts?.dryRun);
+    const buf = this.piExcel.assertXlsxUpload(file);
+    const parsed = await this.piExcel.parseWorkbook(buf);
+    if (parsed.invoiceNoHint) {
+      this.logger.log(
+        `PI excel import sourcing=${sourcingRequestId} invoiceNoHint=${parsed.invoiceNoHint.slice(0, 120)}`,
+      );
+    }
+
+    const {
+      lines: draftLines,
+      created,
+      mode,
+      draftUpdatedAt,
+    } = await this.loadDraftLinesForExcelImport(sourcingRequestId, { dryRun });
+
+    const { pairs, unmatched } = matchSourcingPatches(draftLines, parsed.lines);
+    if (pairs.length === 0) {
+      throw new BadRequestException(
+        `Не удалось сопоставить ни одной строки Excel с позициями КП${
+          unmatched.length ? `: ${unmatched.join('; ')}` : ''
+        }`,
+      );
+    }
+    const patchedIds = new Set(pairs.map((p) => p.line.id));
+    const changes: PiExcelLineChange[] = [];
+
+    const nextLines: SourcingCommercialProposalLineInputDto[] = draftLines.map((l) => {
+      const pair = pairs.find((p) => p.line.id === l.id);
+      if (!pair) {
+        return {
+          sourceSourcingRequestItemId: l.sourceSourcingRequestItemId ?? undefined,
+          sortOrder: l.sortOrder,
+          productName: l.productName,
+          description: l.description,
+          imageUrls: l.imageUrls,
+          quantity: l.quantity,
+          unit: l.unit,
+          costPriceCny: l.costPriceCny,
+          grossWeightKg: l.grossWeightKg,
+          volumeM3: l.volumeM3,
+          deliveryEta: l.deliveryEta,
+        };
+      }
+      const { patch } = pair;
+      const qty =
+        patch.quantity != null && patch.quantity >= 1 ? Math.floor(patch.quantity) : l.quantity;
+      const cny =
+        patch.unitPrice != null && Number.isFinite(patch.unitPrice) && patch.unitPrice >= 0
+          ? patch.unitPrice
+          : l.costPriceCny;
+      const nextDesc = patch.description != null ? patch.description : l.description;
+      const nextWeight =
+        patch.weightKg != null && patch.weightKg > 0 ? patch.weightKg : l.grossWeightKg;
+      const nextVol = patch.volumeM3 != null && patch.volumeM3 > 0 ? patch.volumeM3 : l.volumeM3;
+
+      const fields: PiExcelLineChange['fields'] = [];
+      pushFieldChange(fields, 'quantity', l.quantity, qty);
+      pushFieldChange(fields, 'costPriceCny', l.costPriceCny, cny);
+      pushFieldChange(fields, 'grossWeightKg', l.grossWeightKg, nextWeight);
+      pushFieldChange(fields, 'volumeM3', l.volumeM3, nextVol);
+      pushFieldChange(fields, 'description', l.description, nextDesc);
+      if (fields.length) {
+        changes.push({
+          lineId: l.id,
+          label: l.productName || patch.modelName || l.id,
+          excelRow: patch.excelRow,
+          fields,
+        });
+      }
+
+      return {
+        sourceSourcingRequestItemId: l.sourceSourcingRequestItemId ?? undefined,
+        sortOrder: l.sortOrder,
+        productName: l.productName,
+        description: nextDesc,
+        imageUrls: l.imageUrls,
+        quantity: qty,
+        unit: l.unit,
+        costPriceCny: cny,
+        grossWeightKg: nextWeight,
+        volumeM3: nextVol,
+        deliveryEta: l.deliveryEta,
+      };
+    });
+
+    const base = {
+      dryRun,
+      mode,
+      draftCreated: created,
+      draftUpdatedAt,
+      invoiceNoHint: parsed.invoiceNoHint,
+      updatedCount: pairs.length,
+      changedLineCount: changes.length,
+      unchangedCount: draftLines.length - patchedIds.size,
+      unmatchedCount: unmatched.length,
+      unmatched,
+      emptyMatchKeyRows: parsed.emptyMatchKeyRows,
+      changes,
+    };
+
+    if (dryRun) {
+      return { ...base, draft: null };
+    }
+
+    const updated = await this.putDraft(sourcingRequestId, nextLines, {
+      expectedUpdatedAt: opts?.expectedUpdatedAt,
+    });
+    return { ...base, draft: updated, draftUpdatedAt: updated.updatedAt };
+  }
+
 }

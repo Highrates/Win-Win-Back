@@ -1,5 +1,5 @@
 import { OrderStatus } from '@prisma/client';
-import { IsEnum, IsObject, IsOptional } from 'class-validator';
+import { IsEnum, IsObject, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class UpdateOrderStatusAdminDto {
   @IsEnum(OrderStatus)
@@ -8,4 +8,10 @@ export class UpdateOrderStatusAdminDto {
   @IsOptional()
   @IsObject()
   documentUrls?: Record<string, string>;
+}
+
+export class UpdateOrderAdminNotesDto {
+  @IsString()
+  @MaxLength(20000)
+  adminNotes!: string;
 }

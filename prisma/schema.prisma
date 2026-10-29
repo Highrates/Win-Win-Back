@@ -1037,6 +1037,8 @@ model Order {
   totalAmount Decimal   @db.Decimal(12, 2)
   currency    String    @default("RUB")
   comment     String?   @db.Text
+  /// Внутренние записки менеджера (только админка; клиенту не отдаём).
+  adminNotes  String?   @db.Text
   /// ФИО заказчика (черновик / отправленный заказ)
   customerName    String? @db.Text
   /// Адрес доставки

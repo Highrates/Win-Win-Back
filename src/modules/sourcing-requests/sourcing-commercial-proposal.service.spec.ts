@@ -85,7 +85,14 @@ describe('SourcingCommercialProposalService pricing flow', () => {
       $transaction: vi.fn(async (fn: (tx: Record<string, unknown>) => Promise<unknown>) => fn(prisma)),
     };
 
-    svc = new SourcingCommercialProposalService(prisma as never, pricingAdmin as never);
+    const piExcel = {};
+    const config = { get: vi.fn() };
+    svc = new SourcingCommercialProposalService(
+      prisma as never,
+      pricingAdmin as never,
+      piExcel as never,
+      config as never,
+    );
   });
 
   it('putDraft: budget → reverse → save → offerUnitPrice (один load профиля)', async () => {

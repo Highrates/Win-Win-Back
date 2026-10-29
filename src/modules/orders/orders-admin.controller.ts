@@ -17,7 +17,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../../common/decorators/current-user.decorator';
 import { OrdersService } from './orders.service';
-import { UpdateOrderStatusAdminDto } from './dto/order-admin.dto';
+import { UpdateOrderAdminNotesDto, UpdateOrderStatusAdminDto } from './dto/order-admin.dto';
 import { OrderChatService } from '../order-chat/order-chat.service';
 
 @Controller('orders/admin')
@@ -91,5 +91,10 @@ export class OrdersAdminController {
   @Patch(':id/status')
   patchStatus(@Param('id') id: string, @Body() dto: UpdateOrderStatusAdminDto) {
     return this.orders.updateStatus(id, dto.status, dto.documentUrls);
+  }
+
+  @Patch(':id/admin-notes')
+  patchAdminNotes(@Param('id') id: string, @Body() dto: UpdateOrderAdminNotesDto) {
+    return this.orders.updateAdminNotes(id, dto.adminNotes);
   }
 }

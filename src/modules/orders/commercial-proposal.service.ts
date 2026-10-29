@@ -1,8 +1,11 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   CommercialProposalStatus,
   OrderStatus,
@@ -12,8 +15,32 @@ import {
   KP_PUBLISH_ALLOWED_ORDER_STATUSES,
   KP_PUBLISH_NEXT_STATUSES,
 } from '@win-win/order-status';
+import { fetchAllowedMediaBuffer } from '../../common/media-fetch-allowlist';
 import { PrismaService } from '../../prisma/prisma.service';
+import { PricingAdminService } from '../catalog/pricing-admin.service';
+import { forwardRetailFromProfileCalc } from '../catalog/sourcing-kp-pricing-calc';
+import {
+  calcCnyFromRetailRub,
+  type PricingProfileCalcInput,
+} from '../catalog/pricing-calculation';
 import { OrderSettingsService } from '../order-settings/order-settings.service';
+import {
+  formatDisplayId,
+  formatDimsMm,
+  mergePatchIntoOrderSnapshot,
+  orderItemToExportLine,
+  orderKpLineToExportLine,
+  pushFieldChange,
+  snapshotAsRecord,
+  volumeM3FromOrderSnapshot,
+  weightFromSnapshot,
+} from '../pi-excel/pi-excel-map';
+import {
+  matchOrderPatches,
+  type OrderDraftLineForMerge,
+} from '../pi-excel/pi-excel-merge';
+import { PiExcelService } from '../pi-excel/pi-excel.service';
+import type { PiExcelLineChange } from '../pi-excel/pi-excel.types';
 import type { CommercialProposalLineInputDto, PublishCommercialProposalDto } from './dto/commercial-proposal.dto';
 import { OrdersService } from './orders.service';
 
@@ -31,11 +58,203 @@ function numFromDecimal(v: Prisma.Decimal | null | undefined): number {
 
 @Injectable()
 export class CommercialProposalService {
+  private readonly logger = new Logger(CommercialProposalService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly orders: OrdersService,
     private readonly orderSettings: OrderSettingsService,
+    private readonly piExcel: PiExcelService,
+    private readonly config: ConfigService,
+    private readonly pricingAdmin: PricingAdminService,
   ) {}
+
+  private async requireDefaultProfileCalc(): Promise<PricingProfileCalcInput> {
+    const ctx = await this.pricingAdmin.loadDefaultProfileCalcContext();
+    if (!ctx.ok) {
+      // Профиль в проде всегда есть; ветка — для локального/битого seed.
+      throw new BadRequestException(
+        'Основной профиль ценообразования недоступен (проверьте настройки каталога)',
+      );
+    }
+    return ctx.calcIn;
+  }
+
+  /**
+   * RUB retail → CNY for PI export at **exact** weight/volume (no typical fallback).
+   * Fail loudly if dims missing or reverse does not converge — silent 0 caused round-trip drift.
+   */
+  private rubToCnyForExcel(
+    calcIn: PricingProfileCalcInput,
+    retailRub: number,
+    weightKg: number | null,
+    volumeM3: number | null,
+    lineLabel?: string,
+  ): number {
+    if (!(retailRub > 0)) return 0;
+    const where = lineLabel ? ` (${lineLabel})` : '';
+    if (
+      weightKg == null ||
+      !Number.isFinite(weightKg) ||
+      weightKg <= 0 ||
+      volumeM3 == null ||
+      !Number.isFinite(volumeM3) ||
+      volumeM3 <= 0
+    ) {
+      throw new BadRequestException(
+        `Не удалось перевести ₽→¥${where}: нет веса/объёма в снимке позиции (типовые габариты не подставляются)`,
+      );
+    }
+    const rev = calcCnyFromRetailRub(calcIn, retailRub, {
+      costPriceCny: 1,
+      grossWeightKg: weightKg,
+      volumeM3,
+    });
+    if (!rev.ok) {
+      throw new BadRequestException(
+        `Не удалось перевести ₽→¥${where}: ${rev.reason === 'NEGATIVE_CNY' ? 'отрицательный ¥' : 'некорректные входные данные'}`,
+      );
+    }
+    return rev.costPriceCny;
+  }
+
+  /** CNY from Excel → RUB offer at **exact** dims (no typical fallback). */
+  private cnyToRubForImport(
+    calcIn: PricingProfileCalcInput,
+    costPriceCny: number,
+    weightKg: number | null,
+    volumeM3: number | null,
+    lineLabel?: string,
+  ): number {
+    if (!(costPriceCny > 0)) return 0;
+    const where = lineLabel ? ` (${lineLabel})` : '';
+    if (
+      weightKg == null ||
+      !Number.isFinite(weightKg) ||
+      weightKg <= 0 ||
+      volumeM3 == null ||
+      !Number.isFinite(volumeM3) ||
+      volumeM3 <= 0
+    ) {
+      throw new BadRequestException(
+        `Некорректные ¥ / вес / объём для расчёта цены в ₽${where}`,
+      );
+    }
+    const fwd = forwardRetailFromProfileCalc(calcIn, {
+      costPriceCny,
+      weightKg,
+      volumeM3,
+    });
+    if (!fwd.ok) {
+      throw new BadRequestException(`Некорректные ¥ / вес / объём для расчёта цены в ₽${where}`);
+    }
+    return fwd.retailRub;
+  }
+
+  /**
+   * Excel import contract (orders):
+   * - **merge-only**: if a DRAFT already exists → reuse it, never delete/recreate lines wholesale via init.
+   * - if no draft + apply → create once from order items, then merge.
+   * - if no draft + **dryRun** → virtual lines from order (no `initDraft` side-effect).
+   * - Destructive re-init from published is **not** part of Excel import (use KP editor «копия vN»).
+   */
+  private async loadDraftLinesForExcelImport(
+    orderId: string,
+    opts: { dryRun: boolean },
+  ): Promise<{
+    lines: OrderDraftLineForMerge[];
+    created: boolean;
+    mode: 'merged' | 'created';
+    draftUpdatedAt: string | null;
+  }> {
+    try {
+      const draft = await this.getDraft(orderId);
+      return {
+        lines: draft.lines.map((l) => ({
+          id: l.id,
+          sourceOrderItemId: l.sourceOrderItemId,
+          sortOrder: l.sortOrder,
+          productId: l.productId,
+          productVariantId: l.productVariantId,
+          quantity: l.quantity,
+          unit: l.unit,
+          snapshot: snapshotAsRecord(l.snapshot),
+          offerUnitPrice: l.offerUnitPrice,
+          discountPercent: l.discountPercent,
+          deliveryEta: l.deliveryEta,
+          lineNote: l.lineNote,
+        })),
+        created: false,
+        mode: 'merged',
+        draftUpdatedAt: draft.updatedAt,
+      };
+    } catch (e) {
+      if (!(e instanceof NotFoundException)) throw e;
+    }
+
+    if (opts.dryRun) {
+      const order = await this.assertOrderForKp(orderId);
+      if (order.items.length === 0) {
+        throw new BadRequestException('В заказе нет позиций для КП');
+      }
+      const lineData = await this.enrichLinesWithVariantGross(
+        this.buildLinesFromOrderItems(order.items),
+      );
+      return {
+        lines: lineData.map((l, i) => ({
+          id: `virtual:${l.sourceOrderItemId ?? `idx-${i}`}`,
+          sourceOrderItemId: l.sourceOrderItemId,
+          sortOrder: l.sortOrder,
+          productId: l.productId,
+          productVariantId: l.productVariantId,
+          quantity: l.quantity,
+          unit: l.unit,
+          snapshot: snapshotAsRecord(l.snapshot as unknown),
+          offerUnitPrice: numFromDecimal(l.offerUnitPrice),
+          discountPercent:
+            l.discountPercent != null ? numFromDecimal(l.discountPercent) : null,
+          deliveryEta: l.deliveryEta,
+          lineNote: l.lineNote,
+        })),
+        created: false,
+        mode: 'created',
+        draftUpdatedAt: null,
+      };
+    }
+
+    const draft = await this.initDraft(orderId);
+    return {
+      lines: draft.lines.map((l) => ({
+        id: l.id,
+        sourceOrderItemId: l.sourceOrderItemId,
+        sortOrder: l.sortOrder,
+        productId: l.productId,
+        productVariantId: l.productVariantId,
+        quantity: l.quantity,
+        unit: l.unit,
+        snapshot: snapshotAsRecord(l.snapshot),
+        offerUnitPrice: l.offerUnitPrice,
+        discountPercent: l.discountPercent,
+        deliveryEta: l.deliveryEta,
+        lineNote: l.lineNote,
+      })),
+      created: true,
+      mode: 'created',
+      draftUpdatedAt: draft.updatedAt,
+    };
+  }
+
+  private assertDraftNotStale(draftUpdatedAt: Date, expectedUpdatedAt: string) {
+    const expectedMs = Date.parse(expectedUpdatedAt);
+    if (!Number.isFinite(expectedMs)) {
+      throw new BadRequestException('Некорректный expectedUpdatedAt');
+    }
+    if (draftUpdatedAt.getTime() !== expectedMs) {
+      throw new ConflictException(
+        'Черновик КП уже изменён. Обновите превью Excel и примените снова.',
+      );
+    }
+  }
 
   private async assertOrderForKp(orderId: string) {
     const o = await this.prisma.order.findUnique({
@@ -408,12 +627,19 @@ export class CommercialProposalService {
     return this.serializeProposal(created);
   }
 
-  async putDraft(orderId: string, lines: CommercialProposalLineInputDto[]) {
+  async putDraft(
+    orderId: string,
+    lines: CommercialProposalLineInputDto[],
+    opts?: { expectedUpdatedAt?: string | null },
+  ) {
     await this.assertOrderForKp(orderId);
     const draft = await this.prisma.commercialProposal.findFirst({
       where: { orderId, versionNumber: 0, status: CommercialProposalStatus.DRAFT },
     });
     if (!draft) throw new NotFoundException('Сначала создайте черновик КП');
+    if (opts?.expectedUpdatedAt) {
+      this.assertDraftNotStale(draft.updatedAt, opts.expectedUpdatedAt);
+    }
 
     for (const l of lines) {
       await this.validateProductLine(l.productId, l.productVariantId ?? null);
@@ -460,6 +686,10 @@ export class CommercialProposalService {
           },
         });
       }
+      await tx.commercialProposal.update({
+        where: { id: draft.id },
+        data: { updatedAt: new Date() },
+      });
     });
 
     const full = await this.prisma.commercialProposal.findUniqueOrThrow({
@@ -596,4 +826,259 @@ export class CommercialProposalService {
     if (o.status === OrderStatus.DRAFT) return null;
     return this.getLatestPublishedForOrder(orderId);
   }
+
+  async exportExcel(
+    orderId: string,
+    source: 'order' | 'draft' | 'published',
+    versionNumber?: number,
+  ): Promise<{ buffer: Buffer; filename: string }> {
+    const order = await this.assertOrderForKp(orderId);
+    const display = formatDisplayId(orderId);
+    const calcIn = await this.requireDefaultProfileCalc();
+    let lines;
+
+    if (source === 'order') {
+      lines = order.items.map((it, idx) => {
+        const snap = it.snapshot;
+        const label =
+          it.product?.name?.trim() ||
+          (typeof snapshotAsRecord(snap)?.productName === 'string'
+            ? String(snapshotAsRecord(snap)!.productName)
+            : `№${idx + 1}`);
+        const cny = this.rubToCnyForExcel(
+          calcIn,
+          numFromDecimal(it.price),
+          weightFromSnapshot(snap),
+          volumeM3FromOrderSnapshot(snap),
+          label,
+        );
+        return orderItemToExportLine({
+          no: idx + 1,
+          itemId: it.id,
+          productId: it.productId,
+          quantity: it.quantity,
+          unitPriceCny: cny,
+          snapshot: snap,
+          productName: it.product?.name,
+        });
+      });
+    } else if (source === 'draft') {
+      const draft = await this.getDraft(orderId);
+      lines = draft.lines.map((l, idx) => {
+        const snap = snapshotAsRecord(l.snapshot);
+        const label =
+          (typeof snap?.productName === 'string' && snap.productName) ||
+          l.productId ||
+          `№${idx + 1}`;
+        const cny = this.rubToCnyForExcel(
+          calcIn,
+          l.offerUnitPrice,
+          weightFromSnapshot(snap),
+          volumeM3FromOrderSnapshot(snap),
+          label,
+        );
+        return orderKpLineToExportLine({
+          no: idx + 1,
+          sourceOrderItemId: l.sourceOrderItemId,
+          productId: l.productId,
+          quantity: l.quantity,
+          unitPriceCny: cny,
+          snapshot: snap,
+        });
+      });
+    } else {
+      const ver = versionNumber ?? 0;
+      if (ver < 1) throw new BadRequestException('Укажите version для published');
+      const pub = await this.getPublished(orderId, ver);
+      lines = pub.lines.map((l, idx) => {
+        const snap = snapshotAsRecord(l.snapshot);
+        const label =
+          (typeof snap?.productName === 'string' && snap.productName) ||
+          l.productId ||
+          `№${idx + 1}`;
+        const cny = this.rubToCnyForExcel(
+          calcIn,
+          l.offerUnitPrice,
+          weightFromSnapshot(snap),
+          volumeM3FromOrderSnapshot(snap),
+          label,
+        );
+        return orderKpLineToExportLine({
+          no: idx + 1,
+          sourceOrderItemId: l.sourceOrderItemId,
+          productId: l.productId,
+          quantity: l.quantity,
+          unitPriceCny: cny,
+          snapshot: snap,
+        });
+      });
+    }
+
+    if (lines.length === 0) {
+      throw new BadRequestException('Нет позиций для выгрузки в Excel');
+    }
+
+    const buffer = await this.piExcel.buildWorkbook({
+      lines,
+      invoiceNo: display,
+      entityLabel: 'ORDER',
+      currencyLabel: 'CNY (¥)',
+      fetchImage: (url) => fetchAllowedMediaBuffer(this.config, url),
+    });
+    const suffix = source === 'published' ? `v${versionNumber}` : source;
+    return { buffer, filename: `PI-CNY-order-${display}-${suffix}.xlsx` };
+  }
+
+  async importExcelToDraft(
+    orderId: string,
+    file: Express.Multer.File | undefined,
+    opts?: { dryRun?: boolean; expectedUpdatedAt?: string | null },
+  ) {
+    const dryRun = Boolean(opts?.dryRun);
+    const buf = this.piExcel.assertXlsxUpload(file);
+    const parsed = await this.piExcel.parseWorkbook(buf);
+    if (parsed.invoiceNoHint) {
+      this.logger.log(
+        `PI excel import order=${orderId} invoiceNoHint=${parsed.invoiceNoHint.slice(0, 120)}`,
+      );
+    }
+    const calcIn = await this.requireDefaultProfileCalc();
+
+    const {
+      lines: draftLines,
+      created,
+      mode,
+      draftUpdatedAt,
+    } = await this.loadDraftLinesForExcelImport(orderId, { dryRun });
+
+    const { pairs, unmatched } = matchOrderPatches(draftLines, parsed.lines);
+    if (pairs.length === 0) {
+      throw new BadRequestException(
+        `Не удалось сопоставить ни одной строки Excel с позициями КП${
+          unmatched.length ? `: ${unmatched.join('; ')}` : ''
+        }`,
+      );
+    }
+    const patchedIds = new Set(pairs.map((p) => p.line.id));
+    const changes: PiExcelLineChange[] = [];
+
+    const nextLines: CommercialProposalLineInputDto[] = draftLines.map((l) => {
+      const pair = pairs.find((p) => p.line.id === l.id);
+      if (!pair) {
+        return {
+          sourceOrderItemId: l.sourceOrderItemId,
+          sortOrder: l.sortOrder,
+          productId: l.productId,
+          productVariantId: l.productVariantId,
+          quantity: l.quantity,
+          unit: l.unit,
+          snapshot: l.snapshot ?? undefined,
+          offerUnitPrice: l.offerUnitPrice,
+          discountPercent: l.discountPercent,
+          deliveryEta: l.deliveryEta,
+          lineNote: l.lineNote,
+        };
+      }
+      const { patch } = pair;
+      const label =
+        (typeof l.snapshot?.productName === 'string' && l.snapshot.productName) ||
+        patch.modelName ||
+        l.productId;
+      const qty =
+        patch.quantity != null && patch.quantity >= 1 ? Math.floor(patch.quantity) : l.quantity;
+      const mergedSnap = mergePatchIntoOrderSnapshot(l.snapshot, patch);
+      const weightBefore = weightFromSnapshot(l.snapshot);
+      const volumeBefore = volumeM3FromOrderSnapshot(l.snapshot);
+      const weight = patch.weightKg ?? weightFromSnapshot(mergedSnap);
+      const volume = patch.volumeM3 ?? volumeM3FromOrderSnapshot(mergedSnap);
+      const price =
+        patch.unitPrice != null && Number.isFinite(patch.unitPrice) && patch.unitPrice >= 0
+          ? this.cnyToRubForImport(calcIn, patch.unitPrice, weight, volume, label)
+          : l.offerUnitPrice;
+
+      const fields: PiExcelLineChange['fields'] = [];
+      pushFieldChange(fields, 'quantity', l.quantity, qty);
+      // Excel col F is CNY — show ¥ before/after first; ₽ only as converted "after".
+      if (patch.unitPrice != null && Number.isFinite(patch.unitPrice)) {
+        let beforeCny: number | null = null;
+        if (weightBefore != null && weightBefore > 0 && volumeBefore != null && volumeBefore > 0) {
+          try {
+            beforeCny = this.rubToCnyForExcel(
+              calcIn,
+              l.offerUnitPrice,
+              weightBefore,
+              volumeBefore,
+              label,
+            );
+          } catch {
+            beforeCny = null;
+          }
+        }
+        pushFieldChange(fields, 'unitPriceCny', beforeCny, patch.unitPrice);
+        if (price !== l.offerUnitPrice) {
+          pushFieldChange(fields, 'offerUnitPriceRub', null, price);
+        }
+      }
+      pushFieldChange(fields, 'weightKg', weightBefore, weightFromSnapshot(mergedSnap));
+      pushFieldChange(
+        fields,
+        'volumeM3',
+        volumeBefore,
+        volumeM3FromOrderSnapshot(mergedSnap),
+      );
+      const beforeDims = formatDimsMm(
+        l.snapshot?.lengthMm,
+        l.snapshot?.widthMm,
+        l.snapshot?.heightMm,
+      );
+      const afterDims = formatDimsMm(
+        mergedSnap.lengthMm,
+        mergedSnap.widthMm,
+        mergedSnap.heightMm,
+      );
+      pushFieldChange(fields, 'dimsMm', beforeDims, afterDims);
+      if (fields.length) {
+        changes.push({ lineId: l.id, label, excelRow: patch.excelRow, fields });
+      }
+
+      return {
+        sourceOrderItemId: l.sourceOrderItemId,
+        sortOrder: l.sortOrder,
+        productId: l.productId,
+        productVariantId: l.productVariantId,
+        quantity: qty,
+        unit: l.unit,
+        snapshot: mergedSnap,
+        offerUnitPrice: price,
+        discountPercent: l.discountPercent,
+        deliveryEta: l.deliveryEta,
+        lineNote: l.lineNote,
+      };
+    });
+
+    const base = {
+      dryRun,
+      mode,
+      draftCreated: created,
+      draftUpdatedAt,
+      invoiceNoHint: parsed.invoiceNoHint,
+      updatedCount: pairs.length,
+      changedLineCount: changes.length,
+      unchangedCount: draftLines.length - patchedIds.size,
+      unmatchedCount: unmatched.length,
+      unmatched,
+      emptyMatchKeyRows: parsed.emptyMatchKeyRows,
+      changes,
+    };
+
+    if (dryRun) {
+      return { ...base, draft: null };
+    }
+
+    const updated = await this.putDraft(orderId, nextLines, {
+      expectedUpdatedAt: opts?.expectedUpdatedAt,
+    });
+    return { ...base, draft: updated, draftUpdatedAt: updated.updatedAt };
+  }
+
 }

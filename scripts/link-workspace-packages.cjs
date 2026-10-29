@@ -5,7 +5,13 @@
 const fs = require('fs');
 const path = require('path');
 
-const PACKAGES = ['admin-sections', 'order-item-snapshot', 'order-status', 'sourcing-request'];
+const PACKAGES = [
+  'admin-sections',
+  'media-proxy-allowlist',
+  'order-item-snapshot',
+  'order-status',
+  'sourcing-request',
+];
 
 const backendRoot = path.join(__dirname, '..');
 
