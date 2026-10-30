@@ -72,5 +72,8 @@ export type PiExcelMatchPair<T> = { line: T; patch: PiExcelLinePatch };
 
 export type PiExcelMatchResult<T> = {
   pairs: PiExcelMatchPair<T>[];
+  /** Human-readable unmatched reasons (incl. already-matched collisions). */
   unmatched: string[];
+  /** Excel rows with no draft target — candidates to append as new KP lines (sourcing). */
+  unmatchedPatches: PiExcelLinePatch[];
 };

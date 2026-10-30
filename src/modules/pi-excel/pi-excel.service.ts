@@ -180,47 +180,11 @@ export class PiExcelService {
       ws.getCell(totalRow, COL.totalVolume).value = { formula: `SUM(S${first}:S${last})` };
     }
 
-    // Hide match-key column so suppliers don't "clean" it; key also lives in cell notes.
+    // Hide match-key column; key also lives in cell notes. No sheet protect —
+    // locked cells blocked insert/edit of empty rows after "Всего" and confused suppliers.
     ws.getColumn(COL.matchKey).hidden = true;
     const headerT = ws.getCell(HEADER_ROW, COL.matchKey);
     if (!headerT.value) headerT.value = '№ в письме / match';
-
-    // Soft sheet protect: keep qty/price (+ PI fill cols) editable; lock match key / formulas.
-    // Empty password — suppliers can unprotect if needed, but casual unhide of T is harder.
-    const unlockCols = [
-      COL.qty,
-      COL.price,
-      COL.description,
-      COL.size,
-      COL.netWeight,
-      COL.grossWeight,
-      COL.volumeUnit,
-    ] as const;
-    for (let r = DATA_START_ROW; r < totalRow; r++) {
-      for (const c of unlockCols) {
-        ws.getCell(r, c).protection = { locked: false };
-      }
-      ws.getCell(r, COL.matchKey).protection = { locked: true };
-    }
-    try {
-      await ws.protect('', {
-        selectLockedCells: true,
-        selectUnlockedCells: true,
-        formatCells: false,
-        formatColumns: false,
-        formatRows: false,
-        insertColumns: false,
-        insertRows: true,
-        insertHyperlinks: false,
-        deleteColumns: false,
-        deleteRows: false,
-        sort: false,
-        autoFilter: false,
-        pivotTables: false,
-      });
-    } catch (e) {
-      this.logger.warn(`PI excel sheet protect skipped: ${(e as Error).message}`);
-    }
 
     const out = await wb.xlsx.writeBuffer();
     return Buffer.from(out);
@@ -247,7 +211,12 @@ export class PiExcelService {
 
     const lines: PiExcelLinePatch[] = [];
     const emptyMatchKeyRows: number[] = [];
-    const maxRow = Math.max(ws.actualRowCount || 0, ws.rowCount || 0, DATA_START_ROW + 200);
+    // No fixed line cap — scan the used range (and a generous floor for sparse sheets).
+    const maxRow = Math.max(
+      ws.actualRowCount || 0,
+      ws.rowCount || 0,
+      DATA_START_ROW + 10_000,
+    );
 
     for (let r = DATA_START_ROW; r <= maxRow; r++) {
       const noRaw = ws.getCell(r, COL.no).value;

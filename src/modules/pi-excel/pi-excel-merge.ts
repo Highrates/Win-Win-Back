@@ -83,6 +83,7 @@ export function matchOrderPatches(
   const used = new Set<string>();
   const pairs: PiExcelMatchResult<OrderDraftLineForMerge>['pairs'] = [];
   const unmatched: string[] = [];
+  const unmatchedPatches: PiExcelLinePatch[] = [];
 
   for (const patch of patches) {
     let target: OrderDraftLineForMerge | undefined;
@@ -110,6 +111,7 @@ export function matchOrderPatches(
     if (!target && patch.no != null) target = byNo.get(patch.no);
 
     if (!target) {
+      unmatchedPatches.push(patch);
       unmatched.push(`строка Excel ${patch.excelRow} (T=${patch.matchKey ?? '—'}, No=${patch.no ?? '—'})`);
       continue;
     }
@@ -123,7 +125,7 @@ export function matchOrderPatches(
     pairs.push({ line: target, patch });
   }
 
-  return { pairs, unmatched };
+  return { pairs, unmatched, unmatchedPatches };
 }
 
 export function matchSourcingPatches(
@@ -151,6 +153,7 @@ export function matchSourcingPatches(
   const used = new Set<string>();
   const pairs: PiExcelMatchResult<SourcingDraftLineForMerge>['pairs'] = [];
   const unmatched: string[] = [];
+  const unmatchedPatches: PiExcelLinePatch[] = [];
 
   for (const patch of patches) {
     let target: SourcingDraftLineForMerge | undefined;
@@ -173,6 +176,7 @@ export function matchSourcingPatches(
     if (!target && patch.no != null) target = byNo.get(patch.no);
 
     if (!target) {
+      unmatchedPatches.push(patch);
       unmatched.push(`строка Excel ${patch.excelRow} (T=${patch.matchKey ?? '—'}, No=${patch.no ?? '—'})`);
       continue;
     }
@@ -186,5 +190,10 @@ export function matchSourcingPatches(
     pairs.push({ line: target, patch });
   }
 
-  return { pairs, unmatched };
+  return { pairs, unmatched, unmatchedPatches };
+}
+
+/** Unmatched Excel row can become a new sourcing KP line if it has a product name. */
+export function canAddSourcingLineFromExcelPatch(patch: PiExcelLinePatch): boolean {
+  return Boolean(patch.modelName?.trim());
 }

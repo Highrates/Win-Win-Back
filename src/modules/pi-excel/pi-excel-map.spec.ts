@@ -180,6 +180,44 @@ describe('pi-excel-merge', () => {
     expect(result.pairs).toHaveLength(1);
     expect(result.unmatched).toHaveLength(1);
     expect(result.unmatched[0]).toMatch(/строка Excel 13/);
+    expect(result.unmatchedPatches).toHaveLength(1);
+    expect(result.unmatchedPatches[0]!.excelRow).toBe(13);
+  });
+
+  it('sourcing unmatched patches are returned for add-as-new', () => {
+    const { pairs, unmatchedPatches } = matchSourcingPatches(
+      [
+        {
+          id: 'l1',
+          sourceSourcingRequestItemId: 'si-1',
+          sortOrder: 0,
+          productName: 'A',
+          description: null,
+          imageUrls: [],
+          quantity: 1,
+          unit: 'шт',
+          costPriceCny: 10,
+          grossWeightKg: null,
+          volumeM3: null,
+          offerUnitPrice: 100,
+          deliveryEta: null,
+        },
+      ],
+      [
+        patch({ matchKey: 'SL:si-1', modelName: 'A', excelRow: 12 }),
+        patch({
+          matchKey: null,
+          no: 99,
+          modelName: 'New chair from supplier',
+          quantity: 4,
+          unitPrice: 88,
+          excelRow: 13,
+        }),
+      ],
+    );
+    expect(pairs).toHaveLength(1);
+    expect(unmatchedPatches).toHaveLength(1);
+    expect(unmatchedPatches[0]!.modelName).toBe('New chair from supplier');
   });
 
   it('matches sourcing by SL', () => {

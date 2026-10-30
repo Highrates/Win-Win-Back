@@ -32,11 +32,12 @@ import {
   sourcingLineToExportLine,
 } from '../pi-excel/pi-excel-map';
 import {
+  canAddSourcingLineFromExcelPatch,
   matchSourcingPatches,
   type SourcingDraftLineForMerge,
 } from '../pi-excel/pi-excel-merge';
 import { PiExcelService } from '../pi-excel/pi-excel.service';
-import type { PiExcelLineChange } from '../pi-excel/pi-excel.types';
+import type { PiExcelLineChange, PiExcelLinePatch } from '../pi-excel/pi-excel.types';
 import type {
   InitSourcingCommercialProposalDraftDto,
   SourcingCommercialProposalLineInputDto,
@@ -720,9 +721,7 @@ export class SourcingCommercialProposalService {
       const request = await this.loadRequestForKpInit(sourcingRequestId);
       const calcCtx = await this.requireDefaultProfileCalcContext();
       const creates = this.buildLineCreatesFromRequestItems(request, calcCtx.calcIn);
-      if (creates.length === 0) {
-        throw new BadRequestException('В заявке нет позиций для КП');
-      }
+      // Empty request is OK — Excel may supply all lines as new unmatched adds.
       return {
         lines: creates.map((l, i) => {
           const sourceId =
@@ -859,6 +858,51 @@ export class SourcingCommercialProposalService {
     return { buffer, filename: `PI-CNY-sourcing-${display}-${suffix}.xlsx` };
   }
 
+  /** Build a new freeform sourcing KP line from an unmatched Excel row. */
+  private sourcingLineFromExcelPatch(
+    patch: PiExcelLinePatch,
+    sortOrder: number,
+  ): {
+    line: SourcingCommercialProposalLineInputDto;
+    label: string;
+    fields: PiExcelLineChange['fields'];
+  } {
+    const label = patch.modelName!.trim();
+    const qty =
+      patch.quantity != null && patch.quantity >= 1 ? Math.floor(patch.quantity) : 1;
+    const cny =
+      patch.unitPrice != null && Number.isFinite(patch.unitPrice) && patch.unitPrice >= 0
+        ? patch.unitPrice
+        : 0;
+    const nextWeight =
+      patch.weightKg != null && patch.weightKg > 0 ? patch.weightKg : null;
+    const nextVol = patch.volumeM3 != null && patch.volumeM3 > 0 ? patch.volumeM3 : null;
+    const nextDesc = patch.description?.trim() || null;
+    const fields: PiExcelLineChange['fields'] = [];
+    pushFieldChange(fields, 'productName', null, label);
+    pushFieldChange(fields, 'quantity', null, qty);
+    pushFieldChange(fields, 'costPriceCny', null, cny);
+    pushFieldChange(fields, 'grossWeightKg', null, nextWeight);
+    pushFieldChange(fields, 'volumeM3', null, nextVol);
+    pushFieldChange(fields, 'description', null, nextDesc);
+    return {
+      label,
+      fields,
+      line: {
+        sortOrder,
+        productName: label,
+        description: nextDesc,
+        imageUrls: [],
+        quantity: qty,
+        unit: 'шт',
+        costPriceCny: cny,
+        grossWeightKg: nextWeight,
+        volumeM3: nextVol,
+        deliveryEta: null,
+      },
+    };
+  }
+
   async importExcelToDraft(
     sourcingRequestId: string,
     file: Express.Multer.File | undefined,
@@ -880,10 +924,12 @@ export class SourcingCommercialProposalService {
       draftUpdatedAt,
     } = await this.loadDraftLinesForExcelImport(sourcingRequestId, { dryRun });
 
-    const { pairs, unmatched } = matchSourcingPatches(draftLines, parsed.lines);
-    if (pairs.length === 0) {
+    const { pairs, unmatched, unmatchedPatches } = matchSourcingPatches(draftLines, parsed.lines);
+    const toAdd = unmatchedPatches.filter(canAddSourcingLineFromExcelPatch);
+    const skippedUnmatched = unmatchedPatches.filter((p) => !canAddSourcingLineFromExcelPatch(p));
+    if (pairs.length === 0 && toAdd.length === 0) {
       throw new BadRequestException(
-        `Не удалось сопоставить ни одной строки Excel с позициями КП${
+        `Не удалось сопоставить ни одной строки Excel с позициями КП и нет строк для добавления${
           unmatched.length ? `: ${unmatched.join('; ')}` : ''
         }`,
       );
@@ -950,6 +996,34 @@ export class SourcingCommercialProposalService {
       };
     });
 
+    let nextSort =
+      nextLines.reduce((m, l) => Math.max(m, l.sortOrder), -1) + 1;
+    const addedLabels: string[] = [];
+    for (const patch of toAdd) {
+      const added = this.sourcingLineFromExcelPatch(patch, nextSort++);
+      nextLines.push(added.line);
+      addedLabels.push(added.label);
+      changes.push({
+        lineId: `new:excel:${patch.excelRow}`,
+        label: added.label,
+        excelRow: patch.excelRow,
+        fields: added.fields,
+      });
+    }
+
+    const addedExcelRows = new Set(toAdd.map((p) => p.excelRow));
+    const stillUnmatched = [
+      ...skippedUnmatched.map(
+        (p) =>
+          `строка Excel ${p.excelRow}: нет названия товара — не добавлена (T=${p.matchKey ?? '—'}, No=${p.no ?? '—'})`,
+      ),
+      ...unmatched.filter((u) => {
+        const m = /строка Excel (\d+)/.exec(u);
+        if (!m) return true;
+        return !addedExcelRows.has(Number(m[1]));
+      }),
+    ];
+
     const base = {
       dryRun,
       mode,
@@ -957,10 +1031,12 @@ export class SourcingCommercialProposalService {
       draftUpdatedAt,
       invoiceNoHint: parsed.invoiceNoHint,
       updatedCount: pairs.length,
+      addedCount: toAdd.length,
+      added: addedLabels,
       changedLineCount: changes.length,
       unchangedCount: draftLines.length - patchedIds.size,
-      unmatchedCount: unmatched.length,
-      unmatched,
+      unmatchedCount: stillUnmatched.length,
+      unmatched: stillUnmatched,
       emptyMatchKeyRows: parsed.emptyMatchKeyRows,
       changes,
     };
