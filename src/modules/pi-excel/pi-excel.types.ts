@@ -6,8 +6,8 @@ export type PiExcelExportLine = {
   matchKey: string;
   modelName: string;
   quantity: number;
-  /** Unit price for col F — always CNY (¥) for PI template */
-  unitPrice: number;
+  /** Unit price for col F — CNY (¥) when known; null → leave cell empty */
+  unitPrice: number | null;
   description?: string | null;
   /** Product size text for col J, e.g. "730*550*540" */
   productSizeMm?: string | null;

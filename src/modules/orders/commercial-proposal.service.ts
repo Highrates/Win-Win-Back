@@ -81,18 +81,16 @@ export class CommercialProposalService {
   }
 
   /**
-   * RUB retail → CNY for PI export at **exact** weight/volume (no typical fallback).
-   * Fail loudly if dims missing or reverse does not converge — silent 0 caused round-trip drift.
+   * RUB retail → CNY for import diff preview at **exact** weight/volume (no typical fallback).
+   * Returns null when dims missing or reverse fails — never blocks Excel export.
    */
   private rubToCnyForExcel(
     calcIn: PricingProfileCalcInput,
     retailRub: number,
     weightKg: number | null,
     volumeM3: number | null,
-    lineLabel?: string,
-  ): number {
-    if (!(retailRub > 0)) return 0;
-    const where = lineLabel ? ` (${lineLabel})` : '';
+  ): number | null {
+    if (!(retailRub > 0)) return null;
     if (
       weightKg == null ||
       !Number.isFinite(weightKg) ||
@@ -101,21 +99,14 @@ export class CommercialProposalService {
       !Number.isFinite(volumeM3) ||
       volumeM3 <= 0
     ) {
-      throw new BadRequestException(
-        `Не удалось перевести ₽→¥${where}: нет веса/объёма в снимке позиции (типовые габариты не подставляются)`,
-      );
+      return null;
     }
     const rev = calcCnyFromRetailRub(calcIn, retailRub, {
       costPriceCny: 1,
       grossWeightKg: weightKg,
       volumeM3,
     });
-    if (!rev.ok) {
-      throw new BadRequestException(
-        `Не удалось перевести ₽→¥${where}: ${rev.reason === 'NEGATIVE_CNY' ? 'отрицательный ¥' : 'некорректные входные данные'}`,
-      );
-    }
-    return rev.costPriceCny;
+    return rev.ok ? rev.costPriceCny : null;
   }
 
   /** CNY from Excel → RUB offer at **exact** dims (no typical fallback). */
@@ -834,84 +825,48 @@ export class CommercialProposalService {
   ): Promise<{ buffer: Buffer; filename: string }> {
     const order = await this.assertOrderForKp(orderId);
     const display = formatDisplayId(orderId);
-    const calcIn = await this.requireDefaultProfileCalc();
+    // Export is a blank PI sheet for suppliers: no ₽→¥, no price fill.
+    // Missing weight/volume/dims stay empty cells — never block download.
     let lines;
 
     if (source === 'order') {
-      lines = order.items.map((it, idx) => {
-        const snap = it.snapshot;
-        const label =
-          it.product?.name?.trim() ||
-          (typeof snapshotAsRecord(snap)?.productName === 'string'
-            ? String(snapshotAsRecord(snap)!.productName)
-            : `№${idx + 1}`);
-        const cny = this.rubToCnyForExcel(
-          calcIn,
-          numFromDecimal(it.price),
-          weightFromSnapshot(snap),
-          volumeM3FromOrderSnapshot(snap),
-          label,
-        );
-        return orderItemToExportLine({
+      lines = order.items.map((it, idx) =>
+        orderItemToExportLine({
           no: idx + 1,
           itemId: it.id,
           productId: it.productId,
           quantity: it.quantity,
-          unitPriceCny: cny,
-          snapshot: snap,
+          unitPriceCny: null,
+          snapshot: it.snapshot,
           productName: it.product?.name,
-        });
-      });
+        }),
+      );
     } else if (source === 'draft') {
       const draft = await this.getDraft(orderId);
-      lines = draft.lines.map((l, idx) => {
-        const snap = snapshotAsRecord(l.snapshot);
-        const label =
-          (typeof snap?.productName === 'string' && snap.productName) ||
-          l.productId ||
-          `№${idx + 1}`;
-        const cny = this.rubToCnyForExcel(
-          calcIn,
-          l.offerUnitPrice,
-          weightFromSnapshot(snap),
-          volumeM3FromOrderSnapshot(snap),
-          label,
-        );
-        return orderKpLineToExportLine({
+      lines = draft.lines.map((l, idx) =>
+        orderKpLineToExportLine({
           no: idx + 1,
           sourceOrderItemId: l.sourceOrderItemId,
           productId: l.productId,
           quantity: l.quantity,
-          unitPriceCny: cny,
-          snapshot: snap,
-        });
-      });
+          unitPriceCny: null,
+          snapshot: snapshotAsRecord(l.snapshot),
+        }),
+      );
     } else {
       const ver = versionNumber ?? 0;
       if (ver < 1) throw new BadRequestException('Укажите version для published');
       const pub = await this.getPublished(orderId, ver);
-      lines = pub.lines.map((l, idx) => {
-        const snap = snapshotAsRecord(l.snapshot);
-        const label =
-          (typeof snap?.productName === 'string' && snap.productName) ||
-          l.productId ||
-          `№${idx + 1}`;
-        const cny = this.rubToCnyForExcel(
-          calcIn,
-          l.offerUnitPrice,
-          weightFromSnapshot(snap),
-          volumeM3FromOrderSnapshot(snap),
-          label,
-        );
-        return orderKpLineToExportLine({
+      lines = pub.lines.map((l, idx) =>
+        orderKpLineToExportLine({
           no: idx + 1,
           sourceOrderItemId: l.sourceOrderItemId,
           productId: l.productId,
           quantity: l.quantity,
-          unitPriceCny: cny,
-          snapshot: snap,
-        });
-      });
+          unitPriceCny: null,
+          snapshot: snapshotAsRecord(l.snapshot),
+        }),
+      );
     }
 
     if (lines.length === 0) {
@@ -1000,20 +955,12 @@ export class CommercialProposalService {
       pushFieldChange(fields, 'quantity', l.quantity, qty);
       // Excel col F is CNY — show ¥ before/after first; ₽ only as converted "after".
       if (patch.unitPrice != null && Number.isFinite(patch.unitPrice)) {
-        let beforeCny: number | null = null;
-        if (weightBefore != null && weightBefore > 0 && volumeBefore != null && volumeBefore > 0) {
-          try {
-            beforeCny = this.rubToCnyForExcel(
-              calcIn,
-              l.offerUnitPrice,
-              weightBefore,
-              volumeBefore,
-              label,
-            );
-          } catch {
-            beforeCny = null;
-          }
-        }
+        const beforeCny = this.rubToCnyForExcel(
+          calcIn,
+          l.offerUnitPrice,
+          weightBefore,
+          volumeBefore,
+        );
         pushFieldChange(fields, 'unitPriceCny', beforeCny, patch.unitPrice);
         if (price !== l.offerUnitPrice) {
           pushFieldChange(fields, 'offerUnitPriceRub', null, price);

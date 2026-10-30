@@ -31,18 +31,20 @@ function parseAllowedHostSuffixesFromEnv(raw) {
         .map((s) => (s.startsWith('.') ? s : `.${s}`));
 }
 function hostSuffixList(cfg) {
-    const extras = [...(cfg.extraHostSuffixes ?? [])].map((s) => {
+    const extras = Array.from(cfg.extraHostSuffixes ?? []).map((s) => {
         const t = s.trim().toLowerCase();
         return t.startsWith('.') ? t : `.${t}`;
     });
     if (cfg.includeDefaultHostSuffixes === false)
         return extras;
-    return [...exports.DEFAULT_ALLOWED_HOST_SUFFIXES, ...extras];
+    return Array.from(exports.DEFAULT_ALLOWED_HOST_SUFFIXES).concat(extras);
 }
 function isAllowedMediaProxyTarget(target, cfg) {
     if (target.protocol !== 'http:' && target.protocol !== 'https:')
         return false;
-    const origins = new Set([...cfg.allowedOrigins].map((o) => o.replace(/\/+$/, '')).filter(Boolean));
+    const origins = new Set(Array.from(cfg.allowedOrigins)
+        .map((o) => o.replace(/\/+$/, ''))
+        .filter(Boolean));
     if (origins.has(target.origin))
         return true;
     const host = target.hostname.toLowerCase();

@@ -32,18 +32,20 @@ export type MediaProxyAllowlistConfig = {
 };
 
 function hostSuffixList(cfg: MediaProxyAllowlistConfig): string[] {
-  const extras = [...(cfg.extraHostSuffixes ?? [])].map((s) => {
+  const extras = Array.from(cfg.extraHostSuffixes ?? []).map((s) => {
     const t = s.trim().toLowerCase();
     return t.startsWith('.') ? t : `.${t}`;
   });
   if (cfg.includeDefaultHostSuffixes === false) return extras;
-  return [...DEFAULT_ALLOWED_HOST_SUFFIXES, ...extras];
+  return (Array.from(DEFAULT_ALLOWED_HOST_SUFFIXES) as string[]).concat(extras);
 }
 
 export function isAllowedMediaProxyTarget(target: URL, cfg: MediaProxyAllowlistConfig): boolean {
   if (target.protocol !== 'http:' && target.protocol !== 'https:') return false;
   const origins = new Set(
-    [...cfg.allowedOrigins].map((o) => o.replace(/\/+$/, '')).filter(Boolean),
+    Array.from(cfg.allowedOrigins)
+      .map((o) => o.replace(/\/+$/, ''))
+      .filter(Boolean),
   );
   if (origins.has(target.origin)) return true;
   const host = target.hostname.toLowerCase();

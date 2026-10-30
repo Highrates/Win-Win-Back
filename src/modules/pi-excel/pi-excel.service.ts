@@ -119,8 +119,11 @@ export class PiExcelService {
       ws.getCell(row, COL.no).value = line.no;
       ws.getCell(row, COL.model).value = line.modelName;
       ws.getCell(row, COL.qty).value = line.quantity;
-      ws.getCell(row, COL.price).value = line.unitPrice;
-      ws.getCell(row, COL.sum).value = { formula: `E${row}*F${row}` };
+      // Missing price/dims/weight/volume → leave cells blank (export must not fail).
+      if (line.unitPrice != null && Number.isFinite(line.unitPrice)) {
+        ws.getCell(row, COL.price).value = line.unitPrice;
+        ws.getCell(row, COL.sum).value = { formula: `E${row}*F${row}` };
+      }
       if (line.description) ws.getCell(row, COL.description).value = line.description;
       if (line.productSizeMm) ws.getCell(row, COL.size).value = line.productSizeMm;
       if (line.weightKg != null) {

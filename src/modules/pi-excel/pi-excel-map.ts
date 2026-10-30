@@ -189,8 +189,8 @@ export function orderItemToExportLine(opts: {
   itemId: string;
   productId?: string | null;
   quantity: number;
-  /** CNY for PI col F */
-  unitPriceCny: number;
+  /** CNY for PI col F; null → skip price cell */
+  unitPriceCny: number | null;
   snapshot: unknown;
   productName?: string | null;
 }): PiExcelExportLine {
@@ -221,8 +221,8 @@ export function orderKpLineToExportLine(opts: {
   sourceOrderItemId: string | null;
   productId?: string | null;
   quantity: number;
-  /** CNY for PI col F */
-  unitPriceCny: number;
+  /** CNY for PI col F; null → skip price cell */
+  unitPriceCny: number | null;
   snapshot: unknown;
 }): PiExcelExportLine {
   const snap = opts.snapshot;

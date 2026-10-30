@@ -72,6 +72,33 @@ describe('PiExcelService round-trip', () => {
     expect(parsed.lines[0]!.volumeM3).toBe(known);
   });
 
+  it('skips price/sum and weight cells when values are null', async () => {
+    const ExcelJS = (await import('exceljs')).default;
+    const buf = await svc.buildWorkbook({
+      lines: [
+        {
+          no: 1,
+          matchKey: 'OI:blank-price',
+          modelName: 'No price',
+          quantity: 2,
+          unitPrice: null,
+          weightKg: null,
+          volumeM3: null,
+          productSizeMm: null,
+        },
+      ],
+    });
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buf as unknown as ExcelJS.Buffer);
+    const ws = wb.getWorksheet('Sheet1')!;
+    expect(ws.getCell('F12').value).toBeNull();
+    expect(ws.getCell('G12').value).toBeNull();
+    expect(ws.getCell('O12').value).toBeNull();
+    expect(ws.getCell('R12').value).toBeNull();
+    expect(ws.getCell('D12').value).toBe('No price');
+    expect(ws.getCell('E12').value).toBe(2);
+  });
+
   it('narrow mode total volume formula is E*R (not N*R)', async () => {
     const ExcelJS = (await import('exceljs')).default;
     const buf = await svc.buildWorkbook({
