@@ -2,7 +2,8 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { existsSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
-import ExcelJS from 'exceljs';
+/** Namespace import: Nest CJS emit uses `exceljs.default` for default import, but exceljs has no `.default`. */
+import * as ExcelJS from 'exceljs';
 import {
   cellToInt,
   cellToNumber,
