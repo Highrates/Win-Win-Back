@@ -1,19 +1,22 @@
-/** Normalized row ready to write into the PI template (cols A–T). */
+/** Normalized row ready to write into the KP PI template (cols A–N). */
 export type PiExcelExportLine = {
   /** 1-based line number written to col A */
   no: number;
-  /** Match key written to col T (OI:/SL:/FX:/N: — avoid KL published ids) */
+  /** Match key written to col N (OI:/SL:/FX:/N: — avoid KL published ids) */
   matchKey: string;
+  /** Product name — col C «Наименование» */
   modelName: string;
+  /** Brand — col D «Бренд» */
+  brand?: string | null;
   quantity: number;
-  /** Unit price for col F — CNY (¥) when known; null → leave cell empty */
+  /** Unit price for col H — CNY (¥) when known; null → leave cell empty */
   unitPrice: number | null;
   description?: string | null;
-  /** Product size text for col J, e.g. "730*550*540" */
+  /** Product size text for col E, e.g. "730*550*540" */
   productSizeMm?: string | null;
-  /** Weight kg for cols O and P */
+  /** Unit gross weight kg for col J */
   weightKg?: number | null;
-  /** Volume m³ for col R */
+  /** Unit volume m³ for col L */
   volumeM3?: number | null;
   /** Optional image URL to embed in col B */
   imageUrl?: string | null;
@@ -25,24 +28,26 @@ export type PiExcelLinePatch = {
   excelRow: number;
   /** Value from col A if present */
   no: number | null;
-  /** Raw col T */
+  /** Raw col N match key */
   matchKey: string | null;
   quantity: number | null;
-  /** Col F — CNY for PI workflow */
+  /** Col H — CNY for PI workflow */
   unitPrice: number | null;
   description: string | null;
   productSizeMm: string | null;
-  /** Prefer gross (P), else net (O) */
+  /** Col J gross weight kg */
   weightKg: number | null;
   volumeM3: number | null;
-  /** Model/name from col D — informational; merge does not rename catalog products */
+  /** Name from col C — informational for orders; used when adding sourcing lines */
   modelName: string | null;
+  /** Brand from col D — informational */
+  brand: string | null;
 };
 
 export type PiExcelParseResult = {
   invoiceNoHint: string | null;
   lines: PiExcelLinePatch[];
-  /** Excel row numbers where col T (match key) was empty — fragile fallback to No. */
+  /** Excel row numbers where col N (match key) was empty — fragile fallback to No. */
   emptyMatchKeyRows: number[];
 };
 

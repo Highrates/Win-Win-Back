@@ -154,6 +154,18 @@ export function imageUrlFromOrderSnapshot(snapshot: unknown): string | null {
   return null;
 }
 
+/** Brand for Excel col D — from snapshot when present. */
+export function brandFromOrderSnapshot(snapshot: unknown): string | null {
+  const s = snapshotAsRecord(snapshot);
+  if (typeof s?.brandName === 'string' && s.brandName.trim()) return s.brandName.trim();
+  if (typeof s?.brand === 'string' && s.brand.trim()) return s.brand.trim();
+  if (s?.brand && typeof s.brand === 'object' && !Array.isArray(s.brand)) {
+    const name = (s.brand as Record<string, unknown>).name;
+    if (typeof name === 'string' && name.trim()) return name.trim();
+  }
+  return null;
+}
+
 export function weightFromSnapshot(snapshot: unknown): number | null {
   const s = snapshotAsRecord(snapshot);
   const w = s?.weightKg;
@@ -163,7 +175,7 @@ export function weightFromSnapshot(snapshot: unknown): number | null {
 /**
  * Legacy snapshot / catalog field name `volumeLiters` stores **m³** (not litres).
  * Same contract as KP UI (`KpGrossFieldsEditor`) and variant admin (`volumeLiters: volM3`).
- * Excel PI col R is also m³ — read/write via `volumeM3FromOrderSnapshot` / `setOrderSnapshotVolumeM3`.
+ * Excel PI col L is also m³ — read/write via `volumeM3FromOrderSnapshot` / `setOrderSnapshotVolumeM3`.
  */
 export const ORDER_SNAPSHOT_VOLUME_M3_KEY = 'volumeLiters' as const;
 
@@ -189,7 +201,7 @@ export function orderItemToExportLine(opts: {
   itemId: string;
   productId?: string | null;
   quantity: number;
-  /** CNY for PI col F; null → skip price cell */
+  /** CNY for PI col H; null → skip price cell */
   unitPriceCny: number | null;
   snapshot: unknown;
   productName?: string | null;
@@ -206,6 +218,7 @@ export function orderItemToExportLine(opts: {
       no: opts.no,
     }),
     modelName,
+    brand: brandFromOrderSnapshot(snap),
     quantity: opts.quantity,
     unitPrice: opts.unitPriceCny,
     description: descriptionFromOrderSnapshot(snap),
@@ -221,7 +234,7 @@ export function orderKpLineToExportLine(opts: {
   sourceOrderItemId: string | null;
   productId?: string | null;
   quantity: number;
-  /** CNY for PI col F; null → skip price cell */
+  /** CNY for PI col H; null → skip price cell */
   unitPriceCny: number | null;
   snapshot: unknown;
 }): PiExcelExportLine {
@@ -237,6 +250,7 @@ export function orderKpLineToExportLine(opts: {
       no: opts.no,
     }),
     modelName,
+    brand: brandFromOrderSnapshot(snap),
     quantity: opts.quantity,
     unitPrice: opts.unitPriceCny,
     description: descriptionFromOrderSnapshot(snap),
@@ -251,6 +265,7 @@ export function sourcingLineToExportLine(opts: {
   no: number;
   sourceSourcingRequestItemId?: string | null;
   productName: string;
+  brand?: string | null;
   description?: string | null;
   quantity: number;
   costPriceCny: number;
@@ -266,6 +281,7 @@ export function sourcingLineToExportLine(opts: {
       no: opts.no,
     }),
     modelName: opts.productName?.trim() || '—',
+    brand: opts.brand?.trim() || null,
     quantity: opts.quantity,
     unitPrice: opts.costPriceCny,
     description: opts.description?.trim() || null,

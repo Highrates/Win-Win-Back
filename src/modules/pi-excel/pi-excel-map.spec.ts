@@ -57,6 +57,7 @@ describe('pi-excel-map', () => {
         weightKg: 7.5,
         volumeM3: 0.2,
         modelName: null,
+        brand: null,
       },
     );
     expect(snap).toMatchObject({
@@ -94,6 +95,7 @@ describe('pi-excel-map', () => {
       weightKg: null,
       volumeM3: knownM3,
       modelName: null,
+      brand: null,
     });
     expect(merged[ORDER_SNAPSHOT_VOLUME_M3_KEY]).toBe(knownM3);
     expect(volumeM3FromOrderSnapshot(merged)).toBe(knownM3);
@@ -112,6 +114,7 @@ describe('pi-excel-merge', () => {
     weightKg: null,
     volumeM3: null,
     modelName: null,
+    brand: null,
     ...over,
   });
 

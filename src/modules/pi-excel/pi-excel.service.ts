@@ -11,24 +11,25 @@ import {
 } from './pi-excel-map';
 import type { PiExcelExportLine, PiExcelLinePatch, PiExcelParseResult } from './pi-excel.types';
 
-const HEADER_ROW = 11;
-const DATA_START_ROW = 12;
-/** Columns A..T */
+/** KP template «шаблон кп с формулами»: header row 3, data from row 4, cols A–N. */
+const HEADER_ROW = 3;
+const DATA_START_ROW = 4;
+const TITLE_CELL = 'A2';
 const COL = {
   no: 1,
   photo: 2,
-  model: 4,
-  qty: 5,
-  price: 6,
-  sum: 7,
-  description: 9,
-  size: 10,
-  netWeight: 15,
-  grossWeight: 16,
-  totalWeight: 17,
-  volumeUnit: 18,
-  totalVolume: 19,
-  matchKey: 20,
+  model: 3,
+  brand: 4,
+  size: 5,
+  description: 6,
+  qty: 7,
+  price: 8,
+  sum: 9,
+  grossWeight: 10,
+  totalWeight: 11,
+  volumeUnit: 12,
+  totalVolume: 13,
+  matchKey: 14,
 } as const;
 
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -91,55 +92,40 @@ export class PiExcelService {
 
     const currency = (opts.currencyLabel?.trim() || 'CNY (¥)').trim();
     const entity = opts.entityLabel?.trim();
-
-    if (opts.invoiceNo?.trim() || entity) {
-      const f6 = ws.getCell('F6');
-      const prev = typeof f6.value === 'string' ? f6.value : 'Invoice No.:  \nНомер инвойса.: ';
-      const base = prev.includes('Invoice No')
-        ? prev.replace(/\s*$/, '')
-        : 'Invoice No.:  \nНомер инвойса.: ';
-      const parts = [opts.invoiceNo?.trim(), entity ? `[${entity}]` : null].filter(Boolean);
-      f6.value = `${base} ${parts.join(' ')}`;
-    }
-
-    // Explicit currency next to payment/delivery block (F8 area is busy; use F9 label strip)
-    const f9 = ws.getCell('F9');
-    const f9Prev = typeof f9.value === 'string' ? f9.value : '';
-    if (!/Currency|Валюта/i.test(f9Prev)) {
-      f9.value = `Currency / Валюта цены (col F): ${currency}${f9Prev ? `\n${f9Prev}` : ''}`;
-    } else {
-      f9.value = f9Prev.replace(
-        /Currency\s*\/\s*Валюта[^\n]*/i,
-        `Currency / Валюта цены (col F): ${currency}`,
-      );
-    }
+    const invoiceParts = [
+      opts.invoiceNo?.trim() ? `#${opts.invoiceNo.trim()}` : null,
+      entity ? `[${entity}]` : null,
+      currency ? `(${currency})` : null,
+    ].filter(Boolean);
+    ws.getCell(TITLE_CELL).value = invoiceParts.length
+      ? `INVOICE ${invoiceParts.join(' ')}`
+      : 'INVOICE';
 
     const lines = opts.lines;
     let row = DATA_START_ROW;
     for (const line of lines) {
       ws.getCell(row, COL.no).value = line.no;
       ws.getCell(row, COL.model).value = line.modelName;
+      if (line.brand?.trim()) ws.getCell(row, COL.brand).value = line.brand.trim();
       ws.getCell(row, COL.qty).value = line.quantity;
       // Missing price/dims/weight/volume → leave cells blank (export must not fail).
       if (line.unitPrice != null && Number.isFinite(line.unitPrice)) {
         ws.getCell(row, COL.price).value = line.unitPrice;
-        ws.getCell(row, COL.sum).value = { formula: `E${row}*F${row}` };
+        ws.getCell(row, COL.sum).value = { formula: `G${row}*H${row}` };
       }
       if (line.description) ws.getCell(row, COL.description).value = line.description;
       if (line.productSizeMm) ws.getCell(row, COL.size).value = line.productSizeMm;
       if (line.weightKg != null) {
-        ws.getCell(row, COL.netWeight).value = line.weightKg;
         ws.getCell(row, COL.grossWeight).value = line.weightKg;
-        ws.getCell(row, COL.totalWeight).value = { formula: `E${row}*P${row}` };
+        ws.getCell(row, COL.totalWeight).value = { formula: `G${row}*J${row}` };
       }
       if (line.volumeM3 != null) {
         ws.getCell(row, COL.volumeUnit).value = line.volumeM3;
-        // Narrow mapping: pack count (N) empty → total volume = qty × unit volume
-        ws.getCell(row, COL.totalVolume).value = { formula: `E${row}*R${row}` };
+        ws.getCell(row, COL.totalVolume).value = { formula: `L${row}*G${row}` };
       }
       const matchCell = ws.getCell(row, COL.matchKey);
       matchCell.value = line.matchKey;
-      // Duplicate key in cell note — survives if col T is cleared by suppliers
+      // Duplicate key in cell note — survives if col N is cleared by suppliers
       matchCell.note = {
         texts: [{ text: `Wupapa match key (do not delete):\n${line.matchKey}` }],
       };
@@ -170,21 +156,24 @@ export class PiExcelService {
     }
 
     const totalRow = row;
+    try {
+      ws.mergeCells(totalRow, COL.no, totalRow, COL.description);
+    } catch {
+      /* already merged / out of range — still write label */
+    }
     ws.getCell(totalRow, COL.no).value = 'Всего';
     if (lines.length > 0) {
       const first = DATA_START_ROW;
       const last = totalRow - 1;
-      ws.getCell(totalRow, COL.qty).value = { formula: `SUM(E${first}:E${last})` };
-      ws.getCell(totalRow, COL.sum).value = { formula: `SUM(G${first}:G${last})` };
-      ws.getCell(totalRow, COL.totalWeight).value = { formula: `SUM(Q${first}:Q${last})` };
-      ws.getCell(totalRow, COL.totalVolume).value = { formula: `SUM(S${first}:S${last})` };
+      ws.getCell(totalRow, COL.sum).value = { formula: `SUM(I${first}:I${last})` };
+      ws.getCell(totalRow, COL.totalWeight).value = { formula: `SUM(K${first}:K${last})` };
+      ws.getCell(totalRow, COL.totalVolume).value = { formula: `SUM(M${first}:M${last})` };
     }
 
-    // Hide match-key column; key also lives in cell notes. No sheet protect —
-    // locked cells blocked insert/edit of empty rows after "Всего" and confused suppliers.
+    // Hide match-key column; key also lives in cell notes.
     ws.getColumn(COL.matchKey).hidden = true;
-    const headerT = ws.getCell(HEADER_ROW, COL.matchKey);
-    if (!headerT.value) headerT.value = '№ в письме / match';
+    const headerN = ws.getCell(HEADER_ROW, COL.matchKey);
+    if (!headerN.value) headerN.value = '№ в письме / match';
 
     const out = await wb.xlsx.writeBuffer();
     return Buffer.from(out);
@@ -203,11 +192,11 @@ export class PiExcelService {
     const headerNo = String(ws.getCell(HEADER_ROW, COL.no).value ?? '').trim().toLowerCase();
     if (!headerNo.includes('no')) {
       throw new BadRequestException(
-        `Ожидается шаблон PI (заголовок No. в строке ${HEADER_ROW})`,
+        `Ожидается шаблон КП (заголовок No. в строке ${HEADER_ROW})`,
       );
     }
 
-    const invoiceNoHint = extractInvoiceHint(ws.getCell('F6').value);
+    const invoiceNoHint = extractInvoiceHint(ws.getCell(TITLE_CELL).value);
 
     const lines: PiExcelLinePatch[] = [];
     const emptyMatchKeyRows: number[] = [];
@@ -225,24 +214,22 @@ export class PiExcelService {
 
       const matchKey = cellToText(excelCellPrimitive(ws.getCell(r, COL.matchKey).value));
       const modelName = cellToText(excelCellPrimitive(ws.getCell(r, COL.model).value));
+      const brand = cellToText(excelCellPrimitive(ws.getCell(r, COL.brand).value));
       const qty = cellToInt(excelCellPrimitive(ws.getCell(r, COL.qty).value));
       const unitPrice = cellToNumber(excelCellPrimitive(ws.getCell(r, COL.price).value));
       const description = cellToText(excelCellPrimitive(ws.getCell(r, COL.description).value));
       const productSizeMm = cellToText(excelCellPrimitive(ws.getCell(r, COL.size).value));
       const gross = cellToNumber(excelCellPrimitive(ws.getCell(r, COL.grossWeight).value));
-      const net = cellToNumber(excelCellPrimitive(ws.getCell(r, COL.netWeight).value));
       const volumeM3 = cellToNumber(excelCellPrimitive(ws.getCell(r, COL.volumeUnit).value));
       const no = cellToInt(excelCellPrimitive(noRaw));
 
-      // Skip empty continuation rows (multi-box packaging without No./match)
+      // Skip empty continuation rows
       const hasSignal =
         no != null ||
         matchKey != null ||
         (modelName != null && (qty != null || unitPrice != null));
       if (!hasSignal) {
-        // stop if long empty streak after we already have lines
         if (lines.length > 0 && !modelName && qty == null && unitPrice == null && !matchKey) {
-          // peek a few more empty rows then stop
           let empty = true;
           for (let k = 0; k < 3 && r + k <= maxRow; k++) {
             const peekNo = cellToText(excelCellPrimitive(ws.getCell(r + k, COL.no).value));
@@ -258,14 +245,13 @@ export class PiExcelService {
         continue;
       }
 
-      // Multi-row packaging: row without No. and without match/model price — skip
       if (no == null && matchKey == null && (modelName == null || (qty == null && unitPrice == null))) {
         continue;
       }
 
       if (!matchKey) emptyMatchKeyRows.push(r);
 
-      // Prefer note text if cell T cleared but comment still holds the key
+      // Prefer note text if cell N cleared but comment still holds the key
       let resolvedKey = matchKey;
       if (!resolvedKey) {
         const note = ws.getCell(r, COL.matchKey).note;
@@ -287,9 +273,10 @@ export class PiExcelService {
         unitPrice,
         description,
         productSizeMm,
-        weightKg: gross != null && gross > 0 ? gross : net != null && net > 0 ? net : null,
+        weightKg: gross != null && gross > 0 ? gross : null,
         volumeM3: volumeM3 != null && volumeM3 > 0 ? volumeM3 : null,
         modelName,
+        brand,
       });
     }
 
@@ -318,8 +305,10 @@ function excelCellPrimitive(value: ExcelJS.CellValue): unknown {
 function extractInvoiceHint(value: ExcelJS.CellValue): string | null {
   const t = cellToText(excelCellPrimitive(value));
   if (!t) return null;
-  const m = /(?:Invoice No\.?:|Номер инвойса\.?:)\s*(.+)/i.exec(t);
-  return m?.[1]?.trim() || null;
+  const m =
+    /(?:INVOICE\s*#?\s*|Invoice No\.?:|Номер инвойса\.?:)\s*(.+)/i.exec(t) ||
+    /#([A-Za-z0-9_-]+)/.exec(t);
+  return m?.[1]?.trim() || t.trim() || null;
 }
 
 function guessImageExt(url: string, buf: Buffer): 'png' | 'jpeg' | 'gif' {

@@ -12,6 +12,7 @@ describe('PiExcelService round-trip', () => {
           no: 1,
           matchKey: 'OI:order-item-1',
           modelName: 'Стул A',
+          brand: 'balandis',
           quantity: 5,
           unitPrice: 290,
           description: 'пластик',
@@ -44,6 +45,8 @@ describe('PiExcelService round-trip', () => {
       weightKg: 7.5,
       volumeM3: 0.289,
       productSizeMm: '730*550*540',
+      brand: 'balandis',
+      modelName: 'Стул A',
     });
     expect(parsed.lines[1]).toMatchObject({
       no: 2,
@@ -73,7 +76,8 @@ describe('PiExcelService round-trip', () => {
   });
 
   it('skips price/sum and weight cells when values are null', async () => {
-    const ExcelJS = (await import('exceljs')).default;
+    const ExcelJS = await import('exceljs');
+    const ExcelNS = (ExcelJS as { default?: typeof ExcelJS } & typeof ExcelJS).default ?? ExcelJS;
     const buf = await svc.buildWorkbook({
       lines: [
         {
@@ -88,19 +92,21 @@ describe('PiExcelService round-trip', () => {
         },
       ],
     });
-    const wb = new ExcelJS.Workbook();
+    const wb = new ExcelNS.Workbook();
     await wb.xlsx.load(buf as unknown as ExcelJS.Buffer);
     const ws = wb.getWorksheet('Sheet1')!;
-    expect(ws.getCell('F12').value).toBeNull();
-    expect(ws.getCell('G12').value).toBeNull();
-    expect(ws.getCell('O12').value).toBeNull();
-    expect(ws.getCell('R12').value).toBeNull();
-    expect(ws.getCell('D12').value).toBe('No price');
-    expect(ws.getCell('E12').value).toBe(2);
+    // H4 = price, I4 = sum, J4 = weight, L4 = volume (data starts at row 4)
+    expect(ws.getCell('H4').value).toBeNull();
+    expect(ws.getCell('I4').value).toBeNull();
+    expect(ws.getCell('J4').value).toBeNull();
+    expect(ws.getCell('L4').value).toBeNull();
+    expect(ws.getCell('C4').value).toBe('No price');
+    expect(ws.getCell('G4').value).toBe(2);
   });
 
-  it('narrow mode total volume formula is E*R (not N*R)', async () => {
-    const ExcelJS = (await import('exceljs')).default;
+  it('row formulas are G*H / G*J / L*G and totals SUM I/K/M', async () => {
+    const ExcelJS = await import('exceljs');
+    const ExcelNS = (ExcelJS as { default?: typeof ExcelJS } & typeof ExcelJS).default ?? ExcelJS;
     const buf = await svc.buildWorkbook({
       currencyLabel: 'CNY (¥)',
       entityLabel: 'ORDER',
@@ -112,17 +118,20 @@ describe('PiExcelService round-trip', () => {
           modelName: 'A',
           quantity: 5,
           unitPrice: 10,
+          weightKg: 2,
           volumeM3: 0.2,
         },
       ],
     });
-    const wb = new ExcelJS.Workbook();
+    const wb = new ExcelNS.Workbook();
     await wb.xlsx.load(buf as unknown as ExcelJS.Buffer);
     const ws = wb.getWorksheet('Sheet1')!;
-    const s12 = ws.getCell('S12').value as { formula?: string };
-    expect(s12.formula).toBe('E12*R12');
-    const f9 = String(ws.getCell('F9').value ?? '');
-    expect(f9).toMatch(/CNY/);
+    expect((ws.getCell('I4').value as { formula?: string }).formula).toBe('G4*H4');
+    expect((ws.getCell('K4').value as { formula?: string }).formula).toBe('G4*J4');
+    expect((ws.getCell('M4').value as { formula?: string }).formula).toBe('L4*G4');
+    expect((ws.getCell('I5').value as { formula?: string }).formula).toBe('SUM(I4:I4)');
+    expect(String(ws.getCell('A2').value ?? '')).toMatch(/INVOICE/);
+    expect(String(ws.getCell('A2').value ?? '')).toMatch(/ABC/);
   });
 
   it('rejects corrupted / non-xlsx buffer', async () => {
