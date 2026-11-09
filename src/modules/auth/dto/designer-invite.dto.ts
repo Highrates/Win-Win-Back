@@ -1,8 +1,13 @@
-import { IsEmail, IsString, MinLength, MaxLength } from 'class-validator';
+import { IsBoolean, IsEmail, IsOptional, IsString, MinLength, MaxLength } from 'class-validator';
 
 export class SendDesignerInviteDto {
   @IsEmail()
   email!: string;
+
+  /** Подтверждение отправки при предупреждении о получателе (уже в команде / структуре). */
+  @IsOptional()
+  @IsBoolean()
+  force?: boolean;
 }
 
 export class DesignerInviteTokenBodyDto {

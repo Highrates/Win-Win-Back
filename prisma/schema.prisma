@@ -47,6 +47,7 @@ model User {
   designer      Designer?         // публичная страница дизайнера (опционально)
   accountContactChallenges AccountContactChallenge[]
   designerInvitesSent      DesignerInvite[]     @relation("DesignerInviteInviter")
+  designerInviteClaims     DesignerInvite[]     @relation("DesignerInviteClaimant")
 
   cases Case[]
   designerProjects DesignerProject[]
@@ -347,17 +348,29 @@ model ProductCorrespondenceAttachment {
 
 /// Приглашение дизайнера по email: ссылка с подписанным токеном, ref-код на момент отправки.
 model DesignerInvite {
-  id         String   @id @default(cuid())
-  inviterId  String
-  inviter    User     @relation("DesignerInviteInviter", fields: [inviterId], references: [id], onDelete: Cascade)
-  emailNorm  String
-  refCode    String
-  expiresAt  DateTime
-  consumedAt DateTime?
-  createdAt  DateTime @default(now())
+  id           String    @id @default(cuid())
+  inviterId    String
+  inviter      User      @relation("DesignerInviteInviter", fields: [inviterId], references: [id], onDelete: Cascade)
+  emailNorm    String
+  refCode      String
+  expiresAt    DateTime
+  consumedAt   DateTime?
+  /// Повторная отправка на тот же email: старая ссылка заменена новой (не «использована»).
+  supersededAt DateTime?
+  /// Claim отклонён (например, у приглашённого уже есть спонсор) — партнёр видит причину.
+  rejectedAt   DateTime?
+  /// `already_has_sponsor` и др.
+  rejectReason String?
+  /// Кто подал claim в очередь админа (не меняется при смене email).
+  claimantUserId String?
+  claimant       User?    @relation("DesignerInviteClaimant", fields: [claimantUserId], references: [id], onDelete: SetNull)
+  /// Партнёр отозвал приглашение вручную.
+  revokedAt    DateTime?
+  createdAt    DateTime  @default(now())
 
   @@index([inviterId, createdAt])
   @@index([emailNorm])
+  @@index([claimantUserId])
 }
 
 enum UserRole {

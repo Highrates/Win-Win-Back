@@ -99,18 +99,27 @@ function commercialProposalOfferFromLines(
 export type AdminOrdersListBucket = 'new' | 'active' | 'completed';
 
 function adminListBucketWhere(bucketRaw?: string): Prisma.OrderWhereInput {
-  const b = (bucketRaw?.trim() || 'new').toLowerCase();
+  const b = (bucketRaw?.trim() || 'all').toLowerCase();
+  if (b === 'all' || b === '') return {};
   if (b === 'completed') return { status: { in: [...ADMIN_COMPLETED_STATUSES] } };
   if (b === 'active') return { status: { in: [...ADMIN_ACTIVE_STATUSES] } };
-  return { status: OrderStatus.PENDING_APPROVAL };
+  if (b === 'new') return { status: OrderStatus.PENDING_APPROVAL };
+  return {};
 }
 
-/** ЛК: `work` — не завершённые; `completed` — только «Завершен». */
+/** ЛК: `work` — не завершённые; `completed` — только «Завершен»; `archived` — soft-archive. */
 function userOrdersScopeWhere(scopeRaw?: string): Prisma.OrderWhereInput | undefined {
   const s = (scopeRaw || '').trim().toLowerCase();
   if (s === 'work' || s === 'in_work') return { status: { in: [...CUSTOMER_IN_WORK_STATUSES] } };
   if (s === 'completed') return { status: OrderStatus.COMPLETED };
+  if (s === 'archived') return {};
   return undefined;
+}
+
+function userOrdersArchiveClause(scopeRaw?: string): Prisma.OrderWhereInput {
+  const s = (scopeRaw || '').trim().toLowerCase();
+  if (s === 'archived') return { customerArchivedAt: { not: null } };
+  return { customerArchivedAt: null };
 }
 
 @Injectable()
@@ -130,14 +139,18 @@ export class OrdersService {
 
   async findByUser(userId: string, page = 1, limit = 20, scopeRaw?: string) {
     const scopeWhere = userOrdersScopeWhere(scopeRaw);
+    const archiveClause = userOrdersArchiveClause(scopeRaw);
     const where: Prisma.OrderWhereInput = {
-      AND: [{ userId }, USER_ORDER_LIST_WHERE, ...(scopeWhere ? [scopeWhere] : [])],
+      AND: [
+        { userId },
+        USER_ORDER_LIST_WHERE,
+        archiveClause,
+        ...(scopeWhere ? [scopeWhere] : []),
+      ],
     };
     const [orders, total] = await Promise.all([
       this.prisma.order.findMany({
-        where: {
-          AND: [where, { customerArchivedAt: null }],
-        },
+        where,
         orderBy: { updatedAt: 'desc' },
         skip: (page - 1) * limit,
         take: limit,
@@ -185,11 +198,7 @@ export class OrdersService {
           },
         },
       }),
-      this.prisma.order.count({
-        where: {
-          AND: [where, { customerArchivedAt: null }],
-        },
-      }),
+      this.prisma.order.count({ where }),
     ]);
     const unreadStaffByOrderId = await this.orderChat.unreadStaffCountsForCustomerOrders(
       userId,
@@ -552,7 +561,7 @@ export class OrdersService {
     userIdFilter?: string,
     bucketRaw?: string,
     staffUserId?: string,
-    opts?: { from?: string; to?: string },
+    opts?: { from?: string; to?: string; status?: string },
   ) {
     const take = Math.min(Math.max(limit, 1), 100);
     const skip = (Math.max(page, 1) - 1) * take;
@@ -568,7 +577,11 @@ export class OrdersService {
     const uid = userIdFilter?.trim();
     const userClause: Prisma.OrderWhereInput | undefined = uid ? { userId: uid } : undefined;
     const createdAt = createdAtInRange(parseDashboardDateRange(opts?.from, opts?.to));
-    const clauses: Prisma.OrderWhereInput[] = [USER_ORDER_LIST_WHERE, adminListBucketWhere(bucketRaw)];
+    const statusFilter = opts?.status?.trim();
+    const statusClause: Prisma.OrderWhereInput | undefined = statusFilter
+      ? { status: statusFilter as OrderStatus }
+      : adminListBucketWhere(bucketRaw);
+    const clauses: Prisma.OrderWhereInput[] = [USER_ORDER_LIST_WHERE, statusClause];
     if (userClause) clauses.push(userClause);
     if (search) clauses.push(search);
     if (createdAt) clauses.push({ createdAt });

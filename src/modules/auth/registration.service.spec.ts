@@ -59,7 +59,7 @@ function makeService(overrides?: {
     otp,
   );
 
-  return { service, prisma, users, mail, smsOtp, jwt, rateLimit, otp };
+  return { service, prisma, users, mail, smsOtp, jwt, rateLimit, otp, designerInvites };
 }
 
 describe('RegistrationService', () => {
@@ -220,6 +220,96 @@ describe('RegistrationService', () => {
       ).rejects.toMatchObject({
         response: { message: 'Ссылка подтверждения недействительна или истекла' },
       });
+    });
+
+    it('does not consume registration token when designer invite is expired', async () => {
+      const { service, jwt, prisma, designerInvites } = makeService();
+      jwt.verifyAsync.mockResolvedValue({
+        purpose: 'register_complete',
+        jti: 'token-id',
+        phone: null,
+        email: 'guest@example.com',
+        consentPersonalData: true,
+        consentSms: false,
+        sub: 'register-complete',
+      });
+      designerInvites.assertValidForNewAccountEmail.mockRejectedValue(
+        new BadRequestException('Ссылка приглашения недействительна или истекла'),
+      );
+
+      await expect(
+        service.complete({
+          completionToken: 'jwt',
+          password: 'Password1!',
+          designerInviteToken: 'expired-invite',
+        }),
+      ).rejects.toMatchObject({
+        response: { message: 'Ссылка приглашения недействительна или истекла' },
+      });
+
+      expect(prisma.registrationCompletionToken.updateMany).not.toHaveBeenCalled();
+      expect(designerInvites.assertValidForNewAccountEmail).toHaveBeenCalledWith(
+        'expired-invite',
+        'guest@example.com',
+      );
+    });
+
+    it('отозванное приглашение: регистрация без referralCode не создаёт привязку', async () => {
+      const { service, jwt, users, designerInvites } = makeService();
+      jwt.verifyAsync.mockResolvedValue({
+        purpose: 'register_complete',
+        jti: 'token-id',
+        phone: null,
+        email: 'guest@example.com',
+        consentPersonalData: true,
+        consentSms: false,
+        sub: 'register-complete',
+      });
+
+      await service.complete({
+        completionToken: 'jwt',
+        password: 'Password1!',
+      });
+
+      expect(designerInvites.assertValidForNewAccountEmail).not.toHaveBeenCalled();
+      expect(users.createRetailUser).toHaveBeenCalledWith(
+        expect.objectContaining({
+          referralCode: null,
+          designerInviteId: null,
+          email: 'guest@example.com',
+        }),
+      );
+    });
+
+    it('валидное приглашение: код берётся из invite, а не из dto.referralCode', async () => {
+      const { service, jwt, users, designerInvites } = makeService();
+      jwt.verifyAsync.mockResolvedValue({
+        purpose: 'register_complete',
+        jti: 'token-id',
+        phone: null,
+        email: 'guest@example.com',
+        consentPersonalData: true,
+        consentSms: false,
+        sub: 'register-complete',
+      });
+      designerInvites.assertValidForNewAccountEmail.mockResolvedValue({
+        inviteId: 'INV1',
+        refCode: 'FROM-INVITE',
+      });
+
+      await service.complete({
+        completionToken: 'jwt',
+        password: 'Password1!',
+        designerInviteToken: 'good-invite',
+        referralCode: 'LEFTOVER-REF',
+      });
+
+      expect(users.createRetailUser).toHaveBeenCalledWith(
+        expect.objectContaining({
+          referralCode: 'FROM-INVITE',
+          designerInviteId: 'INV1',
+        }),
+      );
     });
   });
 });

@@ -468,15 +468,20 @@ export class SourcingRequestsService {
     userId?: string,
     bucket?: string,
     staffUserId?: string,
-    opts?: { from?: string; to?: string },
+    opts?: { from?: string; to?: string; status?: string },
   ) {
     const pageNum = clampSourcingListPage(page);
     const take = clampSourcingListLimit(limit);
-    const statuses = adminBucketStatuses(bucket);
+    const statusExact = opts?.status?.trim();
+    const statuses = statusExact ? undefined : adminBucketStatuses(bucket);
     const createdAt = createdAtInRange(parseDashboardDateRange(opts?.from, opts?.to));
     const where: Prisma.SourcingRequestWhereInput = {
       ...(userId ? { userId } : {}),
-      ...(statuses ? { status: { in: [...statuses] as SourcingRequestStatus[] } } : {}),
+      ...(statusExact
+        ? { status: statusExact as SourcingRequestStatus }
+        : statuses
+          ? { status: { in: [...statuses] as SourcingRequestStatus[] } }
+          : {}),
       ...(createdAt ? { createdAt } : {}),
       ...(q
         ? {

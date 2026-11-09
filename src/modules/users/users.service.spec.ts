@@ -42,6 +42,23 @@ describe('UsersService (referrals)', () => {
     );
   });
 
+  it('ensurePartnerApplicationReferralCodeIfEmptyInTx: upsert при отсутствии профиля', async () => {
+    const svc = makeSvc() as any;
+    const upsert = vi.fn().mockResolvedValue(undefined);
+    const tx = {
+      userProfile: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        upsert,
+      },
+    };
+    await svc.ensurePartnerApplicationReferralCodeIfEmptyInTx(tx, 'U1', 'REF9');
+    expect(upsert).toHaveBeenCalledWith({
+      where: { userId: 'U1' },
+      create: { userId: 'U1', partnerApplicationReferralCode: 'REF9' },
+      update: { partnerApplicationReferralCode: 'REF9' },
+    });
+  });
+
   it('tryAttachWinWinReferralInTx: игнорирует только P2002, но пробрасывает BadRequestException', async () => {
     const svc = makeSvc() as any;
     svc.findActivePartnerByPublicReferralCode = vi.fn().mockResolvedValue({ userId: 'INV', winWinReferralCode: 'REF' });
@@ -58,10 +75,13 @@ describe('UsersService (referrals)', () => {
     svc.assertNoWinWinReferralCycleInTx = vi.fn().mockRejectedValue(new BadRequestException('cycle'));
     await expect(svc.tryAttachWinWinReferralInTx(tx, 'NEW', 'REF')).rejects.toBeInstanceOf(BadRequestException);
 
-    // 2) P2002 должен вернуть false
+    // 2) P2002 → attached: false (conflict)
     svc.assertNoWinWinReferralCycleInTx = vi.fn().mockResolvedValue(undefined);
     tx.referral.create = vi.fn().mockRejectedValue({ code: 'P2002' });
-    await expect(svc.tryAttachWinWinReferralInTx(tx, 'NEW', 'REF')).resolves.toBe(false);
+    await expect(svc.tryAttachWinWinReferralInTx(tx, 'NEW', 'REF')).resolves.toEqual({
+      attached: false,
+      reason: 'conflict',
+    });
   });
 });
 

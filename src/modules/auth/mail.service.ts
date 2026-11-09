@@ -24,6 +24,7 @@ import {
   type EmailTemplateVars,
 } from '../email-notifications/email-notification-events';
 import { renderDefaultEmail } from '../email-notifications/email-notification-render';
+import { DESIGNER_INVITE_TTL_LABEL } from './designer-invite.constants';
 
 @Injectable()
 export class MailService {
@@ -175,14 +176,21 @@ export class MailService {
     this.logger.log(`Password reset email sent to ${params.to}`);
   }
 
-  async sendDesignerInvite(params: { to: string; inviteLink: string; inviterLabel: string; refCode: string }): Promise<void> {
+  /** @returns true если письмо реально ушло; false если шаблон выключен в админке (0 получателей). */
+  async sendDesignerInvite(params: {
+    to: string;
+    inviteLink: string;
+    inviterLabel: string;
+    refCode: string;
+  }): Promise<boolean> {
     const sent = await this.sendNotification(params.to, 'designer_invite', {
       'inviter.name': params.inviterLabel,
       'invite.ref_code': params.refCode,
       'invite.url': params.inviteLink,
-      'invite.ttl': '14 дней',
+      'invite.ttl': DESIGNER_INVITE_TTL_LABEL,
     });
     if (sent) this.logger.log(`Designer invite email sent to ${params.to}`);
+    return sent > 0;
   }
 
   async sendWinWinPartnerApproved(params: { to: string; name: string | null; referralCode: string }): Promise<void> {
@@ -192,6 +200,59 @@ export class MailService {
       'account.url': `${this.mailContext().siteUrl}/account/team`,
     });
     if (sent) this.logger.log(`WinWin partner approved email sent to ${params.to}`);
+  }
+
+  /** Решение админа по заявке на перевод в структуру (приглашённый или пригласивший). */
+  async sendDesignerInviteStructureApproved(params: {
+    to: string;
+    role: 'invitee' | 'inviter';
+    inviteeName: string | null;
+    inviterName: string | null;
+    inviteeEmail: string;
+  }): Promise<void> {
+    const accountUrl = `${this.mailContext().siteUrl}/account/team`;
+    if (params.role === 'invitee') {
+      const sent = await this.sendNotification(params.to, 'designer_invite_structure_approved', {
+        'customer.greeting': customerGreeting(params.inviteeName),
+        'inviter.name': params.inviterName?.trim() || 'Партнёр Wupapa',
+        'account.url': accountUrl,
+      });
+      if (sent) this.logger.log(`Structure claim approved (invitee) sent to ${params.to}`);
+      return;
+    }
+    const sent = await this.sendNotification(params.to, 'designer_invite_structure_approved_inviter', {
+      'customer.greeting': customerGreeting(params.inviterName),
+      'invitee.email': params.inviteeEmail,
+      'invitee.name': params.inviteeName,
+      'account.url': accountUrl,
+    });
+    if (sent) this.logger.log(`Structure claim approved (inviter) sent to ${params.to}`);
+  }
+
+  async sendDesignerInviteStructureRejected(params: {
+    to: string;
+    role: 'invitee' | 'inviter';
+    inviteeName: string | null;
+    inviterName: string | null;
+    inviteeEmail: string;
+  }): Promise<void> {
+    const accountUrl = `${this.mailContext().siteUrl}/account/team`;
+    if (params.role === 'invitee') {
+      const sent = await this.sendNotification(params.to, 'designer_invite_structure_rejected', {
+        'customer.greeting': customerGreeting(params.inviteeName),
+        'inviter.name': params.inviterName?.trim() || 'Партнёр Wupapa',
+        'account.url': accountUrl,
+      });
+      if (sent) this.logger.log(`Structure claim rejected (invitee) sent to ${params.to}`);
+      return;
+    }
+    const sent = await this.sendNotification(params.to, 'designer_invite_structure_rejected_inviter', {
+      'customer.greeting': customerGreeting(params.inviterName),
+      'invitee.email': params.inviteeEmail,
+      'invitee.name': params.inviteeName,
+      'account.url': accountUrl,
+    });
+    if (sent) this.logger.log(`Structure claim rejected (inviter) sent to ${params.to}`);
   }
 
   async sendOrderChatNotifyCustomer(params: {

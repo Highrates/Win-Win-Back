@@ -1,9 +1,10 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Prisma } from '@prisma/client';
 import { resolveSecret } from '../../config/resolve-secret';
 import { PrismaService } from '../../prisma/prisma.service';
+import { inviteInvalid, inviteMismatch } from './designer-invite.errors';
 
 export type ResolvedDesignerInvite = {
   inviteId: string;
@@ -40,10 +41,10 @@ export class InviteClaimService {
         secret: this.secret(),
       });
     } catch {
-      throw new BadRequestException('Ссылка приглашения недействительна или истекла');
+      throw inviteInvalid('Ссылка приглашения недействительна или истекла');
     }
     if (payload.typ !== 'dinv' || !payload.sub?.trim()) {
-      throw new BadRequestException('Ссылка приглашения недействительна');
+      throw inviteInvalid('Ссылка приглашения недействительна');
     }
     return payload.sub.trim();
   }
@@ -59,22 +60,53 @@ export class InviteClaimService {
   ): Promise<ResolvedDesignerInvite> {
     const emailNorm = emailRaw.trim().toLowerCase();
     if (!emailNorm) {
-      throw new BadRequestException('Для приглашения завершите регистрацию по email');
+      throw inviteMismatch('Для приглашения завершите регистрацию по email');
     }
     const inviteId = await this.inviteIdFromToken(token);
-    const row = await this.prisma.designerInvite.findFirst({
-      where: {
-        id: inviteId,
-        emailNorm,
-        consumedAt: null,
-        expiresAt: { gt: new Date() },
+    const existing = await this.prisma.designerInvite.findUnique({
+      where: { id: inviteId },
+      select: {
+        id: true,
+        refCode: true,
+        emailNorm: true,
+        consumedAt: true,
+        supersededAt: true,
+        rejectedAt: true,
+        rejectReason: true,
+        revokedAt: true,
+        expiresAt: true,
       },
-      select: { id: true, refCode: true, emailNorm: true },
     });
-    if (!row) {
-      throw new BadRequestException(mismatchMessage);
+    if (!existing) {
+      throw inviteInvalid('Ссылка приглашения недействительна или истекла');
     }
-    return { inviteId: row.id, refCode: row.refCode, emailNorm: row.emailNorm };
+    if (existing.supersededAt) {
+      throw inviteInvalid(
+        'Приглашение заменено новым. Используйте ссылку из последнего письма или запросите приглашение снова.',
+      );
+    }
+    if (existing.revokedAt) {
+      throw inviteInvalid('Приглашение отозвано');
+    }
+    if (existing.rejectedAt) {
+      throw inviteInvalid(
+        existing.rejectReason === 'already_has_sponsor'
+          ? 'Отклонено: уже в структуре'
+          : existing.rejectReason === 'needs_admin_approval'
+            ? 'Приглашение ожидает одобрения администратора'
+            : 'Приглашение отклонено',
+      );
+    }
+    if (existing.consumedAt) {
+      throw inviteInvalid('Приглашение уже использовано');
+    }
+    if (existing.expiresAt < new Date()) {
+      throw inviteInvalid('Срок приглашения истёк');
+    }
+    if (existing.emailNorm !== emailNorm) {
+      throw inviteMismatch(mismatchMessage);
+    }
+    return { inviteId: existing.id, refCode: existing.refCode, emailNorm: existing.emailNorm };
   }
 
   /** Перед `register/complete` — null если токена нет. */
@@ -84,7 +116,7 @@ export class InviteClaimService {
   ): Promise<{ inviteId: string; refCode: string } | null> {
     if (!token?.trim()) return null;
     if (!registrationEmail?.trim()) {
-      throw new BadRequestException('Для приглашения завершите регистрацию по email');
+      throw inviteMismatch('Для приглашения завершите регистрацию по email');
     }
     const r = await this.resolveActiveForEmail(token, registrationEmail);
     return { inviteId: r.inviteId, refCode: r.refCode };
@@ -92,19 +124,24 @@ export class InviteClaimService {
 
   /**
    * Погасить инвайт в транзакции регистрации (идемпотентно: если уже не активен — no-op).
+   * `ignoreExpiry` — для админ-одобрения после истечения TTL ссылки.
    */
   async consumeInTx(
     tx: TxClient,
     inviteId: string,
     emailNorm: string,
+    opts?: { ignoreExpiry?: boolean },
   ): Promise<boolean> {
     const em = emailNorm.trim().toLowerCase();
     const ex = await tx.designerInvite.findFirst({
       where: {
         id: inviteId,
         consumedAt: null,
+        supersededAt: null,
+        rejectedAt: null,
+        revokedAt: null,
         emailNorm: em,
-        expiresAt: { gt: new Date() },
+        ...(opts?.ignoreExpiry ? {} : { expiresAt: { gt: new Date() } }),
       },
       select: { id: true },
     });

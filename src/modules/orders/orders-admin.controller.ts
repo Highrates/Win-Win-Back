@@ -37,6 +37,7 @@ export class OrdersAdminController {
     @Query('q') q?: string,
     @Query('userId') userId?: string,
     @Query('bucket') bucket?: string,
+    @Query('status') status?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
   ) {
@@ -52,6 +53,7 @@ export class OrdersAdminController {
       {
         from: from?.trim() || undefined,
         to: to?.trim() || undefined,
+        status: status?.trim() || undefined,
       },
     );
   }

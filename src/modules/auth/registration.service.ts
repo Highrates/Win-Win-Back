@@ -304,12 +304,11 @@ export class RegistrationService {
       throw new BadRequestException('Неверный токен регистрации');
     }
 
-    await this.consumeCompletionToken(payload.jti);
-
     if (dto.designerInviteToken?.trim() && !payload.email) {
       throw new BadRequestException('Приглашение дизайнера доступно только при регистрации по email');
     }
 
+    /** Invite до траты jti: иначе просроченный/заменённый инвайт сжигает сессию и блокирует повтор. */
     let inviteResolved: { inviteId: string; refCode: string } | null = null;
     if (dto.designerInviteToken?.trim() && payload.email) {
       inviteResolved = await this.designerInvites.assertValidForNewAccountEmail(
@@ -317,6 +316,9 @@ export class RegistrationService {
         payload.email,
       );
     }
+
+    await this.consumeCompletionToken(payload.jti);
+
     const refFromDto = (dto.referralCode ?? '').trim();
     const refUse = (inviteResolved?.refCode ?? refFromDto) || null;
 

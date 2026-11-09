@@ -201,35 +201,69 @@ export class UsersService {
     }
   }
 
-  private async tryAttachWinWinReferralInTx(
+  async tryAttachWinWinReferralInTx(
     tx: Prisma.TransactionClient,
     newUserId: string,
     refRaw: string,
-  ): Promise<boolean> {
+  ): Promise<
+    | { attached: true; sponsorRefCode: string }
+    | { attached: false; reason: 'invalid_code' | 'self' | 'already_has_sponsor' | 'conflict' }
+  > {
     const t = (refRaw ?? '').trim();
-    if (t.length < 3) return false;
+    if (t.length < 3) return { attached: false, reason: 'invalid_code' };
     const inv = await this.findActivePartnerByPublicReferralCode(t);
-    if (!inv || inv.userId === newUserId) return false;
+    if (!inv) return { attached: false, reason: 'invalid_code' };
+    if (inv.userId === newUserId) return { attached: false, reason: 'self' };
     const level = await this.winWinReferralLevelInTx(tx, inv.userId);
     const clash = await tx.referral.findUnique({ where: { referredId: newUserId } });
-    if (clash) return false;
+    if (clash) return { attached: false, reason: 'already_has_sponsor' };
     try {
       await this.assertNoWinWinReferralCycleInTx(tx, inv.userId, newUserId);
       await tx.referral.create({
         data: { referrerId: inv.userId, referredId: newUserId, level },
       });
-      return true;
+      return { attached: true, sponsorRefCode: inv.winWinReferralCode };
     } catch (e) {
       // Игнорируем только конфликт уникальности `Referral.referredId` (гонка).
       const code = typeof e === 'object' && e && 'code' in e ? (e as { code?: unknown }).code : undefined;
-      if (code === 'P2002') return false;
+      if (code === 'P2002') return { attached: false, reason: 'conflict' };
       throw e;
     }
   }
 
   /** Существующий USER: проставить реф-дерево по коду, если ещё нет записи Referred. */
-  async tryAttachWinWinReferralByCodeForExistingUser(userId: string, refRaw: string): Promise<boolean> {
+  async tryAttachWinWinReferralByCodeForExistingUser(
+    userId: string,
+    refRaw: string,
+  ): Promise<
+    | { attached: true; sponsorRefCode: string }
+    | { attached: false; reason: 'invalid_code' | 'self' | 'already_has_sponsor' | 'conflict' }
+  > {
     return this.prisma.$transaction((tx) => this.tryAttachWinWinReferralInTx(tx, userId, refRaw));
+  }
+
+  /** Закрепить код спонсора в заявке (только если поле ещё пустое) — становится read-only в UI. */
+  async ensurePartnerApplicationReferralCodeIfEmpty(userId: string, refCode: string): Promise<void> {
+    await this.ensurePartnerApplicationReferralCodeIfEmptyInTx(this.prisma, userId, refCode);
+  }
+
+  async ensurePartnerApplicationReferralCodeIfEmptyInTx(
+    tx: Prisma.TransactionClient | PrismaService,
+    userId: string,
+    refCode: string,
+  ): Promise<void> {
+    const code = (refCode ?? '').trim();
+    if (code.length < 3) return;
+    const profile = await tx.userProfile.findUnique({
+      where: { userId },
+      select: { partnerApplicationReferralCode: true },
+    });
+    if (profile?.partnerApplicationReferralCode?.trim()) return;
+    await tx.userProfile.upsert({
+      where: { userId },
+      create: { userId, partnerApplicationReferralCode: code },
+      update: { partnerApplicationReferralCode: code },
+    });
   }
 
   async createRetailUser(dto: {
@@ -292,8 +326,8 @@ export class UsersService {
       let referralWarning: string | undefined;
       const refAttempted = refRaw.length >= 3;
       if (refAttempted) {
-        const attached = await this.tryAttachWinWinReferralInTx(tx, user.id, refRaw);
-        if (!attached) {
+        const attach = await this.tryAttachWinWinReferralInTx(tx, user.id, refRaw);
+        if (!attach.attached) {
           referralWarning =
             'Реферальный номер не найден или недействителен. Аккаунт создан без привязки к партнёру.';
         }
@@ -764,7 +798,7 @@ export class UsersService {
         throw new BadRequestException('Нет заявки на рассмотрении');
       }
       if (p.winWinPartnerApproved) {
-        throw new BadRequestException('Пользователь уже партнёр Wupapa');
+        throw new BadRequestException('Пользователь уже дизайнер-партнёр Wupapa');
       }
       if (p.partnerApplicationRejectedAt) {
         throw new BadRequestException('Заявка отклонена, ожидается повторная подача');
@@ -852,7 +886,7 @@ export class UsersService {
       throw new BadRequestException('Нет заявки на рассмотрении');
     }
     if (p.winWinPartnerApproved) {
-      throw new BadRequestException('Пользователь уже партнёр Wupapa');
+      throw new BadRequestException('Пользователь уже дизайнер-партнёр Wupapa');
     }
     if (p.partnerApplicationRejectedAt) {
       throw new BadRequestException('Заявка уже отклонена');
@@ -998,7 +1032,7 @@ export class UsersService {
   async getWinWinPartnerTeamOverview(partnerUserId: string) {
     const approved = await this.prisma.userProfile.findUnique({
       where: { userId: partnerUserId },
-      select: { winWinPartnerApproved: true },
+      select: { winWinPartnerApproved: true, winWinReferralCode: true },
     });
     if (!approved?.winWinPartnerApproved) {
       throw new ForbiddenException('Раздел доступен одобренным партнёрам Wupapa');
@@ -1020,6 +1054,10 @@ export class UsersService {
       ...row,
       l2: l2.map(({ email: _e2, ...m }) => m),
     }));
+    /** Код сразу в ответе — модалка «По ссылке» не ждёт отдельный /profile. */
+    const myReferralCode =
+      approved.winWinReferralCode?.trim() ||
+      (await this.ensureWinWinReferralCodeForUser(partnerUserId));
     return {
       inviter: inviter
         ? {
@@ -1028,6 +1066,7 @@ export class UsersService {
             designerSlug,
           }
         : null,
+      myReferralCode,
       counts: { total: level1 + level2, level1, level2 },
       l1: l1Public,
     };
@@ -1087,7 +1126,7 @@ export class UsersService {
 
     const before = await this.prisma.userProfile.findUnique({ where: { userId } });
     if (before?.winWinPartnerApproved) {
-      throw new BadRequestException('Вы уже партнёр Wupapa');
+      throw new BadRequestException('Вы уже дизайнер-партнёр Wupapa');
     }
     if (before?.partnerApplicationSubmittedAt && !before?.partnerApplicationRejectedAt) {
       throw new BadRequestException('Заявка уже подана');

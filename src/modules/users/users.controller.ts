@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, Patch, Post, UploadedFile, UseFilters, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, UploadedFile, UseFilters, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { UsersService } from './users.service';
 import { LkVitrineUploadExceptionFilter } from './lk-vitrine-upload.exception-filter';
@@ -110,13 +110,25 @@ export class UsersController {
   @Post('me/designer-invite')
   @Throttle({ default: { ttl: 60_000, limit: 10 } })
   sendDesignerInvite(@CurrentUser('sub') userId: string, @Body() dto: SendDesignerInviteDto) {
-    return this.designerInvites.sendInvite(userId, dto.email);
+    return this.designerInvites.sendInvite(userId, dto.email, { force: dto.force === true });
   }
 
   @Get('me/designer-invites')
   @Throttle({ default: { ttl: 60_000, limit: 60 } })
   listDesignerInvites(@CurrentUser('sub') userId: string) {
     return this.designerInvites.listActiveInvitesForUser(userId);
+  }
+
+  @Post('me/designer-invites/:id/revoke')
+  @Throttle({ default: { ttl: 60_000, limit: 20 } })
+  revokeDesignerInvite(@CurrentUser('sub') userId: string, @Param('id') id: string) {
+    return this.designerInvites.revokeInvite(userId, id);
+  }
+
+  @Post('me/designer-invites/:id/resend')
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  resendDesignerInvite(@CurrentUser('sub') userId: string, @Param('id') id: string) {
+    return this.designerInvites.resendInvite(userId, id);
   }
 
   @Post('me/designer-invite/claim')

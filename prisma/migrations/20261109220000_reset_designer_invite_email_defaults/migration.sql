@@ -1,0 +1,13 @@
+-- Изначально здесь был UPDATE, обнуляющий subject/title/body для designer_invite.
+-- Это затирало правки из админки. Содержимое заменено на no-op ДО применения
+-- на этой/типичной базе (см. prisma migrate status).
+--
+-- Если на какой-то среде эта миграция УЖЕ была применена со старым SQL:
+--   1) не гоняйте migrate reset;
+--   2) checksum в _prisma_migrations может не совпасть с файлом —
+--      тогда: npx prisma migrate resolve --applied 20261109220000_reset_designer_invite_email_defaults
+--      только после сверки, что запись в истории уже есть и данные трогать не нужно;
+--   3) шаблон при необходимости поправьте вручную в админке.
+--
+-- NULL в EmailNotificationTemplate и так значит «текст из кода». No-op.
+SELECT 1;

@@ -20,6 +20,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { SetUserGroupMembershipAdminDto } from '../user-groups/dto/user-group-admin.dto';
 import { UserGroupsService } from '../user-groups/user-groups.service';
 import { UsersService } from './users.service';
+import { DesignerInviteService } from '../auth/designer-invite.service';
 
 /** Список покупателей (роль USER) для админки. */
 @Controller('users/admin')
@@ -29,6 +30,7 @@ export class UsersAdminController {
   constructor(
     private readonly users: UsersService,
     private readonly userGroups: UserGroupsService,
+    private readonly designerInvites: DesignerInviteService,
   ) {}
 
   @Get('partner-applications/pending-count')
@@ -75,6 +77,30 @@ export class UsersAdminController {
   @Post('partner-applications/:id/reject')
   rejectWinWin(@Param('id') id: string) {
     return this.users.rejectWinWinPartnerByAdmin(id);
+  }
+
+  /** Очередь: перевод партнёра/команды в структуру по designer-invite — только через админа. */
+  @Get('designer-invites/pending-structure')
+  listPendingDesignerInviteStructure() {
+    return this.designerInvites.listPendingAdminStructureClaims();
+  }
+
+  @Get('designer-invites/pending-structure/count')
+  pendingDesignerInviteStructureCount() {
+    return this.designerInvites.countPendingAdminStructureClaims();
+  }
+
+  /** Перевод в структуру меняет линии дохода — только ADMIN. */
+  @Post('designer-invites/:id/approve-structure')
+  @Roles(UserRole.ADMIN)
+  approveDesignerInviteStructure(@Param('id') id: string) {
+    return this.designerInvites.adminApproveStructureClaim(id);
+  }
+
+  @Post('designer-invites/:id/reject-structure')
+  @Roles(UserRole.ADMIN)
+  rejectDesignerInviteStructure(@Param('id') id: string) {
+    return this.designerInvites.adminRejectStructureClaim(id);
   }
 
   @Get(':id/referral-structure')
