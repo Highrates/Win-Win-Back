@@ -6,10 +6,10 @@ describe('isPrivateObjectKey', () => {
     expect(isPrivateObjectKey('objects/chat/orders/o1/a.pdf')).toBe(true);
     expect(isPrivateObjectKey('/objects/chat/sourcing-requests/s1/b.png')).toBe(true);
     expect(isPrivateObjectKey('objects/sourcing-requests/s1/attachments/tz.docx')).toBe(true);
+    expect(isPrivateObjectKey('objects/sourcing-requests/s1/items/i1/ref.jpg')).toBe(true);
   });
 
   it('leaves public media alone', () => {
-    expect(isPrivateObjectKey('objects/sourcing-requests/s1/items/i1/ref.jpg')).toBe(false);
     expect(isPrivateObjectKey('objects/product-qa/p1/a.jpg')).toBe(false);
     expect(isPrivateObjectKey('brands/cover/1.jpg')).toBe(false);
   });

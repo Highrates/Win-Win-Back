@@ -10,6 +10,7 @@ const cfg = {
     (0, vitest_1.it)('allows known origins and CDN suffixes', () => {
         (0, vitest_1.expect)((0, index_1.isAllowedMediaProxyTarget)(new URL('http://127.0.0.1:3001/uploads/a.jpg'), cfg)).toBe(true);
         (0, vitest_1.expect)((0, index_1.isAllowedMediaProxyTarget)(new URL('https://bucket.s3.eu-central-1.amazonaws.com/x.jpg'), cfg)).toBe(true);
+        (0, vitest_1.expect)((0, index_1.isAllowedMediaProxyTarget)(new URL('https://s3.regru.cloud/winwin-media/objects/brendy/a.jpg'), cfg)).toBe(true);
         (0, vitest_1.expect)((0, index_1.isAllowedMediaProxyTarget)(new URL('https://evil.example/a.jpg'), cfg)).toBe(false);
     });
     (0, vitest_1.it)('denies redirect to foreign host', async () => {

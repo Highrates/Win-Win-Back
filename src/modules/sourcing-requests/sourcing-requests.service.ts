@@ -7,12 +7,13 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { Prisma, SourcingRequestStatus, AuditAction, CommercialProposalStatus } from '@prisma/client';
 import { randomBytes } from 'crypto';
-import { readFile } from 'fs/promises';
+import { open, readFile } from 'fs/promises';
 import { priceToNumber } from '../../meilisearch/product-search-doc';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { MailService } from '../auth/mail.service';
 import { ObjectStorageService } from '../storage/object-storage.service';
+import { stripImageMetadata } from '../storage/strip-image-metadata';
 import { isInlineStoredFile } from '../storage/stored-file';
 import { documentSearchName, isNonMediaDocument } from '../account-documents/document-fields';
 import { OrderChatService } from '../order-chat/order-chat.service';
@@ -23,8 +24,11 @@ import {
   parseDashboardDateRange,
 } from '../../common/utils/dashboard-date-range';
 import {
+  detectSourcingReferenceImageMime,
   parseBudgetDigits as parseBudgetDigitsRaw,
+  SOURCING_REFERENCE_FORMATS_LABEL,
   sourcingCommercialProposalOfferTotalRub,
+  type SourcingReferenceImageMime,
 } from '@win-win/sourcing-request';
 import {
   parseCreateSourcingRequestPayload,
@@ -41,6 +45,45 @@ import {
 } from './sourcing-upload.config';
 
 const SOURCING_FILE_MAX = SOURCING_FILE_MAX_BYTES;
+const SOURCING_S3_UPLOAD_CONCURRENCY = 4;
+const UPLOAD_HEAD_BYTES = 16;
+
+async function readUploadHead(file: Express.Multer.File): Promise<Uint8Array> {
+  if (file.buffer?.length) return file.buffer.subarray(0, UPLOAD_HEAD_BYTES);
+  if (!file.path) return new Uint8Array();
+  const handle = await open(file.path, 'r');
+  try {
+    const head = Buffer.alloc(UPLOAD_HEAD_BYTES);
+    const { bytesRead } = await handle.read(head, 0, UPLOAD_HEAD_BYTES, 0);
+    return head.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Порядок результатов совпадает с `items`; при ошибке ждём остальные, чтобы откат видел все загруженные ключи. */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  let firstError: unknown;
+  const worker = async () => {
+    while (firstError === undefined && next < items.length) {
+      const index = next++;
+      try {
+        results[index] = await fn(items[index]!);
+      } catch (err) {
+        if (firstError === undefined) firstError = err;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  if (firstError !== undefined) throw firstError;
+  return results;
+}
 
 type SourcingCpLineForOffer = {
   quantity: number;
@@ -66,13 +109,17 @@ function parseBudgetDigits(raw: string | undefined): Prisma.Decimal | null {
   return new Prisma.Decimal(digits);
 }
 
+/** Имена из multipart (Multer) иногда приходят как UTF-8, прочитанный как latin1 («Ð...»). */
 function decodeUploadOriginalName(original: string | undefined | null): string {
-  if (!original?.trim()) return 'file';
+  const raw = (original ?? 'file').trim() || 'file';
+  if (!/[ÐÑÂâ€]/.test(raw)) return raw.slice(0, 512);
   try {
-    return decodeURIComponent(original.replace(/\+/g, ' '));
+    const fixed = Buffer.from(raw, 'latin1').toString('utf8');
+    if (fixed && !fixed.includes('\ufffd')) return fixed.slice(0, 512);
   } catch {
-    return original;
+    /* ignore */
   }
+  return raw.slice(0, 512);
 }
 
 function assertAllReferencedFilesPresent(
@@ -107,80 +154,116 @@ export class SourcingRequestsService {
   ) {}
 
   async createForUser(userId: string, payloadRaw: string, files: Express.Multer.File[]) {
+    try {
+      return await this.createForUserInner(userId, payloadRaw, files);
+    } finally {
+      await cleanupSourcingTempUploads(files);
+    }
+  }
+
+  private async findByClientRequestId(userId: string, clientRequestId: string | undefined) {
+    if (!clientRequestId) return null;
+    const existing = await this.prisma.sourcingRequest.findUnique({
+      where: { userId_clientRequestId: { userId, clientRequestId } },
+      select: { id: true },
+    });
+    return existing ? this.findOneDetailForUser(userId, existing.id) : null;
+  }
+
+  private async createForUserInner(userId: string, payloadRaw: string, files: Express.Multer.File[]) {
     assertSourcingUploadTotalSize(files);
     const payload = parseCreateSourcingRequestPayload(payloadRaw);
+
+    const duplicate = await this.findByClientRequestId(userId, payload.clientRequestId);
+    if (duplicate) return duplicate;
+
     const fileMap = new Map<string, Express.Multer.File>();
     for (const file of files) {
       if (file?.fieldname) fileMap.set(file.fieldname, file);
     }
     assertAllReferencedFilesPresent(payload, fileMap);
 
+    const referenceMime = new Map<string, SourcingReferenceImageMime>();
+    for (let i = 0; i < payload.products.length; i++) {
+      for (const key of payload.products[i]!.referenceImageKeys ?? []) {
+        const file = fileMap.get(key)!;
+        const detected = detectSourcingReferenceImageMime(await readUploadHead(file));
+        if (!detected) {
+          throw new BadRequestException(
+            `Товар ${i + 1}: «${decodeUploadOriginalName(file.originalname)}» — не изображение. Подходят ${SOURCING_REFERENCE_FORMATS_LABEL}.`,
+          );
+        }
+        referenceMime.set(key, detected);
+      }
+    }
+
     const requestId = randomBytes(12).toString('hex');
     const itemIds = payload.products.map(() => randomBytes(12).toString('hex'));
     const uploadedObjectKeys: string[] = [];
 
-    type UploadedRef = {
+    type UploadTask = {
+      kind: 'reference' | 'attachment';
       itemIndex: number;
       sortOrder: number;
-      url: string;
-      filename: string;
-      mimeType: string;
+      file: Express.Multer.File;
+      prefix: string;
+      mimeType?: string;
     };
-    type UploadedAttachment = {
-      sortOrder: number;
-      url: string;
-      filename: string;
-      mimeType: string;
-    };
+    const tasks: UploadTask[] = [];
+    payload.products.forEach((product, itemIndex) => {
+      (product.referenceImageKeys ?? []).forEach((key, sortOrder) => {
+        tasks.push({
+          kind: 'reference',
+          itemIndex,
+          sortOrder,
+          file: fileMap.get(key)!,
+          prefix: `objects/sourcing-requests/${requestId}/items/${itemIds[itemIndex]}`,
+          mimeType: referenceMime.get(key),
+        });
+      });
+    });
+    (payload.attachmentKeys ?? []).forEach((key, sortOrder) => {
+      tasks.push({
+        kind: 'attachment',
+        itemIndex: -1,
+        sortOrder,
+        file: fileMap.get(key)!,
+        prefix: `objects/sourcing-requests/${requestId}/attachments`,
+      });
+    });
 
-    const referenceUploads: UploadedRef[] = [];
-    const attachmentUploads: UploadedAttachment[] = [];
     let dbCommitted = false;
 
     try {
-      for (let i = 0; i < payload.products.length; i++) {
-        const product = payload.products[i]!;
-        const itemId = itemIds[i]!;
-        const keys = product.referenceImageKeys ?? [];
-        for (let sortOrder = 0; sortOrder < keys.length; sortOrder++) {
-          const key = keys[sortOrder]!;
-          const file = fileMap.get(key)!;
-          const uploaded = await this.uploadFile(
-            file,
-            `objects/sourcing-requests/${requestId}/items/${itemId}`,
-          );
-          uploadedObjectKeys.push(uploaded.objectKey);
-          referenceUploads.push({
-            itemIndex: i,
-            sortOrder,
-            url: uploaded.url,
-            filename: uploaded.filename,
-            mimeType: uploaded.mimeType,
-          });
-        }
-      }
-
-      for (let sortOrder = 0; sortOrder < (payload.attachmentKeys?.length ?? 0); sortOrder++) {
-        const key = payload.attachmentKeys![sortOrder]!;
-        const file = fileMap.get(key)!;
-        const uploaded = await this.uploadFile(
-          file,
-          `objects/sourcing-requests/${requestId}/attachments`,
-        );
-        uploadedObjectKeys.push(uploaded.objectKey);
-        attachmentUploads.push({
-          sortOrder,
-          url: uploaded.url,
-          filename: uploaded.filename,
-          mimeType: uploaded.mimeType,
-        });
-      }
+      const uploaded = await mapWithConcurrency(tasks, SOURCING_S3_UPLOAD_CONCURRENCY, async (task) => {
+        const result = await this.uploadFile(task.file, task.prefix, task.mimeType);
+        uploadedObjectKeys.push(result.objectKey);
+        return { task, result };
+      });
+      const referenceUploads = uploaded
+        .filter((u) => u.task.kind === 'reference')
+        .map(({ task, result }) => ({
+          itemIndex: task.itemIndex,
+          sortOrder: task.sortOrder,
+          url: result.url,
+          filename: result.filename,
+          mimeType: result.mimeType,
+        }));
+      const attachmentUploads = uploaded
+        .filter((u) => u.task.kind === 'attachment')
+        .map(({ task, result }) => ({
+          sortOrder: task.sortOrder,
+          url: result.url,
+          filename: result.filename,
+          mimeType: result.mimeType,
+        }));
 
       await this.prisma.$transaction(async (tx) => {
         await tx.sourcingRequest.create({
           data: {
             id: requestId,
             userId,
+            clientRequestId: payload.clientRequestId ?? null,
             title: payload.title,
             deliveryCity: payload.deliveryCity ?? null,
             items: {
@@ -249,10 +332,13 @@ export class SourcingRequestsService {
     } catch (err) {
       if (!dbCommitted) {
         await this.cleanupUploadedObjectKeys(uploadedObjectKeys);
+        /** Параллельный повтор с тем же ключом успел создать заявку — отдаём её. */
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+          const winner = await this.findByClientRequestId(userId, payload.clientRequestId);
+          if (winner) return winner;
+        }
       }
       throw err;
-    } finally {
-      await cleanupSourcingTempUploads(files);
     }
   }
 
@@ -287,29 +373,34 @@ export class SourcingRequestsService {
     throw new BadRequestException(`Файл «${file.originalname}» пустой`);
   }
 
-  private async uploadFile(file: Express.Multer.File, keyPrefix: string) {
-    const buffer = await this.readUploadBytes(file);
-    if (buffer.length > SOURCING_FILE_MAX) {
-      throw new BadRequestException(`Файл «${file.originalname}» слишком большой`);
-    }
+  /** `mimeOverride` — тип по сигнатуре (референсы), а не со слов клиента. */
+  private async uploadFile(file: Express.Multer.File, keyPrefix: string, mimeOverride?: string) {
+    let buffer = await this.readUploadBytes(file);
     const safeName = decodeUploadOriginalName(file.originalname);
+    if (buffer.length > SOURCING_FILE_MAX) {
+      throw new BadRequestException(`Файл «${safeName}» слишком большой`);
+    }
+    const mimeType = mimeOverride ?? file.mimetype;
     this.storage.assertLibraryFile({
       size: buffer.length,
-      mimetype: file.mimetype,
+      mimetype: mimeType,
       originalname: safeName,
     });
-    const ext = this.storage.libraryFileExtension(file.mimetype, safeName || 'file');
+    if (mimeType.startsWith('image/')) {
+      buffer = stripImageMetadata(buffer, mimeType);
+    }
+    const ext = this.storage.libraryFileExtension(mimeType, safeName || 'file');
     const objectKey = `${keyPrefix}/${randomBytes(16).toString('hex')}${ext}`;
     const { url } = await this.storage.uploadMediaLibraryObject(
       buffer,
-      file.mimetype,
+      mimeType,
       objectKey,
       safeName,
     );
     return {
       url,
       filename: safeName.slice(0, 512),
-      mimeType: file.mimetype,
+      mimeType,
       objectKey,
     };
   }
@@ -593,7 +684,6 @@ export class SourcingRequestsService {
         expectedBudget: item.expectedBudget?.toString() ?? null,
         referenceImages: item.referenceImages.map((img) => ({
           id: img.id,
-          url: img.url,
           filename: img.filename,
           mimeType: img.mimeType,
         })),
@@ -680,14 +770,12 @@ export class SourcingRequestsService {
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
       items: row.items.map((item) => {
-        const referenceImageUrls = item.referenceImages
-          .map((img) => img.url.trim())
-          .filter(Boolean);
+        const referenceImageIds = item.referenceImages.map((img) => img.id);
         return {
           id: item.id,
           name: item.name,
-          referenceImageUrl: referenceImageUrls[0] ?? null,
-          referenceImageUrls,
+          /** Без публичных URL: открытие через GET /files/sourcing:<id>. */
+          referenceImageIds,
         };
       }),
     };
@@ -721,7 +809,6 @@ export class SourcingRequestsService {
         expectedBudget: item.expectedBudget?.toString() ?? null,
         referenceImages: item.referenceImages.map((img) => ({
           id: img.id,
-          url: img.url,
           filename: img.filename,
           mimeType: img.mimeType,
         })),

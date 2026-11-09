@@ -45,8 +45,26 @@ const LIBRARY_DOC = new Set([
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'application/vnd.ms-excel',
   'text/plain',
+  'application/zip',
+  'application/x-zip-compressed',
+  'application/x-zip',
+  /** AutoCAD / CAD — браузеры отдают разные MIME */
+  'application/acad',
+  'application/x-acad',
+  'application/autocad_dwg',
+  'application/dwg',
+  'application/x-dwg',
+  'application/x-autocad',
+  'image/vnd.dwg',
+  'drawing/dwg',
+  'application/dxf',
+  'application/x-dxf',
+  'image/vnd.dxf',
+  'drawing/x-dxf',
 ]);
 const MODEL_3D_EXT = /\.(glb|gltf|obj|fbx|stl|usdz)$/i;
+/** Чертежи и архивы заявок на подбор (форма ЛК предлагает .dwg/.dxf/.zip). */
+const LIBRARY_CAD_ZIP_EXT = /\.(dwg|dxf|zip)$/i;
 
 const MIME_EXT: Record<string, string> = {
   'image/jpeg': '.jpg',
@@ -64,6 +82,14 @@ const MIME_EXT: Record<string, string> = {
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
   'application/vnd.ms-excel': '.xls',
   'text/plain': '.txt',
+  'application/zip': '.zip',
+  'application/x-zip-compressed': '.zip',
+  'application/x-zip': '.zip',
+  'image/vnd.dwg': '.dwg',
+  'application/dwg': '.dwg',
+  'application/acad': '.dwg',
+  'image/vnd.dxf': '.dxf',
+  'application/dxf': '.dxf',
   'model/gltf-binary': '.glb',
   'model/gltf+json': '.gltf',
 };
@@ -208,9 +234,10 @@ export class ObjectStorageService {
     if (RICH_VIDEO_TYPES.has(m)) return;
     if (m === 'model/gltf-binary' || m === 'model/gltf+json') return;
     const name = file.originalname ?? '';
+    if (LIBRARY_CAD_ZIP_EXT.test(name)) return;
     if (m === 'application/octet-stream' && MODEL_3D_EXT.test(name)) return;
     throw new BadRequestException(
-      'Недопустимый тип файла. Разрешены: изображения (JPEG/PNG/WebP/GIF), PDF и офисные документы, MP4/WebM/MOV, GLB/GLTF/OBJ/FBX/STL и др.',
+      'Недопустимый тип файла. Разрешены: изображения (JPEG/PNG/WebP/GIF), PDF и офисные документы, DWG/DXF/ZIP, MP4/WebM/MOV, GLB/GLTF/OBJ/FBX/STL и др.',
     );
   }
 

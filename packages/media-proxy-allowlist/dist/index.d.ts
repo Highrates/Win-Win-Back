@@ -1,5 +1,5 @@
 /** Базовые CDN/object-storage суффиксы + MEDIA_PROXY_ALLOWED_HOST_SUFFIXES (comma-separated). */
-export declare const DEFAULT_ALLOWED_HOST_SUFFIXES: readonly [".amazonaws.com", ".cloudfront.net", ".s3.amazonaws.com", ".storage.yandexcloud.net", ".selcdn.ru", ".cdn.digitaloceanspaces.com", ".digitaloceanspaces.com", ".b-cdn.net", ".googleusercontent.com", ".ggpht.com", ".imgix.net", ".cloudinary.com", ".mzstatic.com"];
+export declare const DEFAULT_ALLOWED_HOST_SUFFIXES: readonly [".amazonaws.com", ".cloudfront.net", ".s3.amazonaws.com", ".storage.yandexcloud.net", ".selcdn.ru", ".regru.cloud", ".cdn.digitaloceanspaces.com", ".digitaloceanspaces.com", ".b-cdn.net", ".googleusercontent.com", ".ggpht.com", ".imgix.net", ".cloudinary.com", ".mzstatic.com"];
 export declare function parseAllowedHostSuffixesFromEnv(raw: string | undefined | null): string[];
 export type MediaProxyAllowlistConfig = {
     /** Exact origins allowed (e.g. http://127.0.0.1:3001). */

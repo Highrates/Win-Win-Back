@@ -19,6 +19,12 @@ describe('media-proxy-allowlist', () => {
     expect(
       isAllowedMediaProxyTarget(new URL('https://bucket.s3.eu-central-1.amazonaws.com/x.jpg'), cfg),
     ).toBe(true);
+    expect(
+      isAllowedMediaProxyTarget(
+        new URL('https://s3.regru.cloud/winwin-media/objects/brendy/a.jpg'),
+        cfg,
+      ),
+    ).toBe(true);
     expect(isAllowedMediaProxyTarget(new URL('https://evil.example/a.jpg'), cfg)).toBe(false);
   });
 

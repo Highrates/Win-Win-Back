@@ -1,4 +1,5 @@
 export * from './limits';
+export * from './reference-images';
 export * from './status';
 export * from './product-validation';
 export * from './product-name';

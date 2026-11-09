@@ -1202,6 +1202,8 @@ model SourcingRequest {
   status       SourcingRequestStatus @default(PENDING_REVIEW)
   /// Последняя просмотренная клиентом версия опубликованного КП (1+).
   customerLastSeenCommercialProposalVersion Int?
+  /// Ключ идемпотентности отправки с клиента: повтор после 504 не создаёт дубль.
+  clientRequestId String?
   createdAt    DateTime              @default(now())
   updatedAt    DateTime              @updatedAt
 
@@ -1210,6 +1212,7 @@ model SourcingRequest {
   chatConversation ChatConversation?
   commercialProposals SourcingCommercialProposal[]
 
+  @@unique([userId, clientRequestId])
   @@index([userId, status])
   @@index([status, createdAt])
 }

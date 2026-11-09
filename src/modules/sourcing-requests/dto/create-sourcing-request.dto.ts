@@ -8,6 +8,7 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  Matches,
   Max,
   MaxLength,
   Min,
@@ -162,6 +163,12 @@ export class CreateSourcingRequestDto {
   @IsString({ each: true })
   @MaxLength(SOURCING_FILE_KEY_MAX, { each: true })
   attachmentKeys: string[] = [];
+
+  @IsOptional()
+  @Transform(({ value }) => trimOptionalString(value))
+  @IsString()
+  @Matches(/^[A-Za-z0-9_-]{8,64}$/, { message: 'Некорректный ключ отправки заявки' })
+  clientRequestId?: string;
 }
 
 export type CreateSourcingRequestProductPayload = CreateSourcingRequestProductDto;

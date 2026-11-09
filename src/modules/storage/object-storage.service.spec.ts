@@ -24,10 +24,41 @@ describe('ObjectStorageService private bucket', () => {
 
     const chat = await storage.uploadMediaLibraryObject(buf, 'application/pdf', 'objects/chat/orders/o1/a.pdf', 'a.pdf');
     await storage.uploadMediaLibraryObject(buf, 'application/pdf', 'objects/library/a.pdf', 'a.pdf');
+    await storage.uploadMediaLibraryObject(
+      buf,
+      'image/jpeg',
+      'objects/sourcing-requests/s1/items/i1/ref.jpg',
+      'ref.jpg',
+    );
 
     const buckets = send.mock.calls.map(([cmd]) => (cmd as PutObjectCommand).input.Bucket);
-    expect(buckets).toEqual(['priv', 'pub']);
+    expect(buckets).toEqual(['priv', 'pub', 'priv']);
     expect(storage.tryPublicUrlToKey(chat.url)).toBe('objects/chat/orders/o1/a.pdf');
+  });
+
+  it('accepts DWG/DXF/ZIP for library uploads', () => {
+    const storage = makeService();
+    expect(() =>
+      storage.assertLibraryFile({
+        size: 100,
+        mimetype: 'application/octet-stream',
+        originalname: 'план.dwg',
+      }),
+    ).not.toThrow();
+    expect(() =>
+      storage.assertLibraryFile({
+        size: 100,
+        mimetype: 'application/zip',
+        originalname: 'archive.zip',
+      }),
+    ).not.toThrow();
+    expect(() =>
+      storage.assertLibraryFile({
+        size: 100,
+        mimetype: 'application/octet-stream',
+        originalname: 'evil.exe',
+      }),
+    ).toThrow(/Недопустимый тип файла/);
   });
 
   it('reads not-yet-migrated private objects from the public bucket', async () => {

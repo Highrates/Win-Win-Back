@@ -5,6 +5,8 @@ export const DEFAULT_ALLOWED_HOST_SUFFIXES = [
   '.s3.amazonaws.com',
   '.storage.yandexcloud.net',
   '.selcdn.ru',
+  /** REG.RU Object Storage (s3.regru.cloud / *.s3.regru.cloud). */
+  '.regru.cloud',
   '.cdn.digitaloceanspaces.com',
   '.digitaloceanspaces.com',
   '.b-cdn.net',

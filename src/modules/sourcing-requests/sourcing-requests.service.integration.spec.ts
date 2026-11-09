@@ -9,7 +9,7 @@ function multerFile(fieldname: string, name = 'photo.jpg'): Express.Multer.File 
     encoding: '7bit',
     mimetype: 'image/jpeg',
     size: 128,
-    buffer: Buffer.from('jpeg'),
+    buffer: Buffer.from([0xff, 0xd8, 0xff, 0xd9]),
     destination: '',
     filename: '',
     path: '',

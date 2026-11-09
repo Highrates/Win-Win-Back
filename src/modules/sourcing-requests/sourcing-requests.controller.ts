@@ -8,6 +8,7 @@ import {
   Post,
   Query,
   UploadedFiles,
+  UseFilters,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
@@ -20,6 +21,7 @@ import { SourcingRequestsService } from './sourcing-requests.service';
 import { SourcingCommercialProposalService } from './sourcing-commercial-proposal.service';
 import { parseSourcingListLimit, parseSourcingListPage } from './sourcing-limits.constants';
 import { sourcingUploadMulterOptions } from './sourcing-upload.config';
+import { SourcingUploadExceptionFilter } from './sourcing-upload.exception-filter';
 
 @Controller('sourcing-requests')
 @UseGuards(JwtAuthGuard)
@@ -61,6 +63,7 @@ export class SourcingRequestsController {
 
   @Post()
   @Throttle(USER_HEAVY_CREATE_THROTTLE)
+  @UseFilters(SourcingUploadExceptionFilter)
   @UseInterceptors(AnyFilesInterceptor(sourcingUploadMulterOptions()))
   create(
     @CurrentUser('sub') userId: string,

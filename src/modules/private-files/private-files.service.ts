@@ -11,7 +11,8 @@ export type PrivateFileViewer = { userId: string; role: string };
 type FileRef = { url: string; filename: string; mimeType: string | null };
 
 /**
- * Персональные файлы по составному id: `chat:<attachmentId>`, `sourcing:<attachmentId>`, `order-doc:<documentId>`.
+ * Персональные файлы по составному id:
+ * `chat:<attachmentId>`, `sourcing:<attachmentId|itemImageId>`, `order-doc:<documentId>`.
  * Покупатель — только свои; сотрудник с доступом к разделу «Заказы» — любые.
  * Чужой или несуществующий id — 404 без различия, чтобы не раскрывать наличие.
  */
@@ -69,7 +70,13 @@ export class PrivateFilesService {
         where: { id, ...(staff ? {} : { request: { userId } }) },
         select: { url: true, filename: true, mimeType: true },
       });
-      return a ? { url: a.url, filename: a.filename, mimeType: a.mimeType } : null;
+      if (a) return { url: a.url, filename: a.filename, mimeType: a.mimeType };
+
+      const img = await this.prisma.sourcingRequestItemImage.findFirst({
+        where: { id, ...(staff ? {} : { item: { request: { userId } } }) },
+        select: { url: true, filename: true, mimeType: true },
+      });
+      return img ? { url: img.url, filename: img.filename, mimeType: img.mimeType } : null;
     }
 
     if (type === 'order-doc') {

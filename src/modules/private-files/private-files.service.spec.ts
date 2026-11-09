@@ -7,6 +7,7 @@ describe('PrivateFilesService', () => {
   const prisma = {
     chatAttachment: { findFirst: vi.fn() },
     sourcingRequestAttachment: { findFirst: vi.fn() },
+    sourcingRequestItemImage: { findFirst: vi.fn() },
     orderDocument: { findFirst: vi.fn() },
   };
   const storage = {
@@ -78,6 +79,25 @@ describe('PrivateFilesService', () => {
 
     expect(staffAccess.canAccessOrdersSection).toHaveBeenCalledWith('staff1', 'MODERATOR');
     expect(prisma.sourcingRequestAttachment.findFirst.mock.calls[0][0].where).toEqual({ id: 'r1' });
+  });
+
+  it('opens sourcing item reference images via the same sourcing: prefix', async () => {
+    prisma.sourcingRequestAttachment.findFirst.mockResolvedValue(null);
+    prisma.sourcingRequestItemImage.findFirst.mockResolvedValue({
+      url: 'https://s3/objects/sourcing-requests/s1/items/i1/ref.jpg',
+      filename: 'кухня.jpg',
+      mimeType: 'image/jpeg',
+    });
+    storage.openObjectStream.mockResolvedValue({ body: Readable.from(['x']), contentType: null, contentLength: 1 });
+
+    const file = await service.open(customer, 'sourcing:img1');
+
+    expect(prisma.sourcingRequestItemImage.findFirst.mock.calls[0][0].where).toEqual({
+      id: 'img1',
+      item: { request: { userId: 'u1' } },
+    });
+    expect(storage.openObjectStream).toHaveBeenCalledWith('objects/sourcing-requests/s1/items/i1/ref.jpg');
+    expect(file).toMatchObject({ inline: true, contentType: 'image/jpeg', filename: 'кухня.jpg' });
   });
 
   it('staff without orders access is treated as a customer', async () => {
