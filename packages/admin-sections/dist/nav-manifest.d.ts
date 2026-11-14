@@ -19,7 +19,7 @@ export type AdminNavMidLink = {
     section: AdminSectionId;
     labelKey: AdminNavLabelKey;
 };
-export type AdminDashboardLinkKey = 'catalog' | 'brands' | 'orders' | 'clients' | 'blog' | 'referrals' | 'collections' | 'productSets';
+export type AdminDashboardLinkKey = 'catalog' | 'brands' | 'orders' | 'clients' | 'blog' | 'tours' | 'referrals' | 'collections' | 'productSets';
 export type AdminDashboardLink = {
     href: string;
     section: AdminSectionId;
@@ -70,6 +70,10 @@ export declare const ADMIN_NAV_MANIFEST: {
         href: string;
         section: "blog";
         labelKey: "blog";
+    } | {
+        href: string;
+        section: "tours";
+        labelKey: "tours";
     } | {
         href: string;
         section: "orders";

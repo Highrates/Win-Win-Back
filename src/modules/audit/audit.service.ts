@@ -311,6 +311,50 @@ export class AuditService implements OnModuleInit, OnModuleDestroy {
           });
           return r ? { name: `Реферал·ур.${r.level}`, slug: entityId.slice(-8) } : undefined;
         }
+        case 'ChinaTour': {
+          const r = await this.prisma.chinaTour.findUnique({
+            where: { id: entityId },
+            select: { title: true, slug: true },
+          });
+          return r ? { name: r.title, slug: r.slug } : undefined;
+        }
+        case 'ChinaToursLanding': {
+          const r = await this.prisma.chinaToursLanding.findUnique({
+            where: { id: entityId },
+            select: { title: true },
+          });
+          return r ? { name: r.title || 'Лендинг туров', slug: 'landing' } : undefined;
+        }
+        case 'ChinaTourApplication': {
+          const r = await this.prisma.chinaTourApplication.findUnique({
+            where: { id: entityId },
+            select: {
+              status: true,
+              tour: { select: { title: true, slug: true } },
+            },
+          });
+          return r
+            ? {
+                name: `Заявка·${r.status}·${r.tour.title}`,
+                slug: r.tour.slug,
+              }
+            : undefined;
+        }
+        case 'ChinaTourReview': {
+          const r = await this.prisma.chinaTourReview.findUnique({
+            where: { id: entityId },
+            select: {
+              status: true,
+              tour: { select: { title: true, slug: true } },
+            },
+          });
+          return r
+            ? {
+                name: `Отзыв·${r.status}·${r.tour.title}`,
+                slug: r.tour.slug,
+              }
+            : undefined;
+        }
         default:
           return undefined;
       }

@@ -20,6 +20,7 @@ import { OrdersModule } from './modules/orders/orders.module';
 import { CollectionsModule } from './modules/collections/collections.module';
 import { ReferralsModule } from './modules/referrals/referrals.module';
 import { BlogModule } from './modules/blog/blog.module';
+import { ChinaToursModule } from './modules/china-tours/china-tours.module';
 import { BrandsModule } from './modules/brands/brands.module';
 import { DesignersModule } from './modules/designers/designers.module';
 import { ProjectsModule } from './modules/projects/projects.module';
@@ -71,6 +72,7 @@ import { EmailNotificationsAdminModule } from './modules/email-notifications/ema
     CollectionsModule,
     ReferralsModule,
     BlogModule,
+    ChinaToursModule,
     BrandsModule,
     DesignersModule,
     ProjectsModule,

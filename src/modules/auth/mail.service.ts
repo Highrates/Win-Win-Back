@@ -324,6 +324,23 @@ export class MailService {
     if (sent) this.logger.log(`Sourcing submit notify (staff) sent to ${sent} recipient(s)`);
   }
 
+  /** Новая заявка на тур в Китай. Те же получатели: `ORDER_CHAT_STAFF_EMAIL`. */
+  async sendChinaTourApplicationStaff(params: {
+    recipients: string[];
+    tourTitle: string;
+    applicantName: string | null;
+    applicantContact: string | null;
+    adminApplicationsUrl: string;
+  }): Promise<void> {
+    const sent = await this.sendNotification(params.recipients, 'staff_china_tour_application', {
+      'tour.title': params.tourTitle.trim() || 'Тур',
+      'applicant.name': params.applicantName,
+      'applicant.contact': params.applicantContact,
+      'admin.url': params.adminApplicationsUrl,
+    });
+    if (sent) this.logger.log(`China tour application notify (staff) sent to ${sent} recipient(s)`);
+  }
+
   /** Новый вопрос покупателя по товару. Получатели: `ORDER_CHAT_STAFF_EMAIL`. */
   async sendProductQaNewQuestionStaff(params: {
     recipients: string[];

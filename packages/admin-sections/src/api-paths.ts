@@ -31,6 +31,8 @@ export function resolveAdminSectionFromApiPath(pathOnly: string): AdminApiAccess
 
   if (p.includes('/blog/admin')) return 'blog';
 
+  if (p.includes('/china-tours/admin')) return 'tours';
+
   if (p.includes('/catalog/admin/media')) return 'objects';
 
   if (p.includes('/catalog/admin/brands')) return 'brands';

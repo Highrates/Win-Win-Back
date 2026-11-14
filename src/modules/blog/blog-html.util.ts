@@ -82,6 +82,15 @@ export function sanitizeProfileAboutHtml(html: string): string {
   return sanitizeBlogPostBodyHtml(html);
 }
 
+/** Текст пунктов программы тура: без img/video. */
+export function sanitizeTourScheduleHtml(html: string): string {
+  ensureAnchorRelNoopenerHook();
+  return DOMPurify.sanitize(html ?? '', {
+    ...SANITIZE,
+    ALLOWED_TAGS: SANITIZE.ALLOWED_TAGS.filter((t) => t !== 'img' && t !== 'video' && t !== 'source'),
+  });
+}
+
 /** URL из img / video / source[src] в HTML редактора. */
 export function extractMediaUrlsFromRichHtml(html: string | null | undefined): string[] {
   if (!html?.trim()) return [];

@@ -11,6 +11,7 @@ export const AUDIT_ADMIN_MODULES = [
   'collections',
   'designers',
   'projects',
+  'china-tours',
 ] as const;
 
 export type AuditAdminModule = (typeof AUDIT_ADMIN_MODULES)[number];
@@ -183,6 +184,39 @@ function parseGenericModule(module: string, rest: string[]): ParsedAdminMutation
       entityId: id,
       operation: id ? undefined : rest.join('/') || undefined,
     };
+  }
+  if (module === 'china-tours') {
+    const [r0, r1, r2] = rest;
+    if (r0 === 'landing') {
+      return { module, entityType: 'ChinaToursLanding', operation: r1 };
+    }
+    if (r0 === 'tours') {
+      if (r1 === 'reorder') return { module, entityType: 'ChinaTour', operation: 'reorder' };
+      if (r1 && isLikelyCuid(r1)) return { module, entityType: 'ChinaTour', entityId: r1 };
+      return { module, entityType: 'ChinaTour', operation: r1 };
+    }
+    if (r0 === 'applications') {
+      if (r1 && isLikelyCuid(r1)) {
+        return {
+          module,
+          entityType: 'ChinaTourApplication',
+          entityId: r1,
+          operation: r2,
+        };
+      }
+      return { module, entityType: 'ChinaTourApplication' };
+    }
+    if (r0 === 'reviews') {
+      if (r1 && isLikelyCuid(r1)) {
+        return {
+          module,
+          entityType: 'ChinaTourReview',
+          entityId: r1,
+          operation: r2,
+        };
+      }
+      return { module, entityType: 'ChinaTourReview' };
+    }
   }
   const id = lastLikelyCuid(rest);
   return {

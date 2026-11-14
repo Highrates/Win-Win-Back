@@ -44,6 +44,7 @@ exports.ADMIN_NAV_MANIFEST = {
     midLinks: [
         { href: '/admin/brands', section: 'brands', labelKey: 'brands' },
         { href: '/admin/blog', section: 'blog', labelKey: 'blog' },
+        { href: '/admin/tours', section: 'tours', labelKey: 'tours' },
         { href: '/admin/orders', section: 'orders', labelKey: 'orders' },
         { href: '/admin/applications', section: 'applications', labelKey: 'applications' },
         { href: '/admin/clients', section: 'clients', labelKey: 'clients' },
@@ -86,6 +87,7 @@ exports.ADMIN_DASHBOARD_LINKS = [
     { href: '/admin/orders', section: 'orders', key: 'orders', labelKey: 'orders' },
     { href: '/admin/clients', section: 'clients', key: 'clients', labelKey: 'clients' },
     { href: '/admin/blog', section: 'blog', key: 'blog', labelKey: 'blog' },
+    { href: '/admin/tours', section: 'tours', key: 'tours', labelKey: 'tours' },
     { href: '/admin/referrals', section: 'settings', key: 'referrals', labelKey: 'referrals' },
     { href: '/admin/collections', section: 'catalog', key: 'collections', labelKey: 'collections' },
     { href: '/admin/product-sets', section: 'catalog', key: 'productSets', labelKey: 'productSets' },

@@ -11,6 +11,7 @@ export const ADMIN_SECTION_IDS = [
   'clients',
   'objects',
   'blog',
+  'tours',
   'journal',
   'settings',
   /** LLM-ассистент (FAB + API); не входит в дашборд автоматически. */

@@ -23,6 +23,7 @@ export const EMAIL_NOTIFICATION_EVENT_KEYS = [
   'staff_sourcing_chat_message',
   'staff_order_submitted',
   'staff_sourcing_submitted',
+  'staff_china_tour_application',
   'staff_product_qa_question',
 ] as const;
 
@@ -502,6 +503,38 @@ export const EMAIL_NOTIFICATION_EVENTS: EmailNotificationEventDef[] = [
       'request.id': '3b8e…04d2',
       'request.title': 'Обеденный стол 180×90, дуб',
       'admin.url': `${site}/admin/orders/sourcing/demo`,
+    }),
+  },
+  {
+    key: 'staff_china_tour_application',
+    audience: 'staff',
+    label: 'Новая заявка на тур в Китай',
+    description: 'Клиент подал заявку на участие в туре.',
+    variables: [
+      { key: 'tour.title', label: 'Название тура' },
+      { key: 'applicant.name', label: 'Имя заявителя', optional: true },
+      { key: 'applicant.contact', label: 'Контакт заявителя', optional: true },
+      { key: 'admin.url', label: 'Ссылка на заявки в админке' },
+    ],
+    cta: { label: 'Открыть заявки', urlKey: 'admin.url' },
+    details: [
+      { label: 'Тур', key: 'tour.title' },
+      { label: 'Заявитель', key: 'applicant.name' },
+      { label: 'Контакт', key: 'applicant.contact' },
+    ],
+    eyebrow: 'Заявка на тур',
+    preheader: 'Новая заявка: {{tour.title}}',
+    footerNote: STAFF_FOOTER,
+    defaultSubject: 'Новая заявка на тур «{{tour.title}}» — Wupapa',
+    defaultTitle: 'Клиент хочет в тур',
+    defaultBody: ['Поступила заявка на участие в туре.', '{{block.details}}', '{{cta.button}}'].join(
+      '\n\n',
+    ),
+    sample: (site) => ({
+      'tour.title': 'Фабрики Гуанчжоу · март',
+      'applicant.name': 'Анна Смирнова',
+      'applicant.contact': 'anna@example.com',
+      'admin.url': `${site}/admin/tours/applications`,
     }),
   },
   {

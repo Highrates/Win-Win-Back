@@ -43,13 +43,19 @@ export function detectSourcingReferenceImageMime(bytes: Uint8Array): SourcingRef
     return 'image/png';
   }
   if (bytes.length >= 6) {
-    const head = String.fromCharCode(...bytes.slice(0, 6));
+    const head = bytesAscii(bytes, 0, 6);
     if (head === 'GIF87a' || head === 'GIF89a') return 'image/gif';
   }
   if (bytes.length >= 12) {
-    const riff = String.fromCharCode(...bytes.slice(0, 4));
-    const webp = String.fromCharCode(...bytes.slice(8, 12));
-    if (riff === 'RIFF' && webp === 'WEBP') return 'image/webp';
+    if (bytesAscii(bytes, 0, 4) === 'RIFF' && bytesAscii(bytes, 8, 12) === 'WEBP') {
+      return 'image/webp';
+    }
   }
   return null;
+}
+
+function bytesAscii(bytes: Uint8Array, start: number, end: number): string {
+  let out = '';
+  for (let i = start; i < end; i++) out += String.fromCharCode(bytes[i]!);
+  return out;
 }
