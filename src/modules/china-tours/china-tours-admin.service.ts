@@ -27,6 +27,23 @@ function slugifyFromTitle(title: string, fallback: string): string {
   return raw || fallback;
 }
 
+const REVIEW_PHOTO_MAX = 12;
+
+function normalizeReviewPhotoUrls(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((x): x is string => typeof x === 'string')
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .slice(0, REVIEW_PHOTO_MAX);
+}
+
+function normalizeOptionalUrl(v: string | null | undefined): string | null {
+  if (v == null) return null;
+  const t = v.trim();
+  return t || null;
+}
+
 const dayBrandSelect = {
   id: true,
   name: true,
@@ -102,10 +119,29 @@ export class ChinaToursAdminService {
         skip: (page - 1) * limit,
         take: limit,
         include: {
-          _count: { select: { applications: true, reviews: true, days: true } },
+          _count: {
+            select: {
+              applications: true,
+              days: true,
+              reviews: true,
+            },
+          },
         },
       }),
     ]);
+    const tourIds = rows.map((t) => t.id);
+    const approvedRows =
+      tourIds.length === 0
+        ? []
+        : await this.prisma.chinaTourReview.groupBy({
+            by: ['tourId'],
+            where: {
+              tourId: { in: tourIds },
+              status: ChinaTourReviewStatus.APPROVED,
+            },
+            _count: { _all: true },
+          });
+    const approvedByTour = new Map(approvedRows.map((r) => [r.tourId, r._count._all]));
     return {
       items: rows.map((t) => ({
         id: t.id,
@@ -120,7 +156,10 @@ export class ChinaToursAdminService {
         sortOrder: t.sortOrder,
         daysCount: t._count.days,
         applicationsCount: t._count.applications,
-        reviewsCount: t._count.reviews,
+        /** Одобренные (как на витрине). */
+        reviewsCount: approvedByTour.get(t.id) ?? 0,
+        /** Все статусы — для «одобр. / всего» в админке. */
+        reviewsTotal: t._count.reviews,
         updatedAt: t.updatedAt.toISOString(),
       })),
       total,
@@ -366,23 +405,108 @@ export class ChinaToursAdminService {
       }),
     ]);
     return {
-      items: rows.map((r) => ({
-        id: r.id,
-        status: r.status,
-        body: r.body,
-        rating: r.rating,
-        createdAt: r.createdAt.toISOString(),
-        tour: r.tour,
-        user: {
-          id: r.user.id,
-          email: r.user.email,
-          name: [r.user.profile?.firstName, r.user.profile?.lastName].filter(Boolean).join(' ').trim() || null,
-        },
-      })),
+      items: rows.map((r) => this.mapAdminReview(r)),
       total,
       page,
       limit,
     };
+  }
+
+  async createReview(dto: {
+    tourId: string;
+    authorName?: string;
+    body?: string;
+    rating?: number;
+    photoUrls?: string[];
+    videoUrl?: string | null;
+    status?: ChinaTourReviewStatus;
+  }) {
+    const tour = await this.prisma.chinaTour.findUnique({
+      where: { id: dto.tourId },
+      select: { id: true },
+    });
+    if (!tour) throw new NotFoundException('Тур не найден');
+
+    const body = (dto.body ?? '').trim();
+    const photoUrls = normalizeReviewPhotoUrls(dto.photoUrls);
+    const videoUrl = normalizeOptionalUrl(dto.videoUrl);
+    this.assertReviewContent({ body, photoUrls, videoUrl });
+
+    const row = await this.prisma.chinaTourReview.create({
+      data: {
+        tourId: dto.tourId,
+        userId: null,
+        authorName: dto.authorName?.trim() || null,
+        body,
+        rating: dto.rating ?? null,
+        photoUrls,
+        videoUrl,
+        status: dto.status ?? ChinaTourReviewStatus.APPROVED,
+      },
+      include: {
+        tour: { select: { id: true, title: true, slug: true } },
+        user: {
+          select: {
+            id: true,
+            email: true,
+            profile: { select: { firstName: true, lastName: true } },
+          },
+        },
+      },
+    });
+    return this.mapAdminReview(row);
+  }
+
+  async updateReview(
+    id: string,
+    dto: {
+      authorName?: string | null;
+      body?: string;
+      rating?: number | null;
+      photoUrls?: string[];
+      videoUrl?: string | null;
+      status?: ChinaTourReviewStatus;
+    },
+  ) {
+    const existing = await this.prisma.chinaTourReview.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Отзыв не найден');
+
+    const body =
+      dto.body !== undefined ? dto.body.trim() : existing.body;
+    const photoUrls =
+      dto.photoUrls !== undefined
+        ? normalizeReviewPhotoUrls(dto.photoUrls)
+        : normalizeReviewPhotoUrls(existing.photoUrls);
+    const videoUrl =
+      dto.videoUrl !== undefined
+        ? normalizeOptionalUrl(dto.videoUrl)
+        : normalizeOptionalUrl(existing.videoUrl);
+    this.assertReviewContent({ body, photoUrls, videoUrl });
+
+    const row = await this.prisma.chinaTourReview.update({
+      where: { id },
+      data: {
+        ...(dto.authorName !== undefined
+          ? { authorName: dto.authorName?.trim() || null }
+          : {}),
+        body,
+        ...(dto.rating !== undefined ? { rating: dto.rating } : {}),
+        photoUrls,
+        videoUrl,
+        ...(dto.status !== undefined ? { status: dto.status } : {}),
+      },
+      include: {
+        tour: { select: { id: true, title: true, slug: true } },
+        user: {
+          select: {
+            id: true,
+            email: true,
+            profile: { select: { firstName: true, lastName: true } },
+          },
+        },
+      },
+    });
+    return this.mapAdminReview(row);
   }
 
   async patchReviewStatus(id: string, status: ChinaTourReviewStatus) {
@@ -393,6 +517,65 @@ export class ChinaToursAdminService {
       data: { status },
       select: { id: true, status: true, updatedAt: true },
     });
+  }
+
+  async deleteReview(id: string) {
+    const row = await this.prisma.chinaTourReview.findUnique({ where: { id } });
+    if (!row) throw new NotFoundException('Отзыв не найден');
+    await this.prisma.chinaTourReview.delete({ where: { id } });
+    return { ok: true as const };
+  }
+
+  private assertReviewContent(input: {
+    body: string;
+    photoUrls: string[];
+    videoUrl: string | null;
+  }) {
+    if (input.body.length < 2 && input.photoUrls.length === 0 && !input.videoUrl) {
+      throw new BadRequestException('Добавьте текст, фото или видео');
+    }
+  }
+
+  private mapAdminReview(r: {
+    id: string;
+    status: ChinaTourReviewStatus;
+    body: string;
+    rating: number | null;
+    authorName: string | null;
+    photoUrls: unknown;
+    videoUrl: string | null;
+    createdAt: Date;
+    userId: string | null;
+    tour: { id: string; title: string; slug: string };
+    user: {
+      id: string;
+      email: string | null;
+      profile: { firstName: string | null; lastName: string | null } | null;
+    } | null;
+  }) {
+    const userName = r.user
+      ? [r.user.profile?.firstName, r.user.profile?.lastName].filter(Boolean).join(' ').trim() ||
+        null
+      : null;
+    return {
+      id: r.id,
+      status: r.status,
+      body: r.body,
+      rating: r.rating,
+      authorName: r.authorName,
+      photoUrls: normalizeReviewPhotoUrls(r.photoUrls),
+      videoUrl: r.videoUrl,
+      createdAt: r.createdAt.toISOString(),
+      isAdminAuthored: r.userId == null,
+      tour: r.tour,
+      user: r.user
+        ? {
+            id: r.user.id,
+            email: r.user.email,
+            name: userName,
+          }
+        : null,
+    };
   }
 
   private assertDates(startsAt: string, endsAt: string) {

@@ -266,18 +266,35 @@ export class ChinaToursService {
         },
       },
     });
+    const tourIds = rows.map((a) => a.tour.id);
+    const reviews =
+      tourIds.length === 0
+        ? []
+        : await this.prisma.chinaTourReview.findMany({
+            where: { userId, tourId: { in: tourIds } },
+            select: { tourId: true, status: true },
+          });
+    const reviewByTour = new Map(reviews.map((r) => [r.tourId, r.status]));
+
     return rows.map((a) => {
       const endsAtMs = a.tour.endsAt.getTime();
-      const canReview =
+      const reviewStatus = reviewByTour.get(a.tour.id) ?? null;
+      const eligible =
         a.status === ChinaTourApplicationStatus.ACCEPTED &&
         a.tour.isPublished &&
         endsAtMs <= now;
+      // Можно оставить/переписать только если отзыва нет или он REJECTED
+      const canReview =
+        eligible &&
+        (reviewStatus == null || reviewStatus === ChinaTourReviewStatus.REJECTED);
       return {
         id: a.id,
         status: a.status,
         comment: a.comment,
         createdAt: a.createdAt.toISOString(),
         canReview,
+        hasReview: reviewStatus != null,
+        reviewStatus,
         tour: {
           id: a.tour.id,
           slug: a.tour.slug,
@@ -296,7 +313,7 @@ export class ChinaToursService {
   async createReview(slug: string, userId: string, dto: CreateChinaTourReviewDto) {
     const tour = await this.prisma.chinaTour.findFirst({
       where: { slug, isPublished: true },
-      select: { id: true, endsAt: true },
+      select: { id: true, title: true, endsAt: true },
     });
     if (!tour) throw new NotFoundException('Тур не найден');
     if (tour.endsAt.getTime() > Date.now()) {
@@ -314,29 +331,108 @@ export class ChinaToursService {
     const body = dto.body.trim();
     if (body.length < 2) throw new BadRequestException('Слишком короткий отзыв');
 
-    try {
-      return await this.prisma.chinaTourReview.create({
-        data: {
-          tourId: tour.id,
-          userId,
-          body,
-          rating: dto.rating ?? null,
-          status: ChinaTourReviewStatus.PENDING,
-        },
-        select: {
-          id: true,
-          status: true,
-          body: true,
-          rating: true,
-          createdAt: true,
-        },
-      });
-    } catch (e) {
-      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+    const reviewSelect = {
+      id: true,
+      status: true,
+      body: true,
+      rating: true,
+      createdAt: true,
+    } as const;
+
+    const existing = await this.prisma.chinaTourReview.findUnique({
+      where: { tourId_userId: { tourId: tour.id, userId } },
+      select: { id: true, status: true },
+    });
+
+    let row: {
+      id: string;
+      status: ChinaTourReviewStatus;
+      body: string;
+      rating: number | null;
+      createdAt: Date;
+    };
+
+    if (existing) {
+      if (existing.status === ChinaTourReviewStatus.REJECTED) {
+        row = await this.prisma.chinaTourReview.update({
+          where: { id: existing.id },
+          data: {
+            body,
+            rating: dto.rating ?? null,
+            status: ChinaTourReviewStatus.PENDING,
+          },
+          select: reviewSelect,
+        });
+      } else {
         throw new ConflictException('Вы уже оставили отзыв об этом туре');
       }
-      throw e;
+    } else {
+      try {
+        row = await this.prisma.chinaTourReview.create({
+          data: {
+            tourId: tour.id,
+            userId,
+            body,
+            rating: dto.rating ?? null,
+            status: ChinaTourReviewStatus.PENDING,
+          },
+          select: reviewSelect,
+        });
+      } catch (e) {
+        if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+          throw new ConflictException('Вы уже оставили отзыв об этом туре');
+        }
+        throw e;
+      }
     }
+
+    void this.notifyStaffTourReview(tour.title, userId, {
+      body: row.body,
+      rating: row.rating,
+    }).catch((err) => {
+      this.logger.warn(
+        `China tour review email failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+
+    return row;
+  }
+
+  private async notifyStaffTourReview(
+    tourTitle: string,
+    userId: string,
+    review: { body: string; rating: number | null },
+  ): Promise<void> {
+    const recipients = await this.orderChat.getStaffNotifyEmailRecipients();
+    if (!recipients.length) {
+      this.logger.log(
+        'China tour review: no staff email recipients (set ORDER_CHAT_STAFF_EMAIL or add admin/moderator emails)',
+      );
+      return;
+    }
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        email: true,
+        phone: true,
+        profile: { select: { firstName: true, lastName: true } },
+      },
+    });
+    const frontBase =
+      this.config.get<string>('FRONTEND_PUBLIC_URL')?.replace(/\/+$/, '') ||
+      this.config.get<string>('NEXT_PUBLIC_SITE_URL')?.replace(/\/+$/, '') ||
+      'http://localhost:3000';
+    const authorName =
+      [user?.profile?.firstName, user?.profile?.lastName].filter(Boolean).join(' ').trim() || null;
+    await this.mail.sendChinaTourReviewStaff({
+      recipients,
+      tourTitle,
+      authorName,
+      authorContact: user?.email || user?.phone || null,
+      rating: review.rating,
+      body: review.body,
+      adminReviewsUrl: `${frontBase}/admin/tours/reviews?status=PENDING`,
+    });
   }
 
   async myReview(slug: string, userId: string) {
@@ -411,11 +507,14 @@ export class ChinaToursService {
         id: string;
         body: string;
         rating: number | null;
+        authorName: string | null;
+        photoUrls: unknown;
+        videoUrl: string | null;
         createdAt: Date;
         user: {
           id: string;
           profile: { firstName: string | null; lastName: string | null } | null;
-        };
+        } | null;
       }>;
     },
   ) {
@@ -471,16 +570,23 @@ export class ChinaToursService {
         t.images.find((i) => i.role === ChinaTourImageRole.CARD_PRIMARY)?.url ?? null,
       cardSecondaryUrl:
         t.images.find((i) => i.role === ChinaTourImageRole.CARD_SECONDARY)?.url ?? null,
-      reviews: t.reviews.map((r) => ({
-        id: r.id,
-        body: r.body,
-        rating: r.rating,
-        createdAt: r.createdAt.toISOString(),
-        authorName: [r.user.profile?.firstName, r.user.profile?.lastName]
-          .filter(Boolean)
-          .join(' ')
-          .trim() || 'Участник',
-      })),
+      reviews: t.reviews.map((r) => {
+        const fromUser = r.user
+          ? [r.user.profile?.firstName, r.user.profile?.lastName]
+              .filter(Boolean)
+              .join(' ')
+              .trim()
+          : '';
+        return {
+          id: r.id,
+          body: r.body,
+          rating: r.rating,
+          createdAt: r.createdAt.toISOString(),
+          authorName: r.authorName?.trim() || fromUser || 'Участник',
+          photoUrls: stringArrayFromJson(r.photoUrls, 12),
+          videoUrl: r.videoUrl?.trim() || null,
+        };
+      }),
     };
   }
 }

@@ -15,6 +15,8 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { ChinaToursAdminService } from './china-tours-admin.service';
 import {
+  AdminCreateChinaTourReviewDto,
+  AdminUpdateChinaTourReviewDto,
   CreateChinaTourDto,
   PatchChinaTourApplicationStatusDto,
   PatchChinaTourReviewStatusDto,
@@ -125,8 +127,23 @@ export class ChinaToursAdminController {
     });
   }
 
+  @Post('reviews')
+  createReview(@Body() dto: AdminCreateChinaTourReviewDto) {
+    return this.admin.createReview(dto);
+  }
+
+  @Patch('reviews/:id')
+  updateReview(@Param('id') id: string, @Body() dto: AdminUpdateChinaTourReviewDto) {
+    return this.admin.updateReview(id, dto);
+  }
+
   @Patch('reviews/:id/status')
   patchReview(@Param('id') id: string, @Body() dto: PatchChinaTourReviewStatusDto) {
     return this.admin.patchReviewStatus(id, dto.status);
+  }
+
+  @Delete('reviews/:id')
+  deleteReview(@Param('id') id: string) {
+    return this.admin.deleteReview(id);
   }
 }

@@ -4,7 +4,12 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { CuratedCollectionKind, Prisma } from '@prisma/client';
+import {
+  CuratedCollectionKind,
+  CuratedHomeGridSize,
+  CuratedHomeOrderMode,
+  Prisma,
+} from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { adminListResult, parseAdminListQuery } from '../../common/admin-list-pagination';
 import { ObjectStorageService } from '../storage/object-storage.service';
@@ -13,6 +18,16 @@ import {
   CreateCuratedCollectionAdminDto,
   UpdateCuratedCollectionAdminDto,
 } from './dto/curated-collections-admin.dto';
+import { computeHomePreviewCount } from './home-rails.utils';
+
+type HomeSettingsInput = {
+  showOnHome?: boolean;
+  homeOrder?: number | null;
+  homeGridSize?: CuratedHomeGridSize;
+  homeOrderMode?: CuratedHomeOrderMode;
+  homePriceMin?: number | null;
+  homePriceMax?: number | null;
+};
 
 const CYR_TO_LAT: Record<string, string> = {
   а: 'a',
@@ -132,6 +147,109 @@ export class CuratedCollectionsAdminService {
     if (n !== ids.length) throw new BadRequestException('Один из брендов не найден');
   }
 
+  private async resolveHomeSettings(
+    kind: CuratedCollectionKind,
+    input: HomeSettingsInput,
+    opts?: {
+      excludeId?: string;
+      isActive?: boolean;
+      existing?: {
+        showOnHome: boolean;
+        homeOrder: number | null;
+        homeGridSize: CuratedHomeGridSize;
+        homeOrderMode: CuratedHomeOrderMode;
+        homePriceMin: number | null;
+        homePriceMax: number | null;
+      };
+    },
+  ): Promise<{
+    showOnHome: boolean;
+    homeOrder: number | null;
+    homeGridSize: CuratedHomeGridSize;
+    homeOrderMode: CuratedHomeOrderMode;
+    homePriceMin: number | null;
+    homePriceMax: number | null;
+  }> {
+    const existing = opts?.existing;
+    const isActive = opts?.isActive ?? true;
+
+    if (kind !== CuratedCollectionKind.PRODUCT) {
+      return {
+        showOnHome: false,
+        homeOrder: null,
+        homeGridSize: CuratedHomeGridSize.FOUR,
+        homeOrderMode: CuratedHomeOrderMode.FIXED,
+        homePriceMin: null,
+        homePriceMax: null,
+      };
+    }
+
+    // Скрытая коллекция не держит слот на главной.
+    let showOnHome = input.showOnHome ?? existing?.showOnHome ?? false;
+    if (!isActive) showOnHome = false;
+
+    const homeOrder =
+      input.homeOrder !== undefined ? input.homeOrder : (existing?.homeOrder ?? null);
+    const homeGridSize =
+      input.homeGridSize ?? existing?.homeGridSize ?? CuratedHomeGridSize.FOUR;
+    const homeOrderMode =
+      input.homeOrderMode ?? existing?.homeOrderMode ?? CuratedHomeOrderMode.FIXED;
+    let homePriceMin =
+      input.homePriceMin !== undefined ? input.homePriceMin : (existing?.homePriceMin ?? null);
+    let homePriceMax =
+      input.homePriceMax !== undefined ? input.homePriceMax : (existing?.homePriceMax ?? null);
+
+    if (!showOnHome) {
+      return {
+        showOnHome: false,
+        homeOrder: null,
+        homeGridSize,
+        homeOrderMode: CuratedHomeOrderMode.FIXED,
+        homePriceMin: null,
+        homePriceMax: null,
+      };
+    }
+
+    if (homeOrder == null || !Number.isInteger(homeOrder) || homeOrder < 1) {
+      throw new BadRequestException('Для вывода на главную укажите порядок (homeOrder ≥ 1)');
+    }
+
+    const clash = await this.prisma.curatedCollection.findFirst({
+      where: {
+        showOnHome: true,
+        isActive: true,
+        homeOrder,
+        ...(opts?.excludeId ? { NOT: { id: opts.excludeId } } : {}),
+      },
+      select: { id: true, name: true },
+    });
+    if (clash) {
+      throw new ConflictException(
+        `Порядок ${homeOrder} на главной уже занят коллекцией «${clash.name}»`,
+      );
+    }
+
+    if (homeOrderMode !== CuratedHomeOrderMode.RANDOM) {
+      homePriceMin = null;
+      homePriceMax = null;
+    } else if (
+      homePriceMin != null &&
+      homePriceMax != null &&
+      homePriceMin > homePriceMax
+    ) {
+      throw new BadRequestException('Цена «от» не может быть больше «до»');
+    }
+
+    return {
+      showOnHome: true,
+      homeOrder,
+      homeGridSize,
+      homeOrderMode,
+      homePriceMin,
+      homePriceMax,
+    };
+  }
+
   async listForAdmin(q?: string, pageRaw?: number, limitRaw?: number) {
     const trim = q?.trim();
     const where =
@@ -145,15 +263,7 @@ export class CuratedCollectionsAdminService {
           _count: { select: { productItems: true, brandItems: true } },
         },
       });
-      return rows.map((r) => ({
-        id: r.id,
-        name: r.name,
-        slug: r.slug,
-        kind: r.kind,
-        isActive: r.isActive,
-        sortOrder: r.sortOrder,
-        itemCount: r.kind === CuratedCollectionKind.PRODUCT ? r._count.productItems : r._count.brandItems,
-      }));
+      return rows.map((r) => this.mapListRow(r));
     }
 
     const { page, limit, skip } = parseAdminListQuery(pageRaw, limitRaw);
@@ -169,16 +279,32 @@ export class CuratedCollectionsAdminService {
       }),
       this.prisma.curatedCollection.count({ where }),
     ]);
-    const items = rows.map((r) => ({
+    const items = rows.map((r) => this.mapListRow(r));
+    return adminListResult(items, total, page, limit);
+  }
+
+  private mapListRow(r: {
+    id: string;
+    name: string;
+    slug: string;
+    kind: CuratedCollectionKind;
+    isActive: boolean;
+    sortOrder: number;
+    showOnHome: boolean;
+    homeOrder: number | null;
+    _count: { productItems: number; brandItems: number };
+  }) {
+    return {
       id: r.id,
       name: r.name,
       slug: r.slug,
       kind: r.kind,
       isActive: r.isActive,
       sortOrder: r.sortOrder,
+      showOnHome: r.showOnHome,
+      homeOrder: r.homeOrder,
       itemCount: r.kind === CuratedCollectionKind.PRODUCT ? r._count.productItems : r._count.brandItems,
-    }));
-    return adminListResult(items, total, page, limit);
+    };
   }
 
   async getForAdmin(id: string) {
@@ -187,7 +313,22 @@ export class CuratedCollectionsAdminService {
       include: {
         productItems: {
           orderBy: { sortOrder: 'asc' },
-          include: { product: { select: { id: true, name: true, slug: true } } },
+          include: {
+            product: {
+              select: {
+                id: true,
+                name: true,
+                slug: true,
+                isActive: true,
+                variants: {
+                  where: { isActive: true },
+                  orderBy: [{ isDefault: 'desc' }, { sortOrder: 'asc' }],
+                  take: 1,
+                  select: { price: true },
+                },
+              },
+            },
+          },
         },
         brandItems: {
           orderBy: { sortOrder: 'asc' },
@@ -196,6 +337,26 @@ export class CuratedCollectionsAdminService {
       },
     });
     if (!row) throw new NotFoundException('Коллекция не найдена');
+
+    const activeProductPrices = row.productItems
+      .filter((it) => it.product.isActive)
+      .map((it) => {
+        const raw = it.product.variants[0]?.price;
+        if (raw == null) return null;
+        const n = typeof raw === 'number' ? raw : Number(raw);
+        return Number.isFinite(n) ? n : null;
+      });
+
+    const homePreviewCount = computeHomePreviewCount({
+      showOnHome: row.showOnHome,
+      isActive: row.isActive,
+      homeGridSize: row.homeGridSize,
+      homeOrderMode: row.homeOrderMode,
+      homePriceMin: row.homePriceMin,
+      homePriceMax: row.homePriceMax,
+      prices: activeProductPrices,
+    });
+
     return {
       id: row.id,
       name: row.name,
@@ -208,13 +369,32 @@ export class CuratedCollectionsAdminService {
       kind: row.kind,
       isActive: row.isActive,
       sortOrder: row.sortOrder,
-      productItems: row.productItems.map((it) => ({
-        id: it.id,
-        productId: it.productId,
-        name: it.product.name,
-        slug: it.product.slug,
-        sortOrder: it.sortOrder,
-      })),
+      showOnHome: row.showOnHome,
+      homeOrder: row.homeOrder,
+      homeGridSize: row.homeGridSize,
+      homeOrderMode: row.homeOrderMode,
+      homePriceMin: row.homePriceMin,
+      homePriceMax: row.homePriceMax,
+      /** Сколько карточек уйдёт на главную при текущих настройках (0 → warn в UI). */
+      homePreviewCount,
+      productItems: row.productItems.map((it) => {
+        const raw = it.product.variants[0]?.price;
+        let price: number | null = null;
+        if (raw != null) {
+          const n = typeof raw === 'number' ? raw : Number(raw);
+          price = Number.isFinite(n) ? n : null;
+        }
+        return {
+          id: it.id,
+          productId: it.productId,
+          name: it.product.name,
+          slug: it.product.slug,
+          sortOrder: it.sortOrder,
+          isActive: it.product.isActive,
+          /** Base variant price (без tier) — для live preview в админке. */
+          price,
+        };
+      }),
       brandItems: row.brandItems.map((it) => ({
         id: it.id,
         brandId: it.brandId,
@@ -254,6 +434,10 @@ export class CuratedCollectionsAdminService {
       await this.assertBrandsExist(brandIds);
     }
 
+    const home = await this.resolveHomeSettings(dto.kind, dto, {
+      isActive: dto.isActive ?? true,
+    });
+
     try {
       const created = await this.prisma.$transaction(async (tx) => {
         const col = await tx.curatedCollection.create({
@@ -268,6 +452,7 @@ export class CuratedCollectionsAdminService {
             kind: dto.kind,
             isActive: dto.isActive ?? true,
             sortOrder,
+            ...home,
           },
         });
         if (productIds.length) {
@@ -292,11 +477,21 @@ export class CuratedCollectionsAdminService {
       });
       return this.getForAdmin(created);
     } catch (e) {
-      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
-        throw new ConflictException('Такой slug уже занят');
-      }
-      throw e;
+      throw this.mapUniqueConflict(e);
     }
+  }
+
+  private mapUniqueConflict(e: unknown): never {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+      const target = Array.isArray(e.meta?.target)
+        ? (e.meta.target as string[]).join(',')
+        : String(e.meta?.target ?? '');
+      if (target.includes('homeOrder') || target.includes('active_home')) {
+        throw new ConflictException('Этот порядок на главной уже занят');
+      }
+      throw new ConflictException('Такой slug уже занят');
+    }
+    throw e;
   }
 
   async update(id: string, dto: UpdateCuratedCollectionAdminDto) {
@@ -342,79 +537,98 @@ export class CuratedCollectionsAdminService {
 
     const kindChanged = dto.kind !== undefined && dto.kind !== existing.kind;
 
-    await this.prisma.$transaction(async (tx) => {
-      if (kindChanged) {
-        await tx.curatedCollectionProductItem.deleteMany({ where: { collectionId: id } });
-        await tx.curatedCollectionBrandItem.deleteMany({ where: { collectionId: id } });
-      }
+    const nextIsActive = dto.isActive !== undefined ? dto.isActive : existing.isActive;
+    const home = await this.resolveHomeSettings(nextKind, dto, {
+      excludeId: id,
+      isActive: nextIsActive,
+      existing: {
+        showOnHome: existing.showOnHome,
+        homeOrder: existing.homeOrder,
+        homeGridSize: existing.homeGridSize,
+        homeOrderMode: existing.homeOrderMode,
+        homePriceMin: existing.homePriceMin,
+        homePriceMax: existing.homePriceMax,
+      },
+    });
 
-      await tx.curatedCollection.update({
-        where: { id },
-        data: {
-          ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
-          slug: nextSlug,
-          ...(dto.description !== undefined ? { description: dto.description?.trim() || null } : {}),
-          ...coverPatch,
-          ...(dto.seoTitle !== undefined ? { seoTitle: dto.seoTitle?.trim() || null } : {}),
-          ...(dto.seoDescription !== undefined
-            ? { seoDescription: dto.seoDescription?.trim() || null }
-            : {}),
-          ...(dto.kind !== undefined ? { kind: dto.kind } : {}),
-          ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
-        },
-      });
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        if (kindChanged) {
+          await tx.curatedCollectionProductItem.deleteMany({ where: { collectionId: id } });
+          await tx.curatedCollectionBrandItem.deleteMany({ where: { collectionId: id } });
+        }
 
-      if (kindChanged) {
-        if (nextKind === CuratedCollectionKind.PRODUCT) {
-          const ids = incomingProductIds ?? [];
-          if (ids.length) {
-            await tx.curatedCollectionProductItem.createMany({
-              data: ids.map((productId, i) => ({
-                collectionId: id,
-                productId,
-                sortOrder: i,
-              })),
-            });
+        await tx.curatedCollection.update({
+          where: { id },
+          data: {
+            ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
+            slug: nextSlug,
+            ...(dto.description !== undefined ? { description: dto.description?.trim() || null } : {}),
+            ...coverPatch,
+            ...(dto.seoTitle !== undefined ? { seoTitle: dto.seoTitle?.trim() || null } : {}),
+            ...(dto.seoDescription !== undefined
+              ? { seoDescription: dto.seoDescription?.trim() || null }
+              : {}),
+            ...(dto.kind !== undefined ? { kind: dto.kind } : {}),
+            ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
+            ...home,
+          },
+        });
+
+        if (kindChanged) {
+          if (nextKind === CuratedCollectionKind.PRODUCT) {
+            const ids = incomingProductIds ?? [];
+            if (ids.length) {
+              await tx.curatedCollectionProductItem.createMany({
+                data: ids.map((productId, i) => ({
+                  collectionId: id,
+                  productId,
+                  sortOrder: i,
+                })),
+              });
+            }
+          } else {
+            const ids = incomingBrandIds ?? [];
+            if (ids.length) {
+              await tx.curatedCollectionBrandItem.createMany({
+                data: ids.map((brandId, i) => ({
+                  collectionId: id,
+                  brandId,
+                  sortOrder: i,
+                })),
+              });
+            }
           }
         } else {
-          const ids = incomingBrandIds ?? [];
-          if (ids.length) {
-            await tx.curatedCollectionBrandItem.createMany({
-              data: ids.map((brandId, i) => ({
-                collectionId: id,
-                brandId,
-                sortOrder: i,
-              })),
-            });
+          if (existing.kind === CuratedCollectionKind.PRODUCT && incomingProductIds !== undefined) {
+            await tx.curatedCollectionProductItem.deleteMany({ where: { collectionId: id } });
+            if (incomingProductIds.length) {
+              await tx.curatedCollectionProductItem.createMany({
+                data: incomingProductIds.map((productId, i) => ({
+                  collectionId: id,
+                  productId,
+                  sortOrder: i,
+                })),
+              });
+            }
+          }
+          if (existing.kind === CuratedCollectionKind.BRAND && incomingBrandIds !== undefined) {
+            await tx.curatedCollectionBrandItem.deleteMany({ where: { collectionId: id } });
+            if (incomingBrandIds.length) {
+              await tx.curatedCollectionBrandItem.createMany({
+                data: incomingBrandIds.map((brandId, i) => ({
+                  collectionId: id,
+                  brandId,
+                  sortOrder: i,
+                })),
+              });
+            }
           }
         }
-      } else {
-        if (existing.kind === CuratedCollectionKind.PRODUCT && incomingProductIds !== undefined) {
-          await tx.curatedCollectionProductItem.deleteMany({ where: { collectionId: id } });
-          if (incomingProductIds.length) {
-            await tx.curatedCollectionProductItem.createMany({
-              data: incomingProductIds.map((productId, i) => ({
-                collectionId: id,
-                productId,
-                sortOrder: i,
-              })),
-            });
-          }
-        }
-        if (existing.kind === CuratedCollectionKind.BRAND && incomingBrandIds !== undefined) {
-          await tx.curatedCollectionBrandItem.deleteMany({ where: { collectionId: id } });
-          if (incomingBrandIds.length) {
-            await tx.curatedCollectionBrandItem.createMany({
-              data: incomingBrandIds.map((brandId, i) => ({
-                collectionId: id,
-                brandId,
-                sortOrder: i,
-              })),
-            });
-          }
-        }
-      }
-    });
+      });
+    } catch (e) {
+      this.mapUniqueConflict(e);
+    }
 
     const updated = await this.prisma.curatedCollection.findUnique({ where: { id } });
     if (

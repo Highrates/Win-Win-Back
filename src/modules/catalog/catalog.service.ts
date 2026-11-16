@@ -1,5 +1,9 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { CuratedCollectionKind, Prisma } from '@prisma/client';
+import {
+  CuratedCollectionKind,
+  CuratedHomeGridSize,
+  Prisma,
+} from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MeilisearchService, PRODUCTS_INDEX } from '../../meilisearch/meilisearch.service';
 import { ProductSearchIndexService } from '../../meilisearch/product-search-index.service';
@@ -26,6 +30,10 @@ import {
   collectSizeLabelsFromModifications,
 } from '../../meilisearch/product-search-doc';
 import { CatalogTierPricingService } from './catalog-tier-pricing.service';
+import {
+  moscowCalendarDay,
+  selectHomeRailProducts,
+} from './home-rails.utils';
 
 /**
  * Убирает повторы одного товара в выдаче (например, при склейке «свои + по доп. категории» или сбое индекса).
@@ -1513,6 +1521,206 @@ export class CatalogService {
   }
 
   /**
+   * Product-рельсы для главной: showOnHome + homeOrder.
+   * Один batch load items + один tier/likes enrich (без N+1 по slug).
+   */
+  async listHomeProductRails(userId?: string) {
+    const cols = await this.prisma.curatedCollection.findMany({
+      where: {
+        showOnHome: true,
+        isActive: true,
+        kind: CuratedCollectionKind.PRODUCT,
+        homeOrder: { not: null },
+      },
+      orderBy: [{ homeOrder: 'asc' }, { sortOrder: 'asc' }],
+      include: {
+        productItems: {
+          where: { product: { isActive: true } },
+          orderBy: { sortOrder: 'asc' },
+          include: {
+            product: {
+              include: {
+                brand: { select: { id: true, name: true } },
+                catalogTags: { select: { tag: { select: { slug: true, name: true } } } },
+                images: { orderBy: { sortOrder: 'asc' }, take: 6 },
+                variants: {
+                  where: { isActive: true },
+                  orderBy: [{ isDefault: 'desc' }, { sortOrder: 'asc' }],
+                  select: {
+                    id: true,
+                    variantLabel: true,
+                    price: true,
+                    currency: true,
+                    widthMm: true,
+                    heightMm: true,
+                    model3dUrl: true,
+                    drawingUrl: true,
+                  },
+                },
+                elements: {
+                  select: {
+                    availabilities: {
+                      select: {
+                        brandMaterialColor: {
+                          select: {
+                            brandMaterial: { select: { id: true, name: true } },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    type MappedProduct = {
+      id: string;
+      slug: string;
+      name: string;
+      displayName: string;
+      variantId: string | null;
+      price: number | null;
+      currency: string;
+      images: Array<{ url: string; sortOrder: number }>;
+      categoryId: string | null;
+      brandId: string | null;
+      brandName: string | null;
+      tagSlugs: string[];
+      materials: Array<{ id: string; name: string }>;
+      widthMm: number | null;
+      heightMm: number | null;
+      hasCase: boolean;
+      has3d: boolean;
+      hasDrawing: boolean;
+      casesLinkedCount: number;
+      qaMessageCountPublic: number;
+      likesDisplayCount: number;
+    };
+
+    const mapItem = (pi: (typeof cols)[number]['productItems'][number]): MappedProduct => {
+      const p = pi.product;
+      const dv = p.variants[0];
+      const images = p.images.map((im, i) => ({ url: im.url, sortOrder: i }));
+      const materialById = new Map<string, string>();
+      for (const el of p.elements) {
+        for (const av of el.availabilities) {
+          const m = av.brandMaterialColor?.brandMaterial;
+          if (m?.id && m.name) materialById.set(m.id, m.name);
+        }
+      }
+      const widths = p.variants.map((v) => v.widthMm).filter((n): n is number => n != null);
+      const heights = p.variants.map((v) => v.heightMm).filter((n): n is number => n != null);
+      return {
+        id: p.id,
+        slug: p.slug,
+        name: p.name,
+        displayName: dv?.variantLabel?.trim() || p.name,
+        variantId: dv?.id ?? null,
+        price: dv?.price != null ? priceToNumber(dv.price) : null,
+        currency: dv?.currency ?? 'RUB',
+        images,
+        categoryId: p.categoryId,
+        brandId: p.brandId ?? p.brand?.id ?? null,
+        brandName: p.brand?.name ?? null,
+        tagSlugs: p.catalogTags.map((t) => t.tag.slug).filter(Boolean),
+        materials: Array.from(materialById.entries()).map(([id, name]) => ({ id, name })),
+        widthMm: widths.length ? Math.min(...widths) : null,
+        heightMm: heights.length ? Math.min(...heights) : null,
+        hasCase: p.casesLinkedCount > 0,
+        has3d: p.variants.some((v) => Boolean(v.model3dUrl?.trim())),
+        hasDrawing: p.variants.some((v) => Boolean(v.drawingUrl?.trim())),
+        casesLinkedCount: p.casesLinkedCount,
+        qaMessageCountPublic: p.qaMessageCountPublic,
+        likesDisplayCount: Math.max(0, p.likesUserCount + p.likesAdminBoost),
+      };
+    };
+
+    const orderedIdsByCol = new Map<string, string[]>();
+    const uniqueById = new Map<string, MappedProduct>();
+    for (const col of cols) {
+      const ids: string[] = [];
+      for (const pi of col.productItems) {
+        const mapped = mapItem(pi);
+        ids.push(mapped.id);
+        if (!uniqueById.has(mapped.id)) uniqueById.set(mapped.id, mapped);
+      }
+      orderedIdsByCol.set(col.id, ids);
+    }
+
+    const uniqueProducts = [...uniqueById.values()];
+    const tierHits = uniqueProducts.map((p) => {
+      const priceNum = p.price != null ? p.price : 0;
+      return {
+        id: p.id,
+        price: priceNum,
+        priceMin: priceNum,
+        priceMax: priceNum,
+        sortPrice: priceNum,
+      };
+    });
+    const enrichedTierHits = await this.tierPricing.enrichSearchHits(tierHits, userId);
+    const tierPriceByProductId = new Map(
+      enrichedTierHits.map((h) => [h.id, h.price as number]),
+    );
+    const withTier = uniqueProducts.map((p) => {
+      const tierPrice = tierPriceByProductId.get(p.id);
+      if (tierPrice == null || !Number.isFinite(tierPrice) || tierPrice <= 0) return p;
+      return { ...p, price: tierPrice };
+    });
+    const withLikes = await enrichProductsWithLikedByMe(this.prisma, withTier, userId);
+    const enrichedById = new Map(withLikes.map((p) => [p.id, p]));
+
+    const day = moscowCalendarDay();
+    const rails: Array<{
+      slug: string;
+      name: string;
+      homeOrder: number;
+      homeGridSize: CuratedHomeGridSize;
+      products: typeof withLikes;
+    }> = [];
+
+    for (const col of cols) {
+      if (col.homeOrder == null) continue;
+      const ids = orderedIdsByCol.get(col.id) ?? [];
+      const mapped = ids
+        .map((id) => enrichedById.get(id))
+        .filter((p): p is (typeof withLikes)[number] => Boolean(p))
+        .map((p) => ({
+          ...p,
+          price:
+            typeof p.price === 'number'
+              ? p.price
+              : p.price != null
+                ? priceToNumber(p.price as never)
+                : null,
+        }));
+
+      const products = selectHomeRailProducts(mapped, {
+        mode: col.homeOrderMode,
+        gridSize: col.homeGridSize,
+        priceMin: col.homePriceMin,
+        priceMax: col.homePriceMax,
+        seedKey: `${col.id}:${day}`,
+      });
+      if (!products.length) continue;
+
+      rails.push({
+        slug: col.slug,
+        name: col.name,
+        homeOrder: col.homeOrder,
+        homeGridSize: col.homeGridSize,
+        products,
+      });
+    }
+
+    return { rails };
+  }
+
+  /**
    * Все активные товарные коллекции и наборы для витрины каталога (полный состав, без лимита).
    * Сначала коллекции (`kind: PRODUCT`), затем наборы — по `sortOrder`.
    */
@@ -1537,8 +1745,8 @@ export class CatalogService {
         where: {
           isActive: true,
           kind: CuratedCollectionKind.PRODUCT,
-          /** Главная «Рекомендации» — не дублируем на вкладке каталога. */
-          NOT: { slug: 'rekomendatsii' },
+          /** Рельсы главной (showOnHome) не дублируем на вкладке каталога. */
+          showOnHome: false,
         },
         orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
         include: {

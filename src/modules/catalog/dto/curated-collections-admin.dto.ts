@@ -1,13 +1,20 @@
-import { CuratedCollectionKind } from '@prisma/client';
+import {
+  CuratedCollectionKind,
+  CuratedHomeGridSize,
+  CuratedHomeOrderMode,
+} from '@prisma/client';
 import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
   IsBoolean,
   IsEnum,
+  IsInt,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
+  Min,
   MinLength,
   ValidateIf,
 } from 'class-validator';
@@ -55,6 +62,35 @@ export class CreateCuratedCollectionAdminDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  /** PRODUCT only: на главную. */
+  @IsOptional()
+  @IsBoolean()
+  showOnHome?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(99)
+  homeOrder?: number | null;
+
+  @IsOptional()
+  @IsEnum(CuratedHomeGridSize)
+  homeGridSize?: CuratedHomeGridSize;
+
+  @IsOptional()
+  @IsEnum(CuratedHomeOrderMode)
+  homeOrderMode?: CuratedHomeOrderMode;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  homePriceMin?: number | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  homePriceMax?: number | null;
 
   /** Порядок = порядок в массиве. Только при kind PRODUCT. */
   @IsOptional()
@@ -119,6 +155,34 @@ export class UpdateCuratedCollectionAdminDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  showOnHome?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(99)
+  homeOrder?: number | null;
+
+  @IsOptional()
+  @IsEnum(CuratedHomeGridSize)
+  homeGridSize?: CuratedHomeGridSize;
+
+  @IsOptional()
+  @IsEnum(CuratedHomeOrderMode)
+  homeOrderMode?: CuratedHomeOrderMode;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  homePriceMin?: number | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  homePriceMax?: number | null;
 
   @IsOptional()
   @IsArray()

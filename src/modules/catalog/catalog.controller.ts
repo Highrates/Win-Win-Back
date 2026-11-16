@@ -75,6 +75,14 @@ export class CatalogController {
     return this.catalogService.listPublicCollectionsAndSets(userId);
   }
 
+  /** Product-рельсы для главной (showOnHome). Должен быть выше `:slug`. */
+  @Public()
+  @Get('curated-collections/home')
+  async curatedCollectionsHome(@Headers('authorization') authorization: string | undefined) {
+    const userId = userIdFromBearerHeader(this.jwtService, authorization);
+    return this.catalogService.listHomeProductRails(userId);
+  }
+
   /** Кураторская коллекция по slug: бренды (`kind: BRAND`) или товары (`kind: PRODUCT`). */
   @Public()
   @Get('curated-collections/:slug')

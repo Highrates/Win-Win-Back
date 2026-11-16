@@ -1353,6 +1353,19 @@ enum CuratedCollectionKind {
   BRAND
 }
 
+/// Сколько карточек на главной: 4 / 8 / без лимита (progressive page).
+enum CuratedHomeGridSize {
+  FOUR
+  EIGHT
+  UNLIMITED
+}
+
+/// Порядок товаров на главной: как в админке или рандом (с ценовым фильтром).
+enum CuratedHomeOrderMode {
+  FIXED
+  RANDOM
+}
+
 /// Редакторские коллекции для витрины (админка). Отдельно от личных Collection.
 model CuratedCollection {
   id          String   @id @default(cuid())
@@ -1367,11 +1380,23 @@ model CuratedCollection {
   kind        CuratedCollectionKind
   isActive    Boolean  @default(true)
   sortOrder   Int      @default(0)
+  /// PRODUCT only: показывать рельс на главной. При isActive=false сбрасывается.
+  showOnHome     Boolean             @default(false)
+  /// Слот на главной: 1 после BestBrands, 2 после News, 3+ после tours.
+  /// Partial unique в БД: homeOrder WHERE showOnHome AND isActive (см. migration).
+  homeOrder      Int?
+  homeGridSize   CuratedHomeGridSize @default(FOUR)
+  homeOrderMode  CuratedHomeOrderMode @default(FIXED)
+  /// Для RANDOM: фильтр витринной цены (RUB), опционально.
+  homePriceMin   Int?
+  homePriceMax   Int?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   productItems CuratedCollectionProductItem[]
   brandItems   CuratedCollectionBrandItem[]
+
+  @@index([showOnHome, homeOrder])
 }
 
 model CuratedCollectionProductItem {
@@ -1983,17 +2008,25 @@ model ChinaTourApplication {
 }
 
 model ChinaTourReview {
-  id        String                @id @default(cuid())
-  tourId    String
-  tour      ChinaTour             @relation(fields: [tourId], references: [id], onDelete: Cascade)
-  userId    String
-  user      User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  body      String                @db.Text
-  rating    Int?
-  status    ChinaTourReviewStatus @default(PENDING)
-  createdAt DateTime              @default(now())
-  updatedAt DateTime              @updatedAt
+  id String @id @default(cuid())
+  tourId String
+  tour   ChinaTour @relation(fields: [tourId], references: [id], onDelete: Cascade)
+  /// User-authored: set. Admin-authored marketing review: null (many per tour).
+  userId String?
+  user   User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Display name for admin-authored reviews (or override).
+  authorName String?
+  body       String  @db.Text
+  rating     Int?
+  /// Public gallery URLs (images).
+  photoUrls  Json    @default("[]")
+  /// Optional single video URL.
+  videoUrl   String?
+  status     ChinaTourReviewStatus @default(PENDING)
+  createdAt  DateTime              @default(now())
+  updatedAt  DateTime              @updatedAt
 
+  /// Partial uniqueness in practice: PG allows multiple NULLs for userId.
   @@unique([tourId, userId])
   @@index([tourId, status])
 }

@@ -135,6 +135,7 @@ export class PatchChinaTourApplicationStatusDto {
   @IsEnum(ChinaTourApplicationStatus) status!: ChinaTourApplicationStatus;
 }
 
+/** Участник: только текст + оценка. Фото/видео — admin-authored (см. AdminCreate…). */
 export class CreateChinaTourReviewDto {
   @IsString() @MinLength(2) @MaxLength(4000) body!: string;
   @IsOptional() @IsInt() @Min(1) @Max(5) rating?: number;
@@ -142,4 +143,25 @@ export class CreateChinaTourReviewDto {
 
 export class PatchChinaTourReviewStatusDto {
   @IsEnum(ChinaTourReviewStatus) status!: ChinaTourReviewStatus;
+}
+
+/** Admin: создать отзыв (текст / фото / видео), без привязки к user. */
+export class AdminCreateChinaTourReviewDto {
+  @IsString() @MinLength(1) tourId!: string;
+  @IsOptional() @IsString() @MaxLength(120) authorName?: string;
+  @IsOptional() @IsString() @MaxLength(4000) body?: string;
+  @IsOptional() @IsInt() @Min(1) @Max(5) rating?: number;
+  @IsOptional() @IsArray() @IsString({ each: true }) photoUrls?: string[];
+  @IsOptional() @IsString() @MaxLength(2000) videoUrl?: string | null;
+  @IsOptional() @IsEnum(ChinaTourReviewStatus) status?: ChinaTourReviewStatus;
+}
+
+/** Admin: правка текста/медиа/статуса. */
+export class AdminUpdateChinaTourReviewDto {
+  @IsOptional() @IsString() @MaxLength(120) authorName?: string | null;
+  @IsOptional() @IsString() @MaxLength(4000) body?: string;
+  @IsOptional() @IsInt() @Min(1) @Max(5) rating?: number | null;
+  @IsOptional() @IsArray() @IsString({ each: true }) photoUrls?: string[];
+  @IsOptional() @IsString() @MaxLength(2000) videoUrl?: string | null;
+  @IsOptional() @IsEnum(ChinaTourReviewStatus) status?: ChinaTourReviewStatus;
 }

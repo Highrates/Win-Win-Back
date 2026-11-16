@@ -341,6 +341,27 @@ export class MailService {
     if (sent) this.logger.log(`China tour application notify (staff) sent to ${sent} recipient(s)`);
   }
 
+  /** Новый PENDING-отзыв о туре. Те же получатели: `ORDER_CHAT_STAFF_EMAIL`. */
+  async sendChinaTourReviewStaff(params: {
+    recipients: string[];
+    tourTitle: string;
+    authorName: string | null;
+    authorContact: string | null;
+    rating: number | null;
+    body: string;
+    adminReviewsUrl: string;
+  }): Promise<void> {
+    const sent = await this.sendNotification(params.recipients, 'staff_china_tour_review', {
+      'tour.title': params.tourTitle.trim() || 'Тур',
+      'author.name': params.authorName,
+      'author.contact': params.authorContact,
+      'review.rating': params.rating != null ? `${params.rating}/5` : null,
+      'review.body': params.body.trim() || '—',
+      'admin.url': params.adminReviewsUrl,
+    });
+    if (sent) this.logger.log(`China tour review notify (staff) sent to ${sent} recipient(s)`);
+  }
+
   /** Новый вопрос покупателя по товару. Получатели: `ORDER_CHAT_STAFF_EMAIL`. */
   async sendProductQaNewQuestionStaff(params: {
     recipients: string[];

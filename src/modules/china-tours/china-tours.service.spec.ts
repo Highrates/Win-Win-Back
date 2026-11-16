@@ -12,12 +12,20 @@ describe('ChinaToursService', () => {
   const prisma = {
     chinaToursLanding: { upsert: vi.fn() },
     chinaTour: { findMany: vi.fn(), findFirst: vi.fn() },
-    chinaTourApplication: { create: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
-    chinaTourReview: { create: vi.fn() },
+    chinaTourApplication: {
+      create: vi.fn(),
+      findUnique: vi.fn(),
+      findMany: vi.fn(),
+      update: vi.fn(),
+    },
+    chinaTourReview: { create: vi.fn(), findUnique: vi.fn(), findMany: vi.fn(), update: vi.fn() },
     user: { findUnique: vi.fn() },
   };
 
-  const mail = { sendChinaTourApplicationStaff: vi.fn() };
+  const mail = {
+    sendChinaTourApplicationStaff: vi.fn(),
+    sendChinaTourReviewStaff: vi.fn(),
+  };
   const config = { get: vi.fn(() => 'http://localhost:3000') };
   const orderChat = { getStaffNotifyEmailRecipients: vi.fn(async () => [] as string[]) };
 
@@ -181,7 +189,7 @@ describe('ChinaToursService', () => {
   });
 
   describe('listMyApplications', () => {
-    it('отдаёт seats, cardPrimaryUrl и canReview для ACCEPTED past', async () => {
+    it('отдаёт seats, cardPrimaryUrl и canReview для ACCEPTED past без отзыва', async () => {
       prisma.chinaTourApplication.findMany = vi.fn().mockResolvedValue([
         {
           id: 'a1',
@@ -218,12 +226,15 @@ describe('ChinaToursService', () => {
           },
         },
       ]);
+      prisma.chinaTourReview.findMany.mockResolvedValue([]);
 
       const list = await service.listMyApplications('user1');
       expect(list).toHaveLength(2);
       expect(list[0]).toMatchObject({
         id: 'a1',
         canReview: true,
+        hasReview: false,
+        reviewStatus: null,
         tour: {
           slug: 'past-tour',
           seatsTotal: 10,
@@ -235,11 +246,58 @@ describe('ChinaToursService', () => {
       expect(list[1]).toMatchObject({
         id: 'a2',
         canReview: false,
+        hasReview: false,
+        reviewStatus: null,
         tour: {
           cardPrimaryUrl: null,
           isPublished: false,
           seatsTaken: 0,
         },
+      });
+    });
+
+    it('canReview=false при PENDING/APPROVED отзыве; true при REJECTED', async () => {
+      prisma.chinaTourApplication.findMany = vi.fn().mockResolvedValue([
+        {
+          id: 'a1',
+          status: 'ACCEPTED',
+          comment: null,
+          createdAt: new Date('2026-01-10'),
+          tour: {
+            id: 't1',
+            slug: 'past',
+            title: 'Past',
+            startsAt: new Date('2025-01-01'),
+            endsAt: new Date('2025-01-10'),
+            isPublished: true,
+            seatsTotal: 10,
+            seatsTaken: 1,
+            images: [],
+          },
+        },
+      ]);
+      prisma.chinaTourReview.findMany.mockResolvedValue([{ tourId: 't1', status: 'PENDING' }]);
+      let list = await service.listMyApplications('user1');
+      expect(list[0]).toMatchObject({
+        canReview: false,
+        hasReview: true,
+        reviewStatus: 'PENDING',
+      });
+
+      prisma.chinaTourReview.findMany.mockResolvedValue([{ tourId: 't1', status: 'APPROVED' }]);
+      list = await service.listMyApplications('user1');
+      expect(list[0]).toMatchObject({
+        canReview: false,
+        hasReview: true,
+        reviewStatus: 'APPROVED',
+      });
+
+      prisma.chinaTourReview.findMany.mockResolvedValue([{ tourId: 't1', status: 'REJECTED' }]);
+      list = await service.listMyApplications('user1');
+      expect(list[0]).toMatchObject({
+        canReview: true,
+        hasReview: true,
+        reviewStatus: 'REJECTED',
       });
     });
   });
@@ -248,9 +306,11 @@ describe('ChinaToursService', () => {
     it('только ACCEPTED участник после endsAt', async () => {
       prisma.chinaTour.findFirst.mockResolvedValue({
         id: 'tour1',
+        title: 'Tour',
         endsAt: new Date('2020-01-01'),
       });
       prisma.chinaTourApplication.findUnique.mockResolvedValue({ status: 'ACCEPTED' });
+      prisma.chinaTourReview.findUnique.mockResolvedValue(null);
       prisma.chinaTourReview.create.mockResolvedValue({
         id: 'r1',
         status: 'PENDING',
@@ -261,11 +321,79 @@ describe('ChinaToursService', () => {
 
       const row = await service.createReview('slug', 'user1', { body: 'ok', rating: 5 });
       expect(row.id).toBe('r1');
+      expect(mail.sendChinaTourReviewStaff).not.toHaveBeenCalled(); // no recipients
+    });
+
+    it('REJECTED → update в PENDING', async () => {
+      prisma.chinaTour.findFirst.mockResolvedValue({
+        id: 'tour1',
+        title: 'Tour',
+        endsAt: new Date('2020-01-01'),
+      });
+      prisma.chinaTourApplication.findUnique.mockResolvedValue({ status: 'ACCEPTED' });
+      prisma.chinaTourReview.findUnique.mockResolvedValue({ id: 'r1', status: 'REJECTED' });
+      prisma.chinaTourReview.update.mockResolvedValue({
+        id: 'r1',
+        status: 'PENDING',
+        body: 'new',
+        rating: 4,
+        createdAt: new Date(),
+      });
+
+      const row = await service.createReview('slug', 'user1', { body: 'new', rating: 4 });
+      expect(row).toMatchObject({ id: 'r1', status: 'PENDING', body: 'new' });
+      expect(prisma.chinaTourReview.update).toHaveBeenCalled();
+      expect(prisma.chinaTourReview.create).not.toHaveBeenCalled();
+    });
+
+    it('Conflict при уже существующем PENDING', async () => {
+      prisma.chinaTour.findFirst.mockResolvedValue({
+        id: 'tour1',
+        title: 'Tour',
+        endsAt: new Date('2020-01-01'),
+      });
+      prisma.chinaTourApplication.findUnique.mockResolvedValue({ status: 'ACCEPTED' });
+      prisma.chinaTourReview.findUnique.mockResolvedValue({ id: 'r1', status: 'PENDING' });
+      await expect(
+        service.createReview('slug', 'user1', { body: 'ok' }),
+      ).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('BadRequest пока тур не закончился', async () => {
+      prisma.chinaTour.findFirst.mockResolvedValue({
+        id: 'tour1',
+        title: 'Tour',
+        endsAt: new Date('2099-01-01'),
+      });
+      await expect(
+        service.createReview('slug', 'user1', { body: 'ok' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.chinaTourApplication.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('Conflict при гонке create (P2002)', async () => {
+      prisma.chinaTour.findFirst.mockResolvedValue({
+        id: 'tour1',
+        title: 'Tour',
+        endsAt: new Date('2020-01-01'),
+      });
+      prisma.chinaTourApplication.findUnique.mockResolvedValue({ status: 'ACCEPTED' });
+      prisma.chinaTourReview.findUnique.mockResolvedValue(null);
+      prisma.chinaTourReview.create.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('Unique', {
+          code: 'P2002',
+          clientVersion: 'test',
+        }),
+      );
+      await expect(
+        service.createReview('slug', 'user1', { body: 'ok' }),
+      ).rejects.toBeInstanceOf(ConflictException);
     });
 
     it('Forbidden без ACCEPTED заявки', async () => {
       prisma.chinaTour.findFirst.mockResolvedValue({
         id: 'tour1',
+        title: 'Tour',
         endsAt: new Date('2020-01-01'),
       });
       prisma.chinaTourApplication.findUnique.mockResolvedValue({ status: 'PENDING' });
