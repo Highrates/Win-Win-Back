@@ -12,6 +12,7 @@ import {
   CreateChinaTourDto,
   UpdateChinaTourDto,
   UpdateChinaToursLandingDto,
+  ChinaTourDayBrandDto,
   ChinaTourDayDto,
   ChinaTourImageDto,
   ChinaTourScheduleItemDto,
@@ -26,12 +27,23 @@ function slugifyFromTitle(title: string, fallback: string): string {
   return raw || fallback;
 }
 
+const dayBrandSelect = {
+  id: true,
+  name: true,
+  slug: true,
+  logoUrl: true,
+} as const;
+
 const adminDetailInclude = {
   days: {
     orderBy: [{ sortOrder: 'asc' as const }, { dayNumber: 'asc' as const }],
     include: {
       items: { orderBy: { sortOrder: 'asc' as const } },
       images: { orderBy: { sortOrder: 'asc' as const } },
+      brands: {
+        orderBy: { sortOrder: 'asc' as const },
+        include: { brand: { select: dayBrandSelect } },
+      },
     },
   },
   images: { orderBy: { sortOrder: 'asc' as const } },
@@ -426,6 +438,7 @@ export class ChinaToursAdminService {
         keepDayIds.push(dayId);
         await this.syncDayItems(tx, dayId, d.items ?? []);
         await this.syncDayImages(tx, tourId, dayId, d.images ?? []);
+        await this.syncDayBrands(tx, dayId, d.brands ?? []);
       }
 
       await tx.chinaTourDay.deleteMany({
@@ -534,6 +547,50 @@ export class ChinaToursAdminService {
     });
   }
 
+  private async syncDayBrands(
+    tx: Prisma.TransactionClient,
+    dayId: string,
+    brands: ChinaTourDayBrandDto[],
+  ) {
+    const existing = await tx.chinaTourDayBrand.findMany({
+      where: { dayId },
+      select: { id: true },
+    });
+    const existingIds = new Set(existing.map((b) => b.id));
+    const keepIds: string[] = [];
+
+    for (let bi = 0; bi < brands.length; bi++) {
+      const row = brands[bi]!;
+      const brandId = row.brandId?.trim() || null;
+      const customName = row.customName?.trim() || null;
+      if (!brandId && !customName) {
+        throw new BadRequestException('Укажите бренд из каталога или произвольное название');
+      }
+      if (brandId) {
+        const found = await tx.brand.findUnique({ where: { id: brandId }, select: { id: true } });
+        if (!found) throw new BadRequestException(`Бренд не найден: ${brandId}`);
+      }
+      const payload = {
+        brandId,
+        customName: brandId ? null : customName,
+        sortOrder: row.sortOrder ?? bi,
+      };
+      if (row.id && existingIds.has(row.id)) {
+        await tx.chinaTourDayBrand.update({ where: { id: row.id }, data: payload });
+        keepIds.push(row.id);
+      } else {
+        const created = await tx.chinaTourDayBrand.create({
+          data: { dayId, ...payload },
+        });
+        keepIds.push(created.id);
+      }
+    }
+
+    await tx.chinaTourDayBrand.deleteMany({
+      where: { dayId, id: { notIn: keepIds } },
+    });
+  }
+
   private async syncDayImages(
     tx: Prisma.TransactionClient,
     tourId: string,
@@ -628,6 +685,15 @@ export class ChinaToursAdminService {
           url: i.url,
           role: i.role,
           sortOrder: i.sortOrder,
+        })),
+        brands: d.brands.map((b) => ({
+          id: b.id,
+          brandId: b.brandId,
+          customName: b.customName,
+          sortOrder: b.sortOrder,
+          name: b.brand?.name ?? b.customName ?? '',
+          slug: b.brand?.slug ?? null,
+          logoUrl: b.brand?.logoUrl ?? null,
         })),
       })),
     };

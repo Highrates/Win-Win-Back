@@ -35,6 +35,15 @@ export class ChinaTourImageDto {
   @IsOptional() @IsInt() @Min(0) sortOrder?: number;
 }
 
+export class ChinaTourDayBrandDto {
+  @IsOptional() @IsString() id?: string;
+  /** Catalog brand id; mutually exclusive with customName in practice. */
+  @IsOptional() @IsString() brandId?: string | null;
+  /** Free-text factory name when brand is not in catalog. */
+  @IsOptional() @IsString() @MaxLength(200) customName?: string | null;
+  @IsOptional() @IsInt() @Min(0) sortOrder?: number;
+}
+
 export class ChinaTourDayDto {
   @IsOptional() @IsString() id?: string;
   @IsInt() @Min(1) dayNumber!: number;
@@ -51,6 +60,11 @@ export class ChinaTourDayDto {
   @ValidateNested({ each: true })
   @Type(() => ChinaTourImageDto)
   images?: ChinaTourImageDto[];
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ChinaTourDayBrandDto)
+  brands?: ChinaTourDayBrandDto[];
 }
 
 export class CreateChinaTourDto {

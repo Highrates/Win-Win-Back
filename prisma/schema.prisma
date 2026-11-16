@@ -635,6 +635,8 @@ model Brand {
   materials BrandMaterial[]
   /// Проекты бренда на витрине `/projects`.
   cases Case[]
+  /// Фабрики/бренды, привязанные к дням мебельных туров.
+  chinaTourDayBrands ChinaTourDayBrand[]
 }
 
 /// Материал бренда (группа в библиотеке «Материалы → Цвета»).
@@ -1918,9 +1920,25 @@ model ChinaTourDay {
 
   items  ChinaTourScheduleItem[]
   images ChinaTourImage[]
+  brands ChinaTourDayBrand[]
 
   @@unique([tourId, dayNumber])
   @@index([tourId, sortOrder])
+}
+
+/// Бренд/фабрика в дне тура: либо catalog Brand, либо произвольное название.
+model ChinaTourDayBrand {
+  id         String       @id @default(cuid())
+  dayId      String
+  day        ChinaTourDay @relation(fields: [dayId], references: [id], onDelete: Cascade)
+  brandId    String?
+  brand      Brand?       @relation(fields: [brandId], references: [id], onDelete: SetNull)
+  /// Если brandId пуст — произвольное имя фабрики (без карточки бренда).
+  customName String?
+  sortOrder  Int          @default(0)
+
+  @@index([dayId, sortOrder])
+  @@index([brandId])
 }
 
 model ChinaTourScheduleItem {

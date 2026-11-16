@@ -24,9 +24,37 @@ import {
 import { ensureChinaToursLanding, parseFeaturedTourIds } from './china-tours-landing';
 import { orderToursByFeaturedIds } from './china-tours-featured';
 
+function stringArrayFromJson(v: unknown, max: number): string[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((x): x is string => typeof x === 'string')
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .slice(0, max);
+}
+
 const dayInclude = {
   items: { orderBy: { sortOrder: 'asc' as const } },
   images: { orderBy: { sortOrder: 'asc' as const } },
+  brands: {
+    orderBy: { sortOrder: 'asc' as const },
+    include: {
+      brand: {
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          shortDescription: true,
+          description: true,
+          logoUrl: true,
+          siteUrl: true,
+          galleryImageUrls: true,
+          catalogPdfUrl: true,
+          isActive: true,
+        },
+      },
+    },
+  },
 } satisfies Prisma.ChinaTourDayInclude;
 
 @Injectable()
@@ -361,6 +389,22 @@ export class ChinaToursService {
         subtitle: string;
         items: Array<{ id: string; timeLabel: string; title: string; body: string }>;
         images: Array<{ url: string; role: ChinaTourImageRole }>;
+        brands: Array<{
+          id: string;
+          customName: string | null;
+          brand: {
+            id: string;
+            name: string;
+            slug: string;
+            shortDescription: string | null;
+            description: string | null;
+            logoUrl: string | null;
+            siteUrl: string | null;
+            galleryImageUrls: unknown;
+            catalogPdfUrl: string | null;
+            isActive: boolean;
+          } | null;
+        }>;
       }>;
       images: Array<{ url: string; role: ChinaTourImageRole }>;
       reviews: Array<{
@@ -403,6 +447,25 @@ export class ChinaToursService {
         galleryUrls: d.images
           .filter((i) => i.role === ChinaTourImageRole.DAY_GALLERY || i.role === ChinaTourImageRole.DAY_HERO)
           .map((i) => i.url),
+        brands: d.brands
+          .map((b) => {
+            const catalog = b.brand;
+            const name = catalog?.name?.trim() || b.customName?.trim() || '';
+            if (!name) return null;
+            return {
+              id: b.id,
+              name,
+              slug: catalog?.slug ?? null,
+              logoUrl: catalog?.logoUrl ?? null,
+              shortDescription: catalog?.shortDescription ?? null,
+              descriptionHtml: catalog?.description ?? null,
+              siteUrl: catalog?.siteUrl ?? null,
+              galleryUrls: stringArrayFromJson(catalog?.galleryImageUrls, 3),
+              catalogPdfUrl: catalog?.catalogPdfUrl ?? null,
+              hasAbout: Boolean(catalog?.description?.trim()),
+            };
+          })
+          .filter((b): b is NonNullable<typeof b> => Boolean(b)),
       })),
       cardPrimaryUrl:
         t.images.find((i) => i.role === ChinaTourImageRole.CARD_PRIMARY)?.url ?? null,
