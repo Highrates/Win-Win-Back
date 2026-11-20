@@ -28,6 +28,13 @@ import { CatalogVariantAdminService } from './catalog-variant-admin.service';
 import { CatalogVariantPricingService } from './catalog-variant-pricing.service';
 import { BrandMaterialsAdminService } from './brand-materials-admin.service';
 import { ProductStructureAdminService } from './product-structure-admin.service';
+import { sanitizeBlogPostBodyHtml } from '../blog/blog-html.util';
+
+function sanitizeBrandDescriptionHtml(html: string | null | undefined): string | null {
+  if (html == null || !String(html).trim()) return null;
+  const cleaned = sanitizeBlogPostBodyHtml(html).trim();
+  return cleaned || null;
+}
 
 @Injectable()
 export class CatalogAdminService {
@@ -629,7 +636,7 @@ export class CatalogAdminService {
         backgroundImageUrl: bg,
         productPreviewImageUrl: productPreview,
         galleryImageUrls: this.galleryToPrisma(dto.galleryImageUrls),
-        description: dto.description?.trim() || null,
+        description: sanitizeBrandDescriptionHtml(dto.description),
         shortDescription: this.normBrandShortDescription(dto.shortDescription),
         catalogPdfUrl: dto.catalogPdfUrl == null ? null : dto.catalogPdfUrl.trim() || null,
         siteUrl: dto.siteUrl == null ? null : dto.siteUrl.trim() || null,
@@ -673,7 +680,9 @@ export class CatalogAdminService {
     if (dto.galleryImageUrls !== undefined) {
       data.galleryImageUrls = this.galleryToPrisma(dto.galleryImageUrls);
     }
-    if (dto.description !== undefined) data.description = dto.description?.trim() || null;
+    if (dto.description !== undefined) {
+      data.description = sanitizeBrandDescriptionHtml(dto.description);
+    }
     if (dto.shortDescription !== undefined) {
       data.shortDescription = this.normBrandShortDescription(dto.shortDescription);
     }

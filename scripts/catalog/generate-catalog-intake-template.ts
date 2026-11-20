@@ -10,7 +10,7 @@
  */
 import * as path from 'path';
 import * as fs from 'fs';
-import ExcelJS from 'exceljs';
+import * as ExcelJS from 'exceljs';
 
 type Col = {
   key: string;
@@ -578,14 +578,6 @@ async function main() {
       }
     }
   }
-
-  // Data validation hints on brand / country
-  ws.dataValidations.add('B6:B200', {
-    type: 'list',
-    allowBlank: true,
-    formulae: ['"FALTO,SIHOO"'],
-    showErrorMessage: false,
-  });
 
   // ─── Sheet: Photos ───
   const ph = wb.addWorksheet('Photos', {

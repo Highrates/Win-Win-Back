@@ -19,6 +19,15 @@ import { CatalogVariantAdminService } from './catalog-variant-admin.service';
 import { slugifyProductBase } from './slug-transliteration';
 import { buildCategoryPathLabel } from './catalog-category-path';
 import { priceToNumber } from '../../meilisearch/product-search-doc';
+import { sanitizeBlogPostBodyHtml } from '../blog/blog-html.util';
+
+function sanitizeProductAdditionalInfoHtml(
+  html: string | null | undefined,
+): string | null {
+  if (html == null || !String(html).trim()) return null;
+  const cleaned = sanitizeBlogPostBodyHtml(html).trim();
+  return cleaned || null;
+}
 
 function parseProductVisibilityFilter(raw?: string): boolean | undefined {
   const v = raw?.trim().toLowerCase();
@@ -606,7 +615,9 @@ export class CatalogProductAdminService {
             brandId: brandIdNorm,
             shortDescription: this.normProductShortDescription(dto.shortDescription),
             description: null,
-            additionalInfoHtml: dto.additionalInfoHtml?.trim() || null,
+            additionalInfoHtml: sanitizeProductAdditionalInfoHtml(
+              dto.additionalInfoHtml,
+            ),
             deliveryText: dto.deliveryText?.trim() || null,
             technicalSpecs: dto.technicalSpecs?.trim() || null,
             seoTitle: dto.seoTitle?.trim() || null,
@@ -883,7 +894,7 @@ export class CatalogProductAdminService {
       category: { connect: { id: dto.categoryId } },
       brand: brandIdNorm ? { connect: { id: brandIdNorm } } : { disconnect: true },
       shortDescription: this.normProductShortDescription(dto.shortDescription),
-      additionalInfoHtml: dto.additionalInfoHtml?.trim() || null,
+      additionalInfoHtml: sanitizeProductAdditionalInfoHtml(dto.additionalInfoHtml),
       deliveryText: dto.deliveryText?.trim() || null,
       technicalSpecs: dto.technicalSpecs?.trim() || null,
       seoTitle: dto.seoTitle?.trim() || null,
